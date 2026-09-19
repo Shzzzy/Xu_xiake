@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">linzhi scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dce9f0"/><stop offset="1" stop-color="#f1d7d9"/></linearGradient>
+    <filter id="paper"><feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="2" seed="9"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .055 0"/></filter>
+    <linearGradient id="snow" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#f8fbf9"/><stop offset="1" stop-color="#718ca0"/></linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  
+    <path d="M0 450 L210 160 L355 330 L520 130 L730 410 L900 185 L1200 430 L1200 800 L0 800Z" fill="url(#snow)"/>
+    <path d="M0 555 Q200 520 400 550 Q650 510 850 555 Q1030 520 1200 545 L1200 800 L0 800Z" fill="#9bb6a1"/>
+    <path d="M0 690 Q260 590 500 675 Q760 570 1200 650 L1200 800 L0 800Z" fill="#7892a2" opacity=".75"/>
+    <path d="M80 760 Q300 675 520 735 Q760 650 1120 720" fill="none" stroke="#d9e8ec" stroke-width="35" opacity=".75"/>
+    <g><g transform="translate(190 580) scale(0.85)">
+    <rect x="-5" y="10" width="10" height="55" rx="4" fill="#725647"/>
+    <circle cx="0" cy="0" r="36" fill="#e8a4aa"/><circle cx="-26" cy="12" r="27" fill="#e8a4aa" opacity=".92"/>
+    <circle cx="28" cy="12" r="29" fill="#e8a4aa" opacity=".88"/>
+  </g><g transform="translate(370 640) scale(0.95)">
+    <rect x="-5" y="10" width="10" height="55" rx="4" fill="#725647"/>
+    <circle cx="0" cy="0" r="36" fill="#f0b6bd"/><circle cx="-26" cy="12" r="27" fill="#f0b6bd" opacity=".92"/>
+    <circle cx="28" cy="12" r="29" fill="#f0b6bd" opacity=".88"/>
+  </g><g transform="translate(950 590) scale(0.9)">
+    <rect x="-5" y="10" width="10" height="55" rx="4" fill="#725647"/>
+    <circle cx="0" cy="0" r="36" fill="#e59da6"/><circle cx="-26" cy="12" r="27" fill="#e59da6" opacity=".92"/>
+    <circle cx="28" cy="12" r="29" fill="#e59da6" opacity=".88"/>
+  </g><g transform="translate(1080 650) scale(0.82)">
+    <rect x="-5" y="10" width="10" height="55" rx="4" fill="#725647"/>
+    <circle cx="0" cy="0" r="36" fill="#f2bcc0"/><circle cx="-26" cy="12" r="27" fill="#f2bcc0" opacity=".92"/>
+    <circle cx="28" cy="12" r="29" fill="#f2bcc0" opacity=".88"/>
+  </g></g>
+    <g transform="translate(210 350) scale(0.95)" fill="#fff" opacity="0.62">
+    <ellipse cx="0" cy="0" rx="86" ry="24"/><ellipse cx="-65" cy="7" rx="72" ry="18"/>
+    <ellipse cx="62" cy="6" rx="76" ry="19"/><ellipse cx="-10" cy="-17" rx="52" ry="30"/>
+  </g><g transform="translate(850 320) scale(1.05)" fill="#fff" opacity="0.65">
+    <ellipse cx="0" cy="0" rx="86" ry="24"/><ellipse cx="-65" cy="7" rx="72" ry="18"/>
+    <ellipse cx="62" cy="6" rx="76" ry="19"/><ellipse cx="-10" cy="-17" rx="52" ry="30"/>
+  </g>
+  
+  <rect width="1200" height="800" filter="url(#paper)" opacity=".55"/>
+</svg>

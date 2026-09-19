@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">黄果树瀑布 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ceccbd"/><stop offset="1" stop-color="#9aa493"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#2c6b73"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(544 376) scale(-0.899 0.899) translate(-600 -400)"><path d="M0 430 Q220 200 480 390 Q700 190 940 380 Q1080 300 1200 350 L1200 800 L0 800Z" fill="#4f6d5b"/><path d="M500 300 Q600 520 520 800" fill="none" stroke="#e9f6f2" stroke-width="62" opacity=".9"/><path d="M690 340 Q740 570 690 800" fill="none" stroke="#d6eeeb" stroke-width="38" opacity=".85"/><path d="M0 650 Q300 570 600 650 Q900 570 1200 650 L1200 800 L0 800Z" fill="#6ca6aa" opacity=".75"/></g><g transform="translate(907 -33) scale(0.75)" fill="#2c6b73" opacity=".82"><circle cx="-20" cy="0" r="18"/><circle cx="18" cy="4" r="14"/><path d="M-35 25 H36"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

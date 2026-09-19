@@ -1,0 +1,2331 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #f4efe6;
+  --color-surface: #fbf8f2;
+  --color-elevated: #ffffff;
+  --color-fg: #1c1917;
+  --color-muted: #6b645c;
+  --color-subtle: #91887c;
+  --color-primary: #2f6a5c;
+  --color-primary-fg: #f4efe6;
+  --color-primary-hover: #3a7d6d;
+  --color-border: #e4ddd2;
+  --color-border-strong: #cfc6b8;
+  --color-warn: #8a5a2b;
+  --color-rain: #dce8ef;
+  --color-night: #101820;
+
+  --font-sans: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --font-serif: "Noto Serif SC", "Songti SC", "STSong", serif;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  --shadow-soft: 0 8px 24px color-mix(in oklab, var(--color-fg) 6%, transparent);
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  html,
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    min-height: 100%;
+  }
+
+  body {
+    line-height: 1.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-anim,
+  .cloud,
+  .water-shimmer,
+  .boat-motion,
+  .star-twinkle,
+  .route-draw {
+    animation: none !important;
+  }
+}
+
+.route-draw {
+  stroke-dasharray: 1400;
+  stroke-dashoffset: 1400;
+  animation: draw-path 2.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.route-draw-glow {
+  stroke-dasharray: 1400;
+  stroke-dashoffset: 1400;
+  animation: draw-path 2.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes draw-path {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.marker-pop {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: marker-pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes marker-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.cloud {
+  animation: float-cloud 22s ease-in-out infinite;
+}
+
+@keyframes float-cloud {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(28px);
+  }
+}
+
+.water-shimmer {
+  animation: shimmer 5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.star-twinkle {
+  animation: twinkle 3.4s ease-in-out infinite;
+}
+
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.lantern-glow {
+  animation: lantern 2.8s ease-in-out infinite;
+}
+
+@keyframes lantern {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.map-scene {
+  --map-sky-top: #eef4ef;
+  --map-sky-bot: #d5e6de;
+  --map-far: #9bb59b;
+  --map-mid: #6a8f6a;
+  --map-near: #547654;
+  --map-water: #7eacbc;
+  --map-water-hi: #b7d6de;
+  --map-path: #2f6a5c;
+  --map-path-glow: #3a7d6d;
+  --map-label-bg: #fbf8f2;
+  --map-label-fg: #1c1917;
+  --map-tree: #3d6a4a;
+  --map-wood: #5c4a38;
+  --map-roof: #6b3d32;
+}
+
+.map-scene.is-night {
+  --map-sky-top: #0c1420;
+  --map-sky-bot: #162433;
+  --map-far: #1c3340;
+  --map-mid: #16342c;
+  --map-near: #12281f;
+  --map-water: #173445;
+  --map-water-hi: #2a5470;
+  --map-path: #7ebcac;
+  --map-path-glow: #9fd4c4;
+  --map-label-bg: #152028;
+  --map-label-fg: #e8efe9;
+  --map-tree: #1e4634;
+  --map-wood: #3a2e22;
+  --map-roof: #4a2a24;
+}
+
+.safe-bottom {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+@media print {
+  header,
+  nav,
+  .safe-bottom,
+  button {
+    display: none !important;
+  }
+
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+}
+
+/* ── 三种视觉方案的共享原型系统 ───────────────────────────── */
+.planner-shell {
+  --v-paper: #f2eee4;
+  --v-surface: #fbf8f1;
+  --v-ink: #1b211e;
+  --v-muted: #6d716b;
+  --v-line: #d8d3c7;
+  --v-soft: #e8e3d8;
+  --v-accent: #1f6a58;
+  --v-accent-ink: #f7f4ec;
+  --v-seal: #b84a37;
+  --v-overlay: rgb(18 25 22 / 0.52);
+  --v-weather-rain: #dce8e7;
+  --v-card-radius: 18px;
+  --v-button-radius: 999px;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  background: var(--v-paper);
+  color: var(--v-ink);
+}
+
+.planner-shell * {
+  border-color: var(--v-line);
+}
+
+.design-scroll {
+  background:
+    radial-gradient(circle at 80% 10%, rgb(53 108 88 / 0.09), transparent 33rem),
+    linear-gradient(90deg, rgb(72 66 54 / 0.035) 1px, transparent 1px),
+    var(--v-paper);
+  background-size: auto, 5rem 100%, auto;
+}
+
+.design-atlas {
+  --v-paper: #101916;
+  --v-surface: #17231f;
+  --v-ink: #eef1e7;
+  --v-muted: #9eaaa3;
+  --v-line: #34453e;
+  --v-soft: #21312b;
+  --v-accent: #d4c36b;
+  --v-accent-ink: #172018;
+  --v-seal: #d66a4d;
+  --v-overlay: rgb(5 9 8 / 0.72);
+  --v-weather-rain: #1d3540;
+  --v-card-radius: 4px;
+  --v-button-radius: 4px;
+  background:
+    linear-gradient(rgb(212 195 107 / 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(212 195 107 / 0.055) 1px, transparent 1px),
+    radial-gradient(circle at 76% 18%, rgb(75 119 101 / 0.18), transparent 34rem),
+    var(--v-paper);
+  background-size: 3.5rem 3.5rem, 3.5rem 3.5rem, auto, auto;
+}
+
+.design-journal {
+  --v-paper: #f5f0e4;
+  --v-surface: #fffdf8;
+  --v-ink: #17231f;
+  --v-muted: #65706a;
+  --v-line: #bdc5be;
+  --v-soft: #e7ece6;
+  --v-accent: #166a63;
+  --v-accent-ink: #fffdf8;
+  --v-seal: #c24938;
+  --v-weather-rain: #d9e7e6;
+  --v-card-radius: 2px;
+  --v-button-radius: 2px;
+  background:
+    linear-gradient(90deg, transparent 0 8%, rgb(194 73 56 / 0.12) 8% calc(8% + 1px), transparent calc(8% + 1px)),
+    var(--v-paper);
+}
+
+.planner-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  border-bottom: 1px solid var(--v-line);
+  background: color-mix(in oklab, var(--v-paper) 88%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.planner-header-inner {
+  display: flex;
+  min-height: 4.5rem;
+  max-width: 86rem;
+  margin: 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+}
+
+.seal-mark {
+  display: inline-flex;
+  width: 2.65rem;
+  height: 2.65rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--v-accent);
+  color: var(--v-accent-ink);
+  font-family: var(--font-serif);
+  font-size: 0.95rem;
+  box-shadow: 0 8px 24px color-mix(in oklab, var(--v-accent) 20%, transparent);
+}
+
+.design-atlas .seal-mark {
+  border: 1px solid var(--v-accent);
+  border-radius: 0;
+  background: transparent;
+  color: var(--v-accent);
+}
+
+.design-journal .seal-mark {
+  border: 1px solid var(--v-seal);
+  border-radius: 2px;
+  background: var(--v-seal);
+  box-shadow: 3px 3px 0 var(--v-ink);
+}
+
+.planner-mobile-variants {
+  overflow-x: auto;
+  border-top: 1px solid var(--v-line);
+  padding: 0.5rem 0.75rem;
+  scrollbar-width: none;
+}
+
+.planner-landing {
+  position: relative;
+  display: grid;
+  max-width: 86rem;
+  min-height: calc(100dvh - 4.5rem);
+  margin: 0 auto;
+  gap: 2rem;
+  padding: 3rem 1rem 2rem;
+  align-items: center;
+}
+
+.planner-landing-copy {
+  position: relative;
+  z-index: 2;
+  max-width: 43rem;
+}
+
+.planner-landing-copy h1 {
+  margin-top: 1.5rem;
+  font-family: var(--font-serif);
+  font-size: clamp(2.8rem, 7vw, 5.8rem);
+  line-height: 1.02;
+  letter-spacing: -0.055em;
+  color: var(--v-ink);
+}
+
+.planner-lead {
+  max-width: 37rem;
+  margin-top: 1.5rem;
+  color: var(--v-muted);
+  font-size: 0.98rem;
+  line-height: 2;
+}
+
+.choice-panel {
+  display: flex;
+  min-height: 8.5rem;
+  align-items: center;
+  gap: 1rem;
+  border: 1px solid var(--v-line);
+  border-radius: var(--v-card-radius);
+  background: color-mix(in oklab, var(--v-surface) 88%, transparent);
+  padding: 1rem;
+  text-align: left;
+  transition: 220ms ease;
+}
+
+.choice-panel:hover {
+  transform: translateY(-3px);
+  border-color: var(--v-accent);
+  box-shadow: 0 16px 40px color-mix(in oklab, var(--v-ink) 8%, transparent);
+}
+
+.choice-panel-strong {
+  border-color: var(--v-accent);
+  background: var(--v-accent);
+  color: var(--v-accent-ink);
+}
+
+.design-atlas .choice-panel-strong {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--v-accent) 65%, transparent);
+}
+
+.design-journal .choice-panel {
+  box-shadow: 5px 5px 0 color-mix(in oklab, var(--v-ink) 13%, transparent);
+}
+
+.choice-title,
+.choice-copy {
+  display: block;
+}
+
+.choice-title {
+  font-family: var(--font-serif);
+  font-size: 1.18rem;
+  font-weight: 600;
+}
+
+.choice-copy {
+  margin-top: 0.35rem;
+  color: currentColor;
+  font-size: 0.76rem;
+  line-height: 1.6;
+  opacity: 0.72;
+}
+
+.planner-proof {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 2rem;
+  color: var(--v-muted);
+  font-size: 0.75rem;
+}
+
+.planner-proof span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.planner-landing-art {
+  position: relative;
+  min-height: 27rem;
+  overflow: hidden;
+  border: 1px solid var(--v-line);
+  border-radius: var(--v-card-radius);
+  background: var(--v-soft);
+  box-shadow: 0 24px 70px color-mix(in oklab, var(--v-ink) 14%, transparent);
+}
+
+.planner-landing-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.planner-art-wash {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 36%, color-mix(in oklab, var(--v-ink) 82%, transparent));
+}
+
+.planner-art-note {
+  position: absolute;
+  inset-inline: 1.5rem;
+  bottom: 1.5rem;
+  color: white;
+}
+
+.planner-art-note p {
+  font-family: var(--font-serif);
+  font-size: 1.7rem;
+  font-weight: 600;
+}
+
+.planner-art-note span {
+  display: block;
+  max-width: 34rem;
+  margin-top: 0.5rem;
+  color: rgb(255 255 255 / 0.76);
+  font-size: 0.8rem;
+  line-height: 1.75;
+}
+
+.planner-coordinate {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  border: 1px solid rgb(255 255 255 / 0.28);
+  background: rgb(0 0 0 / 0.22);
+  padding: 0.35rem 0.55rem;
+  color: rgb(255 255 255 / 0.78);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.62rem;
+  backdrop-filter: blur(8px);
+}
+
+.planner-variant-note {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  border-top: 1px solid var(--v-line);
+  padding-top: 1.25rem;
+}
+
+.design-atlas .planner-landing {
+  grid-template-columns: minmax(0, 0.88fr) minmax(20rem, 1.12fr);
+  align-items: stretch;
+  padding-top: 2rem;
+}
+
+.design-atlas .planner-landing-copy {
+  align-self: center;
+}
+
+.design-atlas .planner-landing-art {
+  min-height: calc(100dvh - 8rem);
+  border-radius: 0;
+}
+
+.design-atlas .planner-lead {
+  color: #bcc6bf;
+}
+
+.design-journal .planner-landing-copy h1 {
+  font-size: clamp(3rem, 8vw, 6.4rem);
+}
+
+.design-journal .planner-landing-art {
+  transform: rotate(0.8deg);
+  border: 1px solid var(--v-ink);
+  box-shadow: 12px 12px 0 color-mix(in oklab, var(--v-ink) 16%, transparent);
+}
+
+.atlas-crosshair {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.25rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-top: 1px solid var(--v-accent);
+  border-right: 1px solid var(--v-accent);
+  opacity: 0.7;
+}
+
+.planner-page,
+.planner-result-page {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 1.75rem 1rem 5rem;
+}
+
+.planner-back {
+  display: inline-flex;
+  height: 2.5rem;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--v-muted);
+  font-size: 0.82rem;
+  transition: color 160ms ease;
+}
+
+.planner-back:hover {
+  color: var(--v-accent);
+}
+
+.planner-section-heading {
+  max-width: 48rem;
+  margin-top: 1.75rem;
+}
+
+.planner-section-heading h1,
+.wizard-rail h1 {
+  margin-top: 1rem;
+  font-family: var(--font-serif);
+  font-size: clamp(2.2rem, 5vw, 4.5rem);
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+}
+
+.planner-section-heading p,
+.wizard-rail p {
+  margin-top: 1rem;
+  color: var(--v-muted);
+  font-size: 0.95rem;
+  line-height: 1.9;
+}
+
+.planner-form-grid {
+  display: grid;
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+}
+
+.planner-form-card,
+.planner-preview-card,
+.wizard-panel,
+.result-brief {
+  border: 1px solid var(--v-line);
+  border-radius: var(--v-card-radius);
+  background: var(--v-surface);
+}
+
+.planner-form-card {
+  padding: 1.25rem;
+}
+
+.planner-field-label {
+  display: block;
+  margin-bottom: 0.65rem;
+  color: var(--v-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.destination-tile {
+  position: relative;
+  min-height: 9rem;
+  overflow: hidden;
+  border: 1px solid var(--v-line);
+  border-radius: calc(var(--v-card-radius) * 0.72);
+  padding: 0;
+  text-align: left;
+  transition: 180ms ease;
+}
+
+.destination-tile img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(0.75) brightness(0.8);
+}
+
+.destination-tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 25%, rgb(11 19 16 / 0.88));
+}
+
+.destination-tile span,
+.destination-tile small {
+  position: absolute;
+  z-index: 1;
+  left: 0.8rem;
+  color: white;
+}
+
+.destination-tile span {
+  bottom: 2rem;
+  font-family: var(--font-serif);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.destination-tile small {
+  bottom: 0.8rem;
+  color: rgb(255 255 255 / 0.7);
+  font-size: 0.64rem;
+}
+
+.destination-tile-active {
+  border-color: var(--v-accent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--v-accent) 25%, transparent);
+}
+
+.planner-input {
+  width: 100%;
+  height: 3rem;
+  border: 1px solid var(--v-line);
+  border-radius: calc(var(--v-card-radius) * 0.6);
+  background: var(--v-paper);
+  padding: 0 0.85rem;
+  color: var(--v-ink);
+  outline: none;
+  transition: 160ms ease;
+}
+
+.planner-input:focus {
+  border-color: var(--v-accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--v-accent) 14%, transparent);
+}
+
+.days-custom-field {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+
+.days-custom-input-wrap {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+
+.days-custom-input {
+  padding-right: 2.2rem;
+}
+
+.days-custom-input-wrap > span {
+  position: absolute;
+  top: 50%;
+  right: 0.85rem;
+  color: var(--v-muted);
+  font-size: 0.7rem;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+
+
+.time-option,
+.pace-option,
+.interest-chip,
+.wizard-option {
+  border: 1px solid var(--v-line);
+  background: var(--v-paper);
+  color: var(--v-muted);
+  transition: 180ms ease;
+}
+
+.time-option {
+  min-height: 3rem;
+  border-radius: calc(var(--v-card-radius) * 0.6);
+}
+
+.time-option-active,
+.pace-option-active,
+.interest-chip-active {
+  border-color: var(--v-accent);
+  background: color-mix(in oklab, var(--v-accent) 12%, var(--v-paper));
+  color: var(--v-accent);
+}
+
+.pace-option {
+  display: flex;
+  min-height: 5.2rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  border-radius: calc(var(--v-card-radius) * 0.7);
+  padding: 0.85rem;
+  text-align: left;
+}
+
+.pace-option small {
+  color: var(--v-muted);
+  font-size: 0.68rem;
+  line-height: 1.55;
+}
+
+.interest-chip {
+  display: inline-flex;
+  height: 2.35rem;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0 0.85rem;
+  font-size: 0.78rem;
+}
+
+.planner-preview-card {
+  overflow: hidden;
+}
+
+.planner-preview-image {
+  position: relative;
+  min-height: 15rem;
+}
+
+.planner-preview-image img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.planner-preview-image::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 30%, rgb(10 19 16 / 0.82));
+}
+
+.planner-preview-image > div {
+  position: absolute;
+  z-index: 1;
+  inset-inline: 1rem;
+  bottom: 1rem;
+  color: white;
+}
+
+.planner-preview-image span,
+.planner-preview-image strong {
+  display: block;
+}
+
+.planner-preview-image span {
+  color: rgb(255 255 255 / 0.72);
+  font-size: 0.72rem;
+}
+
+.planner-preview-image strong {
+  margin-top: 0.35rem;
+  font-family: var(--font-serif);
+  font-size: 2rem;
+}
+
+.wizard-layout {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.wizard-rail {
+  padding: 0.5rem 0;
+}
+
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--v-muted);
+  opacity: 0.64;
+  transition: 180ms ease;
+}
+
+.wizard-step span {
+  display: inline-flex;
+  width: 1.8rem;
+  height: 1.8rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--v-line);
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+}
+
+.wizard-step p {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.wizard-step-active {
+  color: var(--v-ink);
+  opacity: 1;
+}
+
+.wizard-step-active span {
+  border-color: var(--v-accent);
+  background: var(--v-accent);
+  color: var(--v-accent-ink);
+}
+
+.wizard-panel {
+  padding: 1.5rem;
+}
+
+.wizard-option {
+  display: flex;
+  min-height: 5.4rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-radius: var(--v-card-radius);
+  padding: 1rem;
+  text-align: left;
+}
+
+.wizard-option:hover,
+.wizard-option-active {
+  border-color: var(--v-accent);
+  background: color-mix(in oklab, var(--v-accent) 9%, var(--v-paper));
+  color: var(--v-ink);
+  transform: translateX(3px);
+}
+
+.wizard-option strong,
+.wizard-option small {
+  display: block;
+}
+
+.wizard-option strong {
+  font-family: var(--font-serif);
+  font-size: 1rem;
+}
+
+.wizard-option small {
+  margin-top: 0.35rem;
+  color: var(--v-muted);
+  font-size: 0.72rem;
+}
+
+.result-hero {
+  position: relative;
+  min-height: 25rem;
+  overflow: hidden;
+  border: 1px solid var(--v-line);
+  border-radius: var(--v-card-radius);
+  background: var(--v-soft);
+  color: white;
+}
+
+.result-hero > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.result-hero-wash {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgb(10 18 15 / 0.88), rgb(10 18 15 / 0.35) 65%, rgb(10 18 15 / 0.08));
+}
+
+.result-hero-copy {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-height: 25rem;
+  max-width: 47rem;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 1.5rem;
+}
+
+.result-hero-copy h1 {
+  margin-top: 0.9rem;
+  font-family: var(--font-serif);
+  font-size: clamp(2.6rem, 7vw, 5.3rem);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+}
+
+.result-hero-copy > p {
+  max-width: 39rem;
+  margin-top: 1rem;
+  color: rgb(255 255 255 / 0.77);
+  font-size: 0.86rem;
+  line-height: 1.8;
+}
+
+.result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 1.25rem;
+  color: rgb(255 255 255 / 0.82);
+  font-size: 0.76rem;
+}
+
+.result-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.result-hero-actions {
+  position: absolute;
+  z-index: 2;
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.result-weather {
+  margin-top: 1.5rem;
+}
+
+.section-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.8rem;
+  color: var(--v-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+}
+
+.result-layout {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 2.5rem;
+}
+
+.result-brief {
+  align-self: start;
+  padding: 1.25rem;
+}
+
+.result-brief h2 {
+  margin-top: 0.6rem;
+  font-family: var(--font-serif);
+  font-size: 1.4rem;
+}
+
+.result-brief dl {
+  margin-top: 1.25rem;
+}
+
+.result-brief dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--v-line);
+  padding: 0.75rem 0;
+  font-size: 0.78rem;
+}
+
+.result-brief dt {
+  color: var(--v-muted);
+}
+
+.result-brief dd {
+  color: var(--v-ink);
+  font-weight: 600;
+}
+
+.result-days {
+  min-width: 0;
+}
+
+.long-plan-phases {
+  display: grid;
+  gap: 1rem;
+}
+
+.long-plan-phase {
+  border: 1px solid color-mix(in oklab, var(--v-ink) 8%, transparent);
+  border-radius: calc(var(--v-card-radius) * 0.9);
+  background: color-mix(in oklab, var(--v-paper) 76%, transparent);
+  box-shadow:
+    0 12px 30px color-mix(in oklab, var(--v-ink) 6%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--v-paper) 82%, transparent);
+  padding: 1.1rem;
+  -webkit-backdrop-filter: blur(14px) saturate(1.18);
+  backdrop-filter: blur(14px) saturate(1.18);
+}
+
+.long-plan-phase-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.long-plan-phase-index {
+  color: var(--v-accent);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+}
+
+.long-plan-phase-days {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--v-muted);
+  font-size: 0.66rem;
+}
+
+.long-plan-phase h3 {
+  margin-top: 0.8rem;
+  color: var(--v-ink);
+  font-family: var(--font-serif);
+  font-size: 1.35rem;
+  line-height: 1.35;
+}
+
+.long-plan-phase-region {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  margin-top: 0.4rem;
+  color: var(--v-muted);
+  font-size: 0.74rem;
+}
+
+.long-plan-phase-region svg,
+.long-plan-phase-detail svg {
+  flex: 0 0 auto;
+  color: var(--v-accent);
+}
+
+.long-plan-phase-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+}
+
+.long-plan-phase-tags span {
+  border: 1px solid color-mix(in oklab, var(--v-ink) 8%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--v-paper) 54%, transparent);
+  padding: 0.24rem 0.58rem;
+  color: var(--v-muted);
+  font-size: 0.66rem;
+}
+
+.long-plan-phase-detail {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 1rem;
+  border-top: 1px solid color-mix(in oklab, var(--v-ink) 7%, transparent);
+  padding-top: 0.85rem;
+}
+
+.long-plan-phase-detail p {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  margin: 0;
+  color: var(--v-muted);
+  font-size: 0.72rem;
+  line-height: 1.7;
+}
+
+.long-plan-phase-detail p svg {
+  margin-top: 0.2rem;
+}
+
+.long-plan-phase-detail strong {
+  display: block;
+  margin-bottom: 0.12rem;
+  color: var(--v-ink);
+  font-size: 0.68rem;
+}
+
+.pace-option,
+.wizard-option,
+.destination-tile,
+.choice-panel {
+  cursor: pointer;
+}
+
+.design-scroll .planner-form-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(17rem, 0.56fr);
+}
+
+.design-scroll .result-layout {
+  grid-template-columns: minmax(15rem, 0.54fr) minmax(0, 1.46fr);
+}
+
+.design-scroll .result-brief {
+  position: sticky;
+  top: 6rem;
+}
+
+.design-atlas .planner-form-card,
+.design-atlas .planner-preview-card,
+.design-atlas .wizard-panel,
+.design-atlas .result-brief {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.025);
+}
+
+.design-atlas .planner-section-heading h1,
+.design-atlas .wizard-rail h1,
+.design-atlas .result-hero-copy h1 {
+  letter-spacing: -0.025em;
+}
+
+.design-atlas .result-hero {
+  border-radius: 0;
+  min-height: 31rem;
+}
+
+.design-atlas .result-hero-copy {
+  min-height: 31rem;
+}
+
+.design-atlas .result-layout {
+  grid-template-columns: minmax(15rem, 0.42fr) minmax(0, 1.58fr);
+}
+
+.design-atlas .result-brief {
+  position: sticky;
+  top: 6rem;
+}
+
+.design-atlas .result-days {
+  border-top: 1px solid var(--v-accent);
+}
+
+.design-atlas .planner-back,
+.design-atlas .section-kicker {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.design-journal .planner-form-grid {
+  grid-template-columns: minmax(0, 1.2fr) minmax(17rem, 0.8fr);
+}
+
+.design-journal .planner-form-card,
+.design-journal .planner-preview-card,
+.design-journal .wizard-panel,
+.design-journal .result-brief {
+  box-shadow: 8px 8px 0 color-mix(in oklab, var(--v-ink) 10%, transparent);
+}
+
+.design-journal .result-hero {
+  border: 1px solid var(--v-ink);
+  border-radius: 0;
+}
+
+.design-journal .result-layout {
+  grid-template-columns: minmax(16rem, 0.58fr) minmax(0, 1.42fr);
+}
+
+.design-journal .result-brief {
+  position: sticky;
+  top: 6rem;
+  transform: rotate(-0.4deg);
+}
+
+.design-journal .journal-weather-cell:nth-child(even) {
+  background: color-mix(in oklab, var(--v-soft) 55%, var(--v-surface));
+}
+
+.journal-page-number {
+  position: absolute;
+  right: 1rem;
+  top: 1rem;
+  color: color-mix(in oklab, var(--v-ink) 18%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+}
+
+@media (min-width: 768px) {
+  .planner-header-inner {
+    padding-inline: 1.5rem;
+  }
+
+  .planner-landing {
+    grid-template-columns: minmax(0, 1.08fr) minmax(21rem, 0.92fr);
+    gap: 3rem;
+    padding: 4rem 1.5rem 2.5rem;
+  }
+
+  .planner-form-card,
+  .wizard-panel {
+    padding: 1.75rem;
+  }
+
+  .wizard-layout {
+    grid-template-columns: minmax(16rem, 0.62fr) minmax(0, 1.38fr);
+    gap: 3rem;
+    align-items: start;
+  }
+
+  .wizard-rail {
+    position: sticky;
+    top: 7rem;
+  }
+
+  .result-hero-copy {
+    padding: 2.5rem;
+  }
+
+  .result-layout {
+    grid-template-columns: minmax(15rem, 0.55fr) minmax(0, 1.45fr);
+  }
+}
+
+@media (max-width: 767px) {
+  .planner-landing-art {
+    min-height: 21rem;
+  }
+
+  .planner-form-grid,
+  .result-layout,
+  .design-scroll .planner-form-grid,
+  .design-scroll .result-layout,
+  .design-atlas .result-layout,
+  .design-journal .planner-form-grid,
+  .design-journal .result-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .design-journal .result-brief,
+  .design-scroll .result-brief,
+  .design-atlas .result-brief {
+    position: static;
+    transform: none;
+  }
+
+  .result-hero-actions {
+    left: 1rem;
+    right: 1rem;
+    justify-content: flex-start;
+  }
+
+  .result-hero-copy {
+    padding-top: 7rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .planner-shell *,
+  .planner-shell *::before,
+  .planner-shell *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+
+@media (max-width: 767px) {
+  .design-atlas .planner-landing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .design-atlas .planner-landing-art {
+    min-height: 22rem;
+  }
+}
+
+.planner-landing-art img {
+  object-position: center 42%;
+}
+
+@media (min-width: 768px) {
+  .planner-landing {
+    align-items: stretch;
+  }
+
+  .planner-landing-copy {
+    align-self: center;
+  }
+
+  .planner-landing-art {
+    align-self: stretch;
+    min-height: 36rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .planner-landing-art {
+    min-height: 23rem;
+  }
+}
+
+.inspiration-tile {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid var(--v-line);
+  border-radius: calc(var(--v-card-radius) * 0.72);
+  background: var(--v-soft);
+  text-align: left;
+  transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.inspiration-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.inspiration-new-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--v-accent) 13%, transparent);
+  color: var(--v-accent);
+  padding: 0.2rem 0.48rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.inspiration-tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 38%, color-mix(in oklab, var(--v-ink) 76%, transparent));
+}
+
+.inspiration-tile:hover {
+  transform: translateY(-3px);
+  border-color: var(--v-accent);
+  box-shadow: 0 14px 34px color-mix(in oklab, var(--v-ink) 10%, transparent);
+}
+
+.inspiration-tile:hover img {
+  transform: scale(1.045);
+}
+
+.inspiration-tile-active {
+  border-color: var(--v-seal);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--v-seal) 25%, transparent);
+}
+
+.inspiration-tile-copy {
+  position: absolute;
+  z-index: 1;
+  inset-inline: 0.8rem;
+  bottom: 0.75rem;
+  color: #fff;
+}
+
+.inspiration-tile-copy small,
+.inspiration-tile-copy strong {
+  display: block;
+}
+
+.inspiration-tile-copy small {
+  color: rgb(255 255 255 / 0.72);
+  font-size: 0.62rem;
+}
+
+.inspiration-tile-copy strong {
+  margin-top: 0.2rem;
+  font-family: var(--font-serif);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.inspiration-empty {
+  display: grid;
+  min-height: 10rem;
+  place-items: center;
+  align-content: center;
+  gap: 0.42rem;
+  margin-top: 0.75rem;
+  border: 1px dashed color-mix(in oklab, var(--v-accent) 24%, transparent);
+  border-radius: calc(var(--v-card-radius) * 0.78);
+  background: color-mix(in oklab, var(--v-paper) 48%, transparent);
+  padding: 1rem;
+  text-align: center;
+}
+
+.inspiration-empty svg {
+  color: var(--v-accent);
+}
+
+.inspiration-empty strong {
+  color: var(--v-ink);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.inspiration-empty span {
+  max-width: 18rem;
+  color: var(--v-muted);
+  font-size: 0.68rem;
+  line-height: 1.6;
+}
+
+.planner-input-with-icon {
+  padding-left: 2.9rem;
+}
+
+.scene-guide {
+  margin-top: 1.4rem;
+  border-top: 1px solid var(--v-line);
+  padding-top: 1.2rem;
+}
+
+.scene-guide-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.scene-guide-heading p {
+  color: var(--v-accent);
+  font-size: 0.62rem;
+  letter-spacing: 0.2em;
+}
+
+.scene-guide-heading h4 {
+  margin-top: 0.25rem;
+  font-family: var(--font-serif);
+  font-size: 1.3rem;
+  color: var(--v-ink);
+}
+
+.scene-time-seal {
+  min-width: 7.2rem;
+  border-left: 2px solid var(--v-seal);
+  padding-left: 0.75rem;
+  text-align: right;
+}
+
+.scene-time-seal span,
+.scene-time-seal strong {
+  display: block;
+}
+
+.scene-time-seal span {
+  color: var(--v-muted);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+}
+
+.scene-time-seal strong {
+  margin-top: 0.25rem;
+  color: var(--v-ink);
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.scene-guide-row {
+  display: grid;
+  grid-template-columns: 4.3rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: start;
+  border-top: 1px solid var(--v-line);
+  padding: 0.8rem 0;
+}
+
+.scene-guide-label {
+  color: var(--v-muted);
+  font-size: 0.68rem;
+}
+
+.scene-guide-row p {
+  color: var(--v-ink);
+  font-size: 0.76rem;
+  line-height: 1.75;
+}
+
+.scene-guide-experience-row {
+  padding-top: 0.9rem;
+  padding-bottom: 0.95rem;
+}
+
+.scene-guide-experiences {
+  display: grid;
+  min-width: 0;
+  gap: 0.38rem;
+}
+
+.scene-guide-experience {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  border: 1px solid color-mix(in oklab, var(--v-ink) 7%, transparent);
+  border-radius: 0.7rem;
+  background: color-mix(in oklab, var(--v-paper) 44%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--v-paper) 68%, transparent);
+  padding: 0.42rem 0.55rem;
+}
+
+.scene-guide-experience-label {
+  min-width: 0;
+  color: var(--v-ink);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.scene-guide-experience-duration {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.28rem;
+  color: var(--v-accent);
+  font-size: 0.61rem;
+  white-space: nowrap;
+}
+
+.scene-guide-experience-duration svg {
+  margin-top: 0;
+  flex: 0 0 auto;
+}
+
+.scene-guide-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.scene-guide-chips span {
+  border: 1px solid var(--v-line);
+  border-radius: 999px;
+  background: var(--v-soft);
+  padding: 0.2rem 0.5rem;
+  color: var(--v-muted);
+  font-size: 0.66rem;
+}
+
+.scene-guide-tip {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  margin-top: 0.8rem;
+  border: 1px solid color-mix(in oklab, var(--v-ink) 9%, transparent);
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--v-paper) 72%, transparent);
+  box-shadow:
+    0 14px 36px color-mix(in oklab, var(--v-ink) 7%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--v-paper) 80%, transparent);
+  padding: 0.75rem;
+  color: var(--v-muted);
+  font-size: 0.7rem;
+  line-height: 1.65;
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  backdrop-filter: blur(18px) saturate(1.25);
+}
+
+.scene-guide-tip::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: color-mix(in oklab, var(--v-accent) 4%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.scene-guide-tip-head {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--v-ink) 7%, transparent);
+  padding: 0.08rem 0.15rem 0.65rem;
+}
+
+.scene-guide-tip-icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in oklab, var(--v-accent) 16%, transparent);
+  border-radius: 0.72rem;
+  background: color-mix(in oklab, var(--v-paper) 42%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--v-paper) 72%, transparent);
+  color: var(--v-accent);
+}
+
+.scene-guide-tip-headcopy {
+  display: grid;
+  min-width: 0;
+  gap: 0.08rem;
+}
+
+.scene-guide-tip-headcopy strong {
+  color: var(--v-ink);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.scene-guide-tip-headcopy small {
+  color: var(--v-muted);
+  font-size: 0.62rem;
+  line-height: 1.45;
+}
+
+.scene-guide-tip-lines {
+  display: grid;
+  min-width: 0;
+  gap: 0.32rem;
+  margin-top: 0.62rem;
+}
+
+.scene-guide-tip-item {
+  min-width: 0;
+}
+
+.scene-guide-tip-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 2.4rem;
+  align-items: center;
+  gap: 0.58rem;
+  border: 1px solid transparent;
+  border-radius: 0.75rem;
+  padding: 0.42rem 0.55rem;
+  color: inherit;
+  text-align: left;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.scene-guide-tip-trigger:hover,
+.scene-guide-tip-trigger:focus-visible {
+  border-color: color-mix(in oklab, var(--v-accent) 16%, transparent);
+  background: color-mix(in oklab, var(--v-paper) 44%, transparent);
+  color: var(--v-ink);
+  outline: none;
+}
+
+.scene-guide-tip-trigger[aria-expanded="true"] {
+  border-color: color-mix(in oklab, var(--v-accent) 18%, transparent);
+  background: color-mix(in oklab, var(--v-paper) 52%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--v-paper) 74%, transparent);
+  color: var(--v-ink);
+}
+
+.scene-guide-tip-trigger:active {
+  transform: scale(0.992);
+}
+
+.scene-guide-tip-dot {
+  width: 0.34rem;
+  height: 0.34rem;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in oklab, var(--v-accent) 54%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--v-accent) 72%, var(--v-paper));
+  box-shadow: 0 0 0 0.2rem color-mix(in oklab, var(--v-accent) 7%, transparent);
+}
+
+.scene-guide-tip-trigger svg {
+  margin-top: 0;
+}
+
+.scene-guide-tip-chevron {
+  width: 1rem;
+  height: 1rem;
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--v-accent);
+  opacity: 0.62;
+  transition: transform 180ms ease;
+}
+
+.scene-guide-tip-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.scene-guide-tip-detail {
+  margin: 0.18rem 0.25rem 0.42rem 1.72rem;
+  border-left: 1px solid color-mix(in oklab, var(--v-accent) 30%, transparent);
+  padding: 0.08rem 0.15rem 0.08rem 0.72rem;
+  color: var(--v-muted);
+  line-height: 1.72;
+}
+
+
+.route-builder {
+  margin-top: 1.5rem;
+  border-top: 1px solid var(--v-line);
+  padding-top: 1.25rem;
+}
+
+.route-builder-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.route-builder-head p {
+  color: var(--v-accent);
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+}
+
+.route-builder-head h3 {
+  margin-top: 0.28rem;
+  color: var(--v-ink);
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+}
+
+.route-builder-head > div > span {
+  display: block;
+  max-width: 22rem;
+  margin-top: 0.38rem;
+  color: var(--v-muted);
+  font-size: 0.68rem;
+  line-height: 1.6;
+}
+
+.route-style-all,
+.route-style-segmented {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.12rem;
+  border: 1px solid var(--v-line);
+  border-radius: 0.72rem;
+  background: color-mix(in oklab, var(--v-paper) 72%, transparent);
+  padding: 0.18rem;
+}
+
+.route-style-all button,
+.route-style-segmented button {
+  min-height: 2rem;
+  border-radius: 0.55rem;
+  padding: 0 0.58rem;
+  color: var(--v-muted);
+  font-size: 0.63rem;
+  transition: 160ms ease;
+}
+
+.route-style-all button.is-active,
+.route-style-segmented button.is-active {
+  background: var(--v-accent);
+  color: var(--v-accent-ink);
+}
+
+.route-origin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: end;
+}
+
+.route-node-field {
+  display: block;
+  margin-top: 1rem;
+}
+
+.route-waypoint-toggle {
+  display: inline-flex;
+  height: 3rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  border: 1px solid var(--v-line);
+  border-radius: calc(var(--v-card-radius) * 0.6);
+  background: color-mix(in oklab, var(--v-paper) 66%, transparent);
+  padding: 0 0.85rem;
+  color: var(--v-muted);
+  font-size: 0.68rem;
+  transition:
+    border-color 170ms ease,
+    background-color 170ms ease,
+    color 170ms ease;
+}
+
+.route-waypoint-toggle:hover {
+  border-color: color-mix(in oklab, var(--v-accent) 28%, transparent);
+  color: var(--v-accent);
+}
+
+.route-waypoint-editor {
+  animation: route-waypoints-in 180ms ease-out;
+}
+
+@keyframes route-waypoints-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.route-node-field > span,
+.route-waypoint-head span {
+  display: block;
+  color: var(--v-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.route-node-field .planner-input {
+  margin-top: 0.5rem;
+}
+
+.route-waypoint-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1rem;
+  margin-bottom: 0.55rem;
+}
+
+.route-waypoint-head small {
+  color: var(--v-muted);
+  font-size: 0.62rem;
+}
+
+.route-waypoint-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.route-waypoint {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3rem;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.route-waypoint-field {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.route-waypoint-index {
+  position: absolute;
+  left: 0.85rem;
+  z-index: 1;
+  display: grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--v-accent) 12%, transparent);
+  color: var(--v-accent);
+  font-size: 0.6rem;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.route-waypoint-field input {
+  width: 100%;
+  min-width: 0;
+  height: 3rem;
+  border: 1px solid var(--v-line);
+  border-radius: calc(var(--v-card-radius) * 0.6);
+  background: color-mix(in oklab, var(--v-paper) 72%, transparent);
+  padding: 0 0.75rem 0 2.65rem;
+  color: var(--v-ink);
+  outline: none;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+
+.route-waypoint-field input:focus {
+  border-color: var(--v-accent);
+  background: var(--v-paper);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--v-accent) 14%, transparent);
+}
+
+.route-waypoint-remove {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--v-line);
+  border-radius: calc(var(--v-card-radius) * 0.6);
+  background: color-mix(in oklab, var(--v-paper) 66%, transparent);
+  color: var(--v-muted);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.route-waypoint-remove:hover,
+.route-waypoint-remove:focus-visible {
+  border-color: color-mix(in oklab, var(--v-seal) 44%, transparent);
+  background: color-mix(in oklab, var(--v-seal) 9%, transparent);
+  color: var(--v-seal);
+  outline: none;
+}
+
+.route-legs {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.route-leg {
+  border: 1px solid color-mix(in oklab, var(--v-ink) 7%, transparent);
+  border-radius: 0.78rem;
+  background: color-mix(in oklab, var(--v-paper) 54%, transparent);
+  padding: 0.65rem;
+}
+
+.route-leg-return {
+  border-color: color-mix(in oklab, var(--v-accent) 22%, transparent);
+}
+
+.route-leg-route {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.42rem;
+  color: var(--v-ink);
+  font-size: 0.72rem;
+}
+
+.route-leg-route > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-leg-route > span:first-child {
+  color: var(--v-muted);
+}
+
+.route-leg-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  margin-top: 0.58rem;
+}
+
+.route-leg-controls select {
+  min-width: 0;
+  height: 2.35rem;
+  border: 1px solid var(--v-line);
+  border-radius: 0.62rem;
+  background: var(--v-paper);
+  padding: 0 0.55rem;
+  color: var(--v-muted);
+  font-size: 0.68rem;
+  outline: none;
+}
+
+.route-return {
+  margin-top: 1rem;
+  border-top: 1px solid var(--v-line);
+  padding-top: 0.85rem;
+}
+
+.route-return-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--v-ink);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.route-return-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--v-accent);
+}
+
+.route-return-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+}
+
+.route-return-options button {
+  min-width: 0;
+  border: 1px solid var(--v-line);
+  border-radius: 0.72rem;
+  background: color-mix(in oklab, var(--v-paper) 58%, transparent);
+  padding: 0.65rem;
+  text-align: left;
+  transition: 160ms ease;
+}
+
+.route-return-options button.is-active {
+  border-color: var(--v-accent);
+  background: color-mix(in oklab, var(--v-accent) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--v-accent) 16%, transparent);
+}
+
+.route-return-options strong,
+.route-return-options small {
+  display: block;
+}
+
+.route-return-options strong {
+  color: var(--v-ink);
+  font-size: 0.72rem;
+}
+
+.route-return-options small {
+  margin-top: 0.2rem;
+  color: var(--v-muted);
+  font-size: 0.62rem;
+  line-height: 1.5;
+}
+
+.result-route-path {
+  max-width: 46rem;
+  margin-top: 0.7rem;
+  color: color-mix(in oklab, var(--v-accent-ink) 78%, transparent);
+  font-size: 0.68rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .route-builder-head {
+    flex-direction: column;
+  }
+
+  .route-style-all {
+    width: 100%;
+  }
+
+  .route-style-all button {
+    flex: 1;
+  }
+
+  .route-leg-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .route-style-segmented {
+    justify-content: stretch;
+  }
+
+  .route-style-segmented button {
+    flex: 1;
+  }
+}
+
+
+.travel-date-trigger {
+  display: flex;
+  width: 100%;
+  height: 3rem;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid var(--v-line);
+  border-radius: calc(var(--v-card-radius) * 0.6);
+  background: var(--v-paper);
+  padding: 0 0.8rem;
+  text-align: left;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.travel-date-trigger:hover,
+.travel-date-trigger.is-open {
+  border-color: color-mix(in oklab, var(--v-accent) 36%, transparent);
+  background: color-mix(in oklab, var(--v-paper) 76%, var(--v-accent) 4%);
+}
+
+.travel-date-trigger.is-open {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--v-accent) 12%, transparent);
+}
+
+.travel-date-icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 0.7rem;
+  background: color-mix(in oklab, var(--v-accent) 9%, transparent);
+  color: var(--v-accent);
+}
+
+.travel-date-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.travel-date-copy strong {
+  overflow: hidden;
+  color: var(--v-ink);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.travel-date-chevron {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--v-muted);
+  transition: transform 180ms ease;
+}
+
+.travel-date-trigger.is-open .travel-date-chevron {
+  transform: rotate(90deg);
+}
+
+.travel-calendar-popover {
+  --v-accent: var(--color-primary);
+  --v-accent-ink: var(--color-primary-fg);
+  --v-ink: var(--color-fg);
+  --v-muted: var(--color-muted);
+  --v-paper: var(--color-surface);
+  --v-line: var(--color-border);
+  z-index: 80;
+  border: 1px solid color-mix(in oklab, var(--v-ink) 9%, transparent);
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--v-paper) 86%, transparent);
+  box-shadow:
+    0 24px 70px color-mix(in oklab, var(--v-ink) 16%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--v-paper) 92%, transparent);
+  padding: 0.9rem;
+  outline: none;
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  backdrop-filter: blur(20px) saturate(1.25);
+  animation: travel-calendar-in 160ms ease-out;
+}
+
+.travel-calendar-popover .rdp-root {
+  --rdp-accent-color: var(--v-accent);
+  --rdp-accent-background-color: color-mix(in oklab, var(--v-accent) 12%, transparent);
+  --rdp-day-height: 2.55rem;
+  --rdp-day-width: 2.55rem;
+  --rdp-day_button-height: 2.35rem;
+  --rdp-day_button-width: 2.35rem;
+  --rdp-day_button-border-radius: 0.7rem;
+  --rdp-day_button-border: 1px solid transparent;
+  --rdp-selected-border: 1px solid var(--v-accent);
+  --rdp-today-color: var(--v-accent);
+  --rdp-outside-opacity: 0.28;
+  --rdp-disabled-opacity: 0.24;
+  --rdp-nav_button-height: 2rem;
+  --rdp-nav_button-width: 2rem;
+  --rdp-nav-height: 2.5rem;
+  --rdp-weekday-opacity: 1;
+  --rdp-weekday-padding: 0.45rem 0;
+  color: var(--v-muted);
+  font-family: var(--font-sans);
+}
+
+.travel-calendar-popover .rdp-month_caption {
+  align-items: center;
+  color: var(--v-ink);
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.travel-calendar-popover .rdp-nav {
+  gap: 0.2rem;
+}
+
+.travel-calendar-popover .rdp-button_previous,
+.travel-calendar-popover .rdp-button_next {
+  border-radius: 0.62rem;
+  color: var(--v-muted);
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.travel-calendar-popover .rdp-button_previous:hover,
+.travel-calendar-popover .rdp-button_next:hover {
+  background: color-mix(in oklab, var(--v-accent) 10%, transparent);
+  color: var(--v-accent);
+}
+
+.travel-calendar-popover .rdp-chevron {
+  fill: currentColor;
+}
+
+.travel-calendar-popover .rdp-weekday {
+  color: var(--v-muted);
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.travel-calendar-popover .rdp-day_button {
+  border-radius: 0.7rem;
+  color: var(--v-ink);
+  font-size: 0.75rem;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    border-color 150ms ease;
+}
+
+.travel-calendar-popover .rdp-day_button:hover {
+  background: color-mix(in oklab, var(--v-accent) 10%, transparent);
+  color: var(--v-accent);
+}
+
+.travel-calendar-popover .rdp-selected {
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.travel-calendar-popover .rdp-selected .rdp-day_button {
+  border-color: var(--v-accent);
+  background: var(--v-accent);
+  color: var(--v-accent-ink);
+  box-shadow: 0 6px 16px color-mix(in oklab, var(--v-accent) 22%, transparent);
+}
+
+.travel-calendar-popover .rdp-today:not(.rdp-selected) .rdp-day_button {
+  border-color: color-mix(in oklab, var(--v-accent) 42%, transparent);
+  color: var(--v-accent);
+}
+
+.travel-calendar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.7rem;
+  border-top: 1px solid color-mix(in oklab, var(--v-ink) 7%, transparent);
+  padding-top: 0.65rem;
+  color: var(--v-muted);
+  font-size: 0.62rem;
+}
+
+.travel-calendar-foot strong {
+  color: var(--v-ink);
+  font-weight: 600;
+}
+
+@keyframes travel-calendar-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .travel-calendar-popover {
+    animation: none;
+  }
+}

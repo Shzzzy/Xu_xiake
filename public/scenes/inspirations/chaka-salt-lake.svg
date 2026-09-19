@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">茶卡盐湖 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#adc3d9"/><stop offset="1" stop-color="#dbd8e3"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#527999"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(568 364) scale(0.965 0.965) translate(-600 -400)"><path d="M0 430 Q240 300 480 420 Q720 300 1200 410 L1200 560 L0 560Z" fill="#7d9aa2"/><rect y="500" width="1200" height="300" fill="#dce9ed"/><path d="M0 590 Q300 550 600 590 Q900 550 1200 590" stroke="#a8cad4" stroke-width="18" fill="none"/><path d="M320 760 L760 650" stroke="#756a62" stroke-width="10"/><path d="M340 748 L780 638" stroke="#756a62" stroke-width="10"/><rect x="530" y="650" width="110" height="55" rx="10" fill="#f2f5f4"/><circle cx="555" cy="710" r="14" fill="#5e6664"/><circle cx="620" cy="710" r="14" fill="#5e6664"/></g><g transform="translate(766 2) scale(0.63)" fill="#527999" opacity=".82"><path d="M-38 18 Q0 -22 38 18" fill="none" stroke-width="8"/><circle cx="0" cy="-15" r="10"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

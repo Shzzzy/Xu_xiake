@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">颐和园 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#d1c8b9"/><stop offset="1" stop-color="#afb4a5"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#4a573e"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(520 364) scale(-0.965 0.965) translate(-600 -400)"><rect y="560" width="1200" height="240" fill="url(#water)"/><path d="M0 500 Q260 430 520 500 Q780 430 1200 500 L1200 610 L0 610Z" fill="#75906e"/><path d="M110 520 Q600 410 1090 520" fill="none" stroke="#d7c79c" stroke-width="54"/><g fill="#8f4637"><path d="M80 500 L145 455 L210 500Z"/><path d="M200 500 L265 455 L330 500Z"/><path d="M320 500 L385 455 L450 500Z"/><path d="M440 500 L505 455 L570 500Z"/><path d="M560 500 L625 455 L690 500Z"/><path d="M680 500 L745 455 L810 500Z"/><path d="M800 500 L865 455 L930 500Z"/><path d="M920 500 L985 455 L1050 500Z"/><path d="M1040 500 L1105 455 L1170 500Z"/></g><g fill="#efe2c9"><rect x="90" y="500" width="110" height="34"/><rect x="210" y="500" width="110" height="34"/><rect x="330" y="500" width="110" height="34"/><rect x="450" y="500" width="110" height="34"/><rect x="570" y="500" width="110" height="34"/><rect x="690" y="500" width="110" height="34"/><rect x="810" y="500" width="110" height="34"/><rect x="930" y="500" width="110" height="34"/><rect x="1050" y="500" width="110" height="34"/></g></g><g transform="translate(589 62) scale(0.51)" fill="#4a573e" opacity=".82"><circle cx="-20" cy="0" r="18"/><circle cx="18" cy="4" r="14"/><path d="M-35 25 H36"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

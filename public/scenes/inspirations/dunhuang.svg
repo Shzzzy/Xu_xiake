@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">dunhuang scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4c979"/><stop offset="1" stop-color="#cf8d57"/></linearGradient>
+    <filter id="paper"><feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="2" seed="9"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .055 0"/></filter>
+    <linearGradient id="dune" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e5ad60"/><stop offset="1" stop-color="#a85f32"/></linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  
+    <circle cx="905" cy="185" r="76" fill="#f7df93" opacity=".9"/>
+    <path d="M0 430 Q210 300 460 445 Q725 285 1000 430 Q1120 355 1200 390 L1200 800 L0 800Z" fill="url(#dune)"/>
+    <path d="M0 590 Q250 470 520 600 Q760 470 1030 590 Q1120 540 1200 565 L1200 800 L0 800Z" fill="#c57a42"/>
+    <path d="M470 610 C390 610 340 650 350 690 C370 740 460 738 530 710 C565 690 560 625 520 610Z" fill="#4f9b9a"/>
+    <path d="M420 655 C465 630 510 635 525 665" stroke="#d7e7d6" stroke-width="6" fill="none"/>
+    <g fill="#594637"><ellipse cx="740" cy="610" rx="28" ry="15"/><path d="M740 594 v-35 h26 v12 h-18"/><ellipse cx="825" cy="625" rx="30" ry="16"/><path d="M825 609 v-38 h28 v12 h-20"/><path d="M768 610 Q790 585 815 610" stroke="#594637" stroke-width="6" fill="none"/></g>
+    <path d="M0 730 Q280 670 520 735 Q790 675 1200 720 L1200 800 L0 800Z" fill="#9d572e" opacity=".68"/>
+  
+  <rect width="1200" height="800" filter="url(#paper)" opacity=".55"/>
+</svg>

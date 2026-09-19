@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">qinghai scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a9d2e4"/><stop offset="1" stop-color="#e7eee6"/></linearGradient>
+    <filter id="paper"><feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="2" seed="9"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .055 0"/></filter>
+    <linearGradient id="lake" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#3388b7"/><stop offset="1" stop-color="#155b91"/></linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  
+    <path d="M0 390 L180 245 L340 390 L520 220 L690 390 L870 250 L1050 390 L1200 280 L1200 530 L0 530Z" fill="#728d91"/>
+    <rect y="440" width="1200" height="240" fill="url(#lake)"/>
+    <path d="M0 520 Q200 500 420 525 Q670 490 900 525 Q1080 500 1200 515 L1200 800 L0 800Z" fill="#d7aa43"/>
+    <g fill="#f2ce58"><circle cx="80" cy="610" r="18"/><circle cx="145" cy="655" r="16"/><circle cx="220" cy="600" r="20"/><circle cx="310" cy="665" r="18"/><circle cx="390" cy="620" r="21"/><circle cx="490" cy="680" r="17"/><circle cx="580" cy="620" r="19"/><circle cx="690" cy="665" r="18"/><circle cx="790" cy="610" r="20"/><circle cx="890" cy="670" r="18"/><circle cx="1010" cy="620" r="21"/><circle cx="1120" cy="675" r="18"/></g>
+    <path d="M430 800 Q590 690 760 800" fill="none" stroke="#5e6662" stroke-width="72"/><path d="M490 800 Q610 720 730 800" fill="none" stroke="#f3efe3" stroke-width="5" stroke-dasharray="28 25"/>
+    <path d="M620 355 q26 -20 52 0 q26 -20 52 0" stroke="#f8fbfb" stroke-width="7" fill="none"/><path d="M820 320 q20 -16 40 0 q20 -16 40 0" stroke="#f8fbfb" stroke-width="6" fill="none"/>
+  
+  <rect width="1200" height="800" filter="url(#paper)" opacity=".55"/>
+</svg>

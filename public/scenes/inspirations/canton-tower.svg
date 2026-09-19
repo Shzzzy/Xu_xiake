@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">广州塔 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#c1d8eb"/><stop offset="1" stop-color="#f1c696"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#577b9b"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(592 388) scale(1.031 1.031) translate(-600 -400)"><g fill="#586b76"><rect x="40" y="480" width="60" height="250"/><rect x="135" y="440" width="60" height="290"/><rect x="230" y="400" width="60" height="330"/><rect x="325" y="360" width="60" height="370"/><rect x="420" y="480" width="60" height="250"/><rect x="515" y="440" width="60" height="290"/><rect x="610" y="400" width="60" height="330"/><rect x="705" y="360" width="60" height="370"/><rect x="800" y="480" width="60" height="250"/><rect x="895" y="440" width="60" height="290"/><rect x="990" y="400" width="60" height="330"/><rect x="1085" y="360" width="60" height="370"/></g><path d="M840 620 L865 180 L885 180 L910 620Z" fill="#6a7b84"/><path d="M850 260 H900 M846 330 H904 M843 400 H907 M840 470 H910" stroke="#f4d49a" stroke-width="8"/><rect y="650" width="1200" height="150" fill="url(#water)"/></g><g transform="translate(486 201) scale(1.1099999999999999)" fill="#577b9b" opacity=".82"><path d="M-34 10 Q0 -26 34 10 Q0 34 -34 10Z"/><circle cx="0" cy="8" r="7"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

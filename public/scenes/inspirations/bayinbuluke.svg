@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">巴音布鲁克 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#caedf3"/><stop offset="1" stop-color="#e0f2df"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#5f936a"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(616 394) scale(0.965 0.965) translate(-600 -400)"><path d="M0 500 Q260 400 520 500 Q780 390 1200 480 L1200 800 L0 800Z" fill="#72925f"/><path d="M0 650 Q300 530 620 640 Q900 540 1200 610 L1200 800 L0 800Z" fill="#567d58"/><g fill="#f2e8d4"><path d="M230 560 L280 500 L330 560Z"/><rect x="240" y="560" width="80" height="55"/><path d="M780 570 L815 525 L850 570Z"/><rect x="785" y="570" width="62" height="46"/></g><path d="M0 720 Q600 660 1200 710" fill="none" stroke="#d8d7b0" stroke-width="16"/></g><g transform="translate(578 303) scale(0.75)" fill="#5f936a" opacity=".82"><path d="M-34 10 Q0 -26 34 10 Q0 34 -34 10Z"/><circle cx="0" cy="8" r="7"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

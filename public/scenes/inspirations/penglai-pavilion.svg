@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">蓬莱阁 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#deead0"/><stop offset="1" stop-color="#c7bf95"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#8a774a"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(616 406) scale(1.009 1.009) translate(-600 -400)"><rect y="590" width="1200" height="210" fill="#8b795f"/><g fill="#efe4ce" stroke="#5f5141" stroke-width="5"><rect x="60" y="360" width="190" height="220"/><path d="M35 360 L155 295 L275 360Z" fill="#4e4b43"/><rect x="290" y="400" width="190" height="180"/><path d="M35 400 L155 335 L275 400Z" fill="#4e4b43"/><rect x="520" y="360" width="190" height="220"/><path d="M35 360 L155 295 L275 360Z" fill="#4e4b43"/><rect x="750" y="400" width="190" height="180"/><path d="M35 400 L155 335 L275 400Z" fill="#4e4b43"/><rect x="980" y="360" width="190" height="220"/><path d="M35 360 L155 295 L275 360Z" fill="#4e4b43"/></g><g fill="#c9553d"><circle cx="110" cy="420" r="14"/><circle cx="300" cy="460" r="14"/><circle cx="490" cy="420" r="14"/><circle cx="680" cy="460" r="14"/><circle cx="870" cy="420" r="14"/><circle cx="1060" cy="460" r="14"/></g></g><g transform="translate(362 167) scale(0.75)" fill="#8a774a" opacity=".82"><path d="M0 -28 L20 12 H-20Z"/><circle cx="0" cy="-8" r="8"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">沙坡头 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#d5aa65"/><stop offset="1" stop-color="#ad5f31"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#9c6030"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(568 376) scale(0.9099999999999999 0.9099999999999999) translate(-600 -400)"><circle cx="930" cy="170" r="74" fill="#f7dc92"/><path d="M0 430 Q220 290 470 450 Q740 280 1010 430 Q1120 360 1200 390 L1200 800 L0 800Z" fill="url(#warm)"/><path d="M0 600 Q250 470 520 610 Q770 470 1030 600 Q1120 550 1200 570 L1200 800 L0 800Z" fill="#bb7140"/><path d="M500 630 C420 630 370 670 380 710 C400 755 490 750 555 720 C590 700 565 640 525 630Z" fill="#4b9997"/><g fill="#55463a"><ellipse cx="760" cy="620" rx="28" ry="14"/><path d="M760 605 v-35 h25 v12 h-18"/><ellipse cx="845" cy="635" rx="30" ry="15"/><path d="M845 620 v-38 h26 v12 h-18"/></g></g><g transform="translate(750 -74) scale(0.39)" fill="#9c6030" opacity=".82"><path d="M-38 18 Q0 -22 38 18" fill="none" stroke-width="8"/><circle cx="0" cy="-15" r="10"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

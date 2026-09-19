@@ -1,0 +1,21 @@
+node_modules/
+.vercel/
+.vite/
+screenshots/
+.superpowers/
+.ai-navigator/
+*.log
+.env
+.env.*
+!.env.example
+.node_modules.lock
+.DS_Store
+Thumbs.db
+
+# Builder-only assets; keep the runtime app env file.
+.grok/**
+!.grok/app-env.json
+
+# Local shell artifact
+{}
+

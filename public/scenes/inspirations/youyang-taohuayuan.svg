@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">酉阳桃花源 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#c5d2c1"/><stop offset="1" stop-color="#99b59c"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#466946"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(544 364) scale(-0.899 0.899) translate(-600 -400)"><path d="M0 520 Q260 390 520 490 Q790 360 1200 500 L1200 800 L0 800Z" fill="#476b56"/><path d="M0 650 Q300 520 600 650 Q900 520 1200 630 L1200 800 L0 800Z" fill="#345845"/><g transform="translate(170 510) scale(0.9)"><rect x="-4" y="8" width="8" height="48" rx="4" fill="#5d4b37"/><circle cx="0" cy="0" r="34" fill="#6c995f"/><circle cx="-24" cy="12" r="24" fill="#6c995f" opacity=".9"/><circle cx="25" cy="12" r="26" fill="#6c995f" opacity=".86"/></g><g transform="translate(350 550) scale(0.75)"><rect x="-4" y="8" width="8" height="48" rx="4" fill="#5d4b37"/><circle cx="0" cy="0" r="34" fill="#537d50"/><circle cx="-24" cy="12" r="24" fill="#537d50" opacity=".9"/><circle cx="25" cy="12" r="26" fill="#537d50" opacity=".86"/></g><g transform="translate(760 500) scale(1)"><rect x="-4" y="8" width="8" height="48" rx="4" fill="#5d4b37"/><circle cx="0" cy="0" r="34" fill="#5e8d56"/><circle cx="-24" cy="12" r="24" fill="#5e8d56" opacity=".9"/><circle cx="25" cy="12" r="26" fill="#5e8d56" opacity=".86"/></g><g transform="translate(1010 540) scale(0.85)"><rect x="-4" y="8" width="8" height="48" rx="4" fill="#5d4b37"/><circle cx="0" cy="0" r="34" fill="#6f9a60"/><circle cx="-24" cy="12" r="24" fill="#6f9a60" opacity=".9"/><circle cx="25" cy="12" r="26" fill="#6f9a60" opacity=".86"/></g><path d="M0 720 Q380 650 700 720 Q930 680 1200 710" fill="none" stroke="#c6d7b8" stroke-width="18"/></g><g transform="translate(783 -47) scale(0.51)" fill="#466946" opacity=".82"><circle cx="-20" cy="0" r="18"/><circle cx="18" cy="4" r="14"/><path d="M-35 25 H36"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

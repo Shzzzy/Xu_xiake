@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">北海公园 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#d7cdd7"/><stop offset="1" stop-color="#babac2"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#52584c"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(560 370) scale(0.9209999999999999 0.9209999999999999) translate(-600 -400)"><rect y="560" width="1200" height="240" fill="url(#water)"/><path d="M0 570 Q250 520 500 570 Q760 520 1200 570 L1200 720 L0 720Z" fill="#82a17c"/><path d="M820 580 V280 h28 v300" stroke="#f5f0df" stroke-width="18"/><path d="M800 330 Q834 220 868 330 Q850 380 834 410 Q818 380 800 330Z" fill="#f7f3e7" stroke="#b8b09d" stroke-width="8"/><path d="M800 385 H868" stroke="#b8b09d" stroke-width="8"/><g transform="translate(220 510) scale(0.8)"><rect x="-4" y="8" width="8" height="48" rx="4" fill="#5d4b37"/><circle cx="0" cy="0" r="34" fill="#58765a"/><circle cx="-24" cy="12" r="24" fill="#58765a" opacity=".9"/><circle cx="25" cy="12" r="26" fill="#58765a" opacity=".86"/></g><g transform="translate(1050 520) scale(0.75)"><rect x="-4" y="8" width="8" height="48" rx="4" fill="#5d4b37"/><circle cx="0" cy="0" r="34" fill="#58765a"/><circle cx="-24" cy="12" r="24" fill="#58765a" opacity=".9"/><circle cx="25" cy="12" r="26" fill="#58765a" opacity=".86"/></g></g><g transform="translate(152 24) scale(0.51)" fill="#52584c" opacity=".82"><path d="M-34 10 Q0 -26 34 10 Q0 34 -34 10Z"/><circle cx="0" cy="8" r="7"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

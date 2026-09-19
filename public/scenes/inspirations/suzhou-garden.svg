@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">苏州园林 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#e7f7e9"/><stop offset="1" stop-color="#b7d5c1"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#5f8169"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(592 388) scale(-0.998 0.998) translate(-600 -400)"><rect y="620" width="1200" height="180" fill="url(#water)"/><circle cx="600" cy="390" r="238" fill="#f5f1e4" stroke="#d9d7ca" stroke-width="34"/><circle cx="600" cy="390" r="180" fill="#faf7ec" stroke="#73896f" stroke-width="6"/><path d="M485 485 Q600 335 715 485" fill="#d5dccf" stroke="#536a5f" stroke-width="6"/><rect x="542" y="423" width="116" height="78" fill="#efe7d5" stroke="#536a5f" stroke-width="6"/><path d="M520 425 L600 365 L680 425Z" fill="#5b6f62"/><g transform="translate(230 470) scale(0.75)"><rect x="-4" y="8" width="8" height="48" rx="4" fill="#5d4b37"/><circle cx="0" cy="0" r="34" fill="#58765a"/><circle cx="-24" cy="12" r="24" fill="#58765a" opacity=".9"/><circle cx="25" cy="12" r="26" fill="#58765a" opacity=".86"/></g><g transform="translate(1010 480) scale(0.8)"><rect x="-4" y="8" width="8" height="48" rx="4" fill="#5d4b37"/><circle cx="0" cy="0" r="34" fill="#58765a"/><circle cx="-24" cy="12" r="24" fill="#58765a" opacity=".9"/><circle cx="25" cy="12" r="26" fill="#58765a" opacity=".86"/></g></g><g transform="translate(911 410) scale(1.1099999999999999)" fill="#5f8169" opacity=".82"><path d="M0 -34 L28 0 L0 34 L-28 0Z"/><circle cx="0" cy="0" r="7"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

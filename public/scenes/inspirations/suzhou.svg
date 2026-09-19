@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">suzhou scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#edf0df"/><stop offset="1" stop-color="#b6c9b4"/></linearGradient>
+    <filter id="paper"><feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="2" seed="9"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .055 0"/></filter>
+    <radialGradient id="pond" cx=".5" cy=".5" r=".6"><stop stop-color="#83aaa3"/><stop offset="1" stop-color="#426d68"/></radialGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  
+    <rect y="590" width="1200" height="210" fill="url(#pond)"/>
+    <path d="M0 480 Q180 370 350 455 Q560 320 760 450 Q980 340 1200 430 L1200 620 L0 620Z" fill="#87a281" opacity=".7"/>
+    <circle cx="600" cy="390" r="245" fill="#f5f3e8" stroke="#e1dfd2" stroke-width="38"/>
+    <circle cx="600" cy="390" r="185" fill="#f8f5e9" stroke="#798b76" stroke-width="7"/>
+    <path d="M485 485 Q600 335 715 485" fill="#d8ded2" stroke="#536a5f" stroke-width="7"/>
+    <rect x="540" y="420" width="120" height="80" fill="#f0e9d7" stroke="#536a5f" stroke-width="6"/>
+    <path d="M520 425 L600 365 L680 425Z" fill="#5b6f62"/>
+    <path d="M445 470 h310 M475 440 h250" stroke="#7c8c7b" stroke-width="4" opacity=".65"/>
+    <path d="M500 530 Q600 500 700 530" fill="none" stroke="#dfe4d2" stroke-width="12"/>
+    <path d="M0 640 Q280 610 520 650 Q790 610 1200 640" fill="none" stroke="#d4e3df" stroke-width="10" opacity=".65"/>
+    <g transform="translate(210 470) scale(0.8)">
+    <rect x="-5" y="10" width="10" height="55" rx="4" fill="#564b3a"/>
+    <circle cx="0" cy="0" r="36" fill="#6e8e68"/><circle cx="-26" cy="12" r="27" fill="#6e8e68" opacity=".92"/>
+    <circle cx="28" cy="12" r="29" fill="#6e8e68" opacity=".88"/>
+  </g><g transform="translate(1000 490) scale(0.85)">
+    <rect x="-5" y="10" width="10" height="55" rx="4" fill="#564b3a"/>
+    <circle cx="0" cy="0" r="36" fill="#6e8e68"/><circle cx="-26" cy="12" r="27" fill="#6e8e68" opacity=".92"/>
+    <circle cx="28" cy="12" r="29" fill="#6e8e68" opacity=".88"/>
+  </g>
+  
+  <rect width="1200" height="800" filter="url(#paper)" opacity=".55"/>
+</svg>

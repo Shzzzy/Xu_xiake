@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">张家界 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#c9bfcd"/><stop offset="1" stop-color="#9a98a2"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#444851"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(560 388) scale(-0.9319999999999999 0.9319999999999999) translate(-600 -400)"><path d="M0 580 Q240 450 460 550 Q710 410 960 540 Q1080 470 1200 500 L1200 800 L0 800Z" fill="#64766b"/><g fill="url(#deep)"><path d="M90 700 L132 170 L180 120 L232 700Z"/><path d="M250 700 L292 230 L340 170 L392 700Z"/><path d="M630 700 L672 170 L720 120 L772 700Z"/><path d="M790 700 L832 230 L880 170 L932 700Z"/><path d="M940 700 L982 170 L1030 120 L1082 700Z"/></g><g transform="translate(260 500) scale(1)" fill="#fff" opacity="0.6"><ellipse cx="0" cy="0" rx="76" ry="21"/><ellipse cx="-58" cy="8" rx="64" ry="16"/><ellipse cx="58" cy="8" rx="68" ry="17"/></g><g transform="translate(850 470) scale(1.1)" fill="#fff" opacity="0.65"><ellipse cx="0" cy="0" rx="76" ry="21"/><ellipse cx="-58" cy="8" rx="64" ry="16"/><ellipse cx="58" cy="8" rx="68" ry="17"/></g></g><g transform="translate(485 -39) scale(0.75)" fill="#444851" opacity=".82"><circle cx="-20" cy="0" r="18"/><circle cx="18" cy="4" r="14"/><path d="M-35 25 H36"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

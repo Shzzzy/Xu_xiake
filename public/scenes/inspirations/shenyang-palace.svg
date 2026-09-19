@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">沈阳故宫 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#eddfc7"/><stop offset="1" stop-color="#dbbe98"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#9e624f"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(616 394) scale(-1.031 1.031) translate(-600 -400)"><rect y="610" width="1200" height="190" fill="#875b3f"/><g><rect x="220" y="405" width="760" height="210" fill="#efe2ca"/><path d="M160 420 L600 250 L1040 420Z" fill="#a84637"/><path d="M250 405 L600 275 L950 405Z" fill="#6e3c32"/></g><g fill="#a94f3e"><rect x="275" y="355" width="28" height="90" rx="14"/><rect x="360" y="355" width="28" height="90" rx="14"/><rect x="445" y="355" width="28" height="90" rx="14"/><rect x="530" y="355" width="28" height="90" rx="14"/><rect x="615" y="355" width="28" height="90" rx="14"/><rect x="700" y="355" width="28" height="90" rx="14"/><rect x="785" y="355" width="28" height="90" rx="14"/><rect x="870" y="355" width="28" height="90" rx="14"/></g><path d="M0 700 Q280 640 600 700 Q920 640 1200 700" fill="none" stroke="#f3e5c8" stroke-width="8"/></g><g transform="translate(143 432) scale(0.99)" fill="#9e624f" opacity=".82"><path d="M0 -34 L28 0 L0 34 L-28 0Z"/><circle cx="0" cy="0" r="7"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

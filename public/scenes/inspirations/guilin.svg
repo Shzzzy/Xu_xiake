@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">桂林阳朔 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#def2e8"/><stop offset="1" stop-color="#b7dad0"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#4d8978"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(592 400) scale(-1.009 1.009) translate(-600 -400)"><rect y="520" width="1200" height="280" fill="url(#water)"/><g fill="#567a6e"><path d="M70 540 Q80 250 170 210 Q290 290 280 540Z"/><path d="M310 540 Q320 275 410 230 Q530 310 520 540Z"/><path d="M580 540 Q590 300 680 250 Q800 330 790 540Z"/><path d="M830 540 Q840 250 930 210 Q1050 290 1040 540Z"/><path d="M1010 540 Q1020 275 1110 230 Q1230 310 1220 540Z"/></g><path d="M0 600 Q260 560 520 600 Q780 550 1200 590 L1200 800 L0 800Z" fill="#639b92" opacity=".45"/><path d="M650 590 Q760 540 880 590" fill="none" stroke="#ebdfbf" stroke-width="13"/><path d="M775 500 v95" stroke="#5b4b39" stroke-width="6"/></g><g transform="translate(435 494) scale(1.1099999999999999)" fill="#4d8978" opacity=".82"><path d="M0 -34 L28 0 L0 34 L-28 0Z"/><circle cx="0" cy="0" r="7"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

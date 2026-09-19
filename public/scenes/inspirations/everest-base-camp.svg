@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">珠峰大本营 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#6a98ae"/><stop offset="1" stop-color="#b9cacb"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#446c83"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(552 370) scale(-0.9319999999999999 0.9319999999999999) translate(-600 -400)"><path d="M10 610 L240 130 L470 610Z" fill="#f6fafb"/> <path d="M310 620 L620 90 L930 620Z" fill="#e7f0f4"/> <path d="M770 620 L1000 160 L1230 620Z" fill="#f6fafb"/><path d="M0 590 Q260 500 520 570 Q790 490 1200 570 L1200 800 L0 800Z" fill="#566f62"/><g stroke="#f6fafb" stroke-width="13" opacity=".85"><path d="M130 740 V560"/><path d="M190 760 V600"/><path d="M990 750 V580"/><path d="M1060 770 V620"/></g>{tree(380,650,.65,"#42634f")}</g><g transform="translate(777 45) scale(0.51)" fill="#446c83" opacity=".82"><path d="M-30 -16 L30 -16 L18 16 L-18 16Z"/><circle cx="0" cy="-25" r="8"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

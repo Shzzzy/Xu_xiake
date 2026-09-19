@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">yulong scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6ea5ca"/><stop offset="1" stop-color="#d8e5dd"/></linearGradient>
+    <filter id="paper"><feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="2" seed="9"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .055 0"/></filter>
+    <linearGradient id="ice" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#81a7c0"/></linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  
+    <path d="M0 520 L190 190 L330 390 L520 115 L690 380 L880 150 L1200 500 L1200 800 L0 800Z" fill="url(#ice)"/>
+    <path d="M250 350 L520 115 L640 310" fill="none" stroke="#f7fbfd" stroke-width="36" opacity=".85"/>
+    <path d="M720 380 L880 150 L1040 390" fill="none" stroke="#f7fbfd" stroke-width="34" opacity=".8"/>
+    <path d="M0 600 Q180 520 380 580 Q620 500 820 580 Q1030 520 1200 570 L1200 800 L0 800Z" fill="#577c7c"/>
+    <path d="M140 670 Q380 610 620 675 Q850 620 1080 670 Q1150 690 1200 680 L1200 800 L0 800Z" fill="#65a9ad"/>
+    <path d="M220 700 C430 675 650 685 930 705" fill="none" stroke="#cbe8e5" stroke-width="10" opacity=".65"/>
+    <g transform="translate(260 500) scale(1.1)" fill="#fff" opacity="0.6">
+    <ellipse cx="0" cy="0" rx="86" ry="24"/><ellipse cx="-65" cy="7" rx="72" ry="18"/>
+    <ellipse cx="62" cy="6" rx="76" ry="19"/><ellipse cx="-10" cy="-17" rx="52" ry="30"/>
+  </g><g transform="translate(850 470) scale(1.15)" fill="#fff" opacity="0.68">
+    <ellipse cx="0" cy="0" rx="86" ry="24"/><ellipse cx="-65" cy="7" rx="72" ry="18"/>
+    <ellipse cx="62" cy="6" rx="76" ry="19"/><ellipse cx="-10" cy="-17" rx="52" ry="30"/>
+  </g>
+  
+  <rect width="1200" height="800" filter="url(#paper)" opacity=".55"/>
+</svg>

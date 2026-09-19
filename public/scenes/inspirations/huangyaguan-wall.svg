@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">黄崖关长城 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ead9d3"/><stop offset="1" stop-color="#cbc8c5"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#806252"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(616 394) scale(0.998 0.998) translate(-600 -400)"><path d="M-40 560 L180 370 L400 560Z" fill="#859486"/> <path d="M310 560 L610 300 L910 560Z" fill="#6c8073"/> <path d="M750 570 L1000 390 L1250 570Z" fill="#778b79"/><path d="M0 610 Q260 420 520 545 Q760 390 1200 560" fill="none" stroke="#e7dfc9" stroke-width="54"/><path d="M0 610 Q260 420 520 545 Q760 390 1200 560" fill="none" stroke="#806252" stroke-width="16"/><g transform="translate(600 350) scale(1.2)" fill="#fff" opacity="0.6"><ellipse cx="0" cy="0" rx="76" ry="21"/><ellipse cx="-58" cy="8" rx="64" ry="16"/><ellipse cx="58" cy="8" rx="68" ry="17"/></g></g><g transform="translate(796 323) scale(1.1099999999999999)" fill="#806252" opacity=".82"><path d="M-34 10 Q0 -26 34 10 Q0 34 -34 10Z"/><circle cx="0" cy="8" r="7"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

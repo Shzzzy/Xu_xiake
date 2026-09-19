@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">中山陵 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#d6ddbb"/><stop offset="1" stop-color="#b1b896"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#7f6a42"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(568 400) scale(1.009 1.009) translate(-600 -400)"><path d="M0 520 Q300 440 600 520 Q900 440 1200 510 L1200 800 L0 800Z" fill="#8d8169"/><g fill="url(#deep)"><path d="M110 560 L135 420 L180 340 L225 420 L250 560Z"/><path d="M350 560 L375 385 L420 295 L465 385 L490 560Z"/><path d="M590 560 L615 420 L660 340 L705 420 L730 560Z"/><path d="M830 560 L855 385 L900 295 L945 385 L970 560Z"/><path d="M1010 560 L1035 420 L1080 340 L1125 420 L1150 560Z"/></g><path d="M0 680 Q300 620 600 680 Q900 620 1200 680" fill="none" stroke="#d6c7a7" stroke-width="12"/></g><g transform="translate(734 245) scale(1.1099999999999999)" fill="#7f6a42" opacity=".82"><path d="M-34 10 Q0 -26 34 10 Q0 34 -34 10Z"/><circle cx="0" cy="8" r="7"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

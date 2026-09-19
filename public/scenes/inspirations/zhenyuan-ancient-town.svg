@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">镇远古镇 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#c6d7d1"/><stop offset="1" stop-color="#abc4bd"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#24635b"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(528 388) scale(-0.9319999999999999 0.9319999999999999) translate(-600 -400)"><rect y="480" width="1200" height="320" fill="url(#water)"/><g fill="#f3efe4" stroke="#58635c" stroke-width="6"><rect x="50" y="280" width="250" height="220"/><path d="M20 290 L175 220 L330 290Z" fill="#4e5752"/><rect x="700" y="300" width="210" height="200"/><path d="M670 310 L805 240 L940 310Z" fill="#4e5752"/><rect x="930" y="330" width="220" height="180"/><path d="M900 340 L1040 270 L1180 340Z" fill="#4e5752"/></g><path d="M350 590 Q600 350 850 590" fill="none" stroke="#4f625c" stroke-width="50"/><path d="M350 590 Q600 350 850 590" fill="none" stroke="#e5dfce" stroke-width="10"/></g><g transform="translate(703 -89) scale(0.51)" fill="#24635b" opacity=".82"><path d="M-30 -16 L30 -16 L18 16 L-18 16Z"/><circle cx="0" cy="-25" r="8"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

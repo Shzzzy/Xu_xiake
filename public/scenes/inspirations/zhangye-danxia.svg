@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">张掖丹霞 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fcd4b7"/><stop offset="1" stop-color="#d59074"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#c05f4a"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(616 412) scale(-1.009 1.009) translate(-600 -400)"><path d="M0 430 Q220 250 470 430 Q710 230 970 420 Q1100 330 1200 370 L1200 800 L0 800Z" fill="#b75f49"/><path d="M0 540 Q250 420 500 540 Q770 410 1030 540 Q1120 500 1200 520 L1200 800 L0 800Z" fill="#d58c68"/><path d="M0 650 Q260 540 540 650 Q800 520 1200 640 L1200 800 L0 800Z" fill="#e3aa7d"/><g stroke="#f1c99f" stroke-width="9" opacity=".55"><path d="M0 500 Q350 390 700 500 Q950 430 1200 470"/><path d="M0 580 Q340 470 680 580 Q950 510 1200 550"/></g></g><g transform="translate(317 419) scale(1.1099999999999999)" fill="#c05f4a" opacity=".82"><circle cx="-20" cy="0" r="18"/><circle cx="18" cy="4" r="14"/><path d="M-35 25 H36"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

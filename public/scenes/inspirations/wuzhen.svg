@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">乌镇 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#e1efe5"/><stop offset="1" stop-color="#c6dcd1"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#3f7b6f"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(624 400) scale(0.987 0.987) translate(-600 -400)"><rect y="480" width="1200" height="320" fill="url(#water)"/><g fill="#f3efe4" stroke="#58635c" stroke-width="6"><rect x="50" y="280" width="250" height="220"/><path d="M20 290 L175 220 L330 290Z" fill="#4e5752"/><rect x="700" y="300" width="210" height="200"/><path d="M670 310 L805 240 L940 310Z" fill="#4e5752"/><rect x="930" y="330" width="220" height="180"/><path d="M900 340 L1040 270 L1180 340Z" fill="#4e5752"/></g><path d="M350 590 Q600 350 850 590" fill="none" stroke="#4f625c" stroke-width="50"/><path d="M350 590 Q600 350 850 590" fill="none" stroke="#e5dfce" stroke-width="10"/></g><g transform="translate(220 175) scale(1.1099999999999999)" fill="#3f7b6f" opacity=".82"><path d="M-38 18 Q0 -22 38 18" fill="none" stroke-width="8"/><circle cx="0" cy="-15" r="10"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>

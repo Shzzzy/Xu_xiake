@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title">
+  <title id="title">汕头南澳岛 scene</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#9ec6c7"/><stop offset="1" stop-color="#d8b878"/></linearGradient>
+    <linearGradient id="deep" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#176a71"/><stop offset="1" stop-color="#1e3b35"/></linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#86b5b8"/><stop offset="1" stop-color="#397b82"/></linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8b76b"/><stop offset="1" stop-color="#9d5934"/></linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="7"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 .045 0"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g transform="translate(504 370) scale(-0.9099999999999999 0.9099999999999999) translate(-600 -400)"><circle cx="980" cy="160" r="60" fill="#f6d88a"/><rect y="500" width="1200" height="300" fill="url(#water)"/><path d="M240 650 Q420 390 700 530 Q760 570 820 650Z" fill="#5c8064"/><path d="M490 650 Q620 470 800 590" fill="#42614d"/><path d="M800 560 V420 h18 v140" stroke="#f5efe0" stroke-width="14"/><path d="M810 420 L860 445 L810 470Z" fill="#c65545"/><path d="M120 690 Q250 650 380 690" stroke="#e9f4f2" stroke-width="8" fill="none"/></g><g transform="translate(707 -165) scale(0.39)" fill="#176a71" opacity=".82"><path d="M-30 -16 L30 -16 L18 16 L-18 16Z"/><circle cx="0" cy="-25" r="8"/></g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity=".55"/>
+</svg>
