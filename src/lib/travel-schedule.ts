@@ -167,6 +167,13 @@ type TailBlock = {
   location?: string;
 };
 
+/** 未排入行程的景点及原因。 */
+type UnplacedAttraction = {
+  item: PreparedAttraction;
+  /** multi-day-span：跨日景点天数不足；exclusive-days：普通景点已无可用日期。 */
+  reason: "multi-day-span" | "exclusive-days";
+};
+
 type FittedEntry = {
   segment: DaySegment;
   transportUnits: number;
@@ -182,7 +189,7 @@ type DayContext = {
   headcount: number;
   nightActivity: string | null;
   /** 因缺少连续空闲天数而未排入本次行程的跨日景点。 */
-  tripUnplaced: PreparedAttraction[];
+  tripUnplaced: UnplacedAttraction[];
 };
 
 /** 返回节奏对应的默认每日起止时间。 */
@@ -521,7 +528,7 @@ function allocateDays(
   items: PreparedAttraction[],
   dayCount: number,
   pace: Pace,
-): { days: DayAllocation[]; unplaced: PreparedAttraction[] } {
+): { days: DayAllocation[]; unplaced: UnplacedAttraction[] } {
   const days: DayAllocation[] = Array.from({ length: dayCount }, () => ({
     segments: [],
     exclusive: false,
@@ -529,16 +536,17 @@ function allocateDays(
   }));
   const usedUnits = new Array<number>(dayCount).fill(0);
   const capacity = PACE_UNITS[pace];
-  const unplaced: PreparedAttraction[] = [];
+  const unplaced: UnplacedAttraction[] = [];
 
   for (const item of items) {
     if (item.scale === "multi-day") {
-      const span = Math.min(Math.max(item.multiDaySpan, MIN_MULTI_DAY_SPAN), dayCount);
-      const start = findFreeSpan(days, span);
+      const requiredSpan = Math.max(item.multiDaySpan, MIN_MULTI_DAY_SPAN);
+      const span = Math.min(requiredSpan, dayCount);
+      const start = span < MIN_MULTI_DAY_SPAN ? -1 : findFreeSpan(days, span);
 
+      // 跨日景点至少占用两天：行程不足两天或找不到连续空闲日期时保留已排行程，本景点进入降级说明。
       if (start === -1) {
-        // 找不到连续空闲日期时保留已排行程，本景点进入降级说明，绝不破坏独占额度。
-        unplaced.push(item);
+        unplaced.push({ item, reason: "multi-day-span" });
         continue;
       }
 
@@ -565,8 +573,12 @@ function allocateDays(
 
     let overflow = false;
     if (target === -1) {
-      // 天数不足时顺延到最后一天，由时间窗压缩，避免直接丢景点。
-      target = days.reduce((best, day, dayIndex) => (day.exclusive ? best : dayIndex), dayCount - 1);
+      // 只允许回填到非独占日期；所有日期被跨日景点独占时进入未排入说明，绝不强行落位。
+      target = days.reduce((best, day, dayIndex) => (day.exclusive ? best : dayIndex), -1);
+      if (target === -1) {
+        unplaced.push({ item, reason: "exclusive-days" });
+        continue;
+      }
       overflow = true;
     }
 
@@ -679,7 +691,7 @@ function collectCautions(context: {
   overrun: boolean;
   pace: Pace;
   placed: DaySegment[];
-  tripUnplaced: PreparedAttraction[];
+  tripUnplaced: UnplacedAttraction[];
   unplaced: DaySegment[];
 }): string[] {
   const { allocation, compressed, dropped, endMinutes, input, overrun, pace, placed, tripUnplaced, unplaced } =
@@ -687,9 +699,20 @@ function collectCautions(context: {
   const endLabel = formatClock(endMinutes);
   const derived: string[] = [`按${PACE_LABEL[pace]}节奏安排当天行程，可按实际体力增减停留时间。`];
 
-  if (tripUnplaced.length > 0) {
+  const multiDayUnplaced = tripUnplaced
+    .filter((entry) => entry.reason === "multi-day-span")
+    .map((entry) => entry.item.name);
+  const exclusiveUnplaced = tripUnplaced
+    .filter((entry) => entry.reason === "exclusive-days")
+    .map((entry) => entry.item.name);
+  if (multiDayUnplaced.length > 0) {
     derived.push(
-      `行程天数不足以容纳跨日景点，${nameList(tripUnplaced.map((item) => item.name))}未排入行程，建议增加天数或改为单日景点。`,
+      `行程天数不足以容纳跨日景点，${nameList(multiDayUnplaced)}未排入行程，建议增加天数或改为单日景点。`,
+    );
+  }
+  if (exclusiveUnplaced.length > 0) {
+    derived.push(
+      `所有日期已被跨日景点占用，${nameList(exclusiveUnplaced)}未排入行程，建议增加天数或删减跨日景点。`,
     );
   }
   if (unplaced.length > 0) {

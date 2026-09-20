@@ -337,3 +337,50 @@ test("aligns custom bounds to the pace granularity and reports the effective end
   assert.ok(day.cautions.some((text) => text.includes("20:15")));
   assert.ok(day.cautions.every((text) => !text.includes("21:00")));
 });
+
+test("keeps multi-day attractions out of a single-day trip", () => {
+  const [day] = buildExecutionDays({
+    startDate: "2026-09-20",
+    days: 1,
+    pace: "balanced",
+    travelers: { adults: 2, children: 0 },
+    routeNodes: ["大峡谷", "古镇"],
+    audits: {
+      大峡谷: audit({ scale: "multi-day", durationHours: 16 }),
+      古镇: audit({ durationHours: 3, bestTime: "下午" }),
+    },
+  });
+
+  // 单日行程无法满足跨日景点至少两天的要求，必须走未排入路径
+  assert.ok(!attractionNames(day).some((name) => name.includes("大峡谷")), "单日行程不得压缩排入跨日景点");
+  assert.ok(!day.nodes.some((node) => node.name.includes("第 1/1 天")));
+  assert.ok(day.cautions.some((text) => text.includes("大峡谷") && text.includes("未排入")));
+  // 普通景点不受影响
+  assert.ok(attractionNames(day).some((name) => name.includes("古镇")));
+});
+
+test("keeps regular attractions out of exclusive multi-day days", () => {
+  const days = buildExecutionDays({
+    startDate: "2026-09-20",
+    days: 2,
+    pace: "balanced",
+    travelers: { adults: 2, children: 1 },
+    routeNodes: ["大峡谷", "高原湖泊", "黄果树瀑布"],
+    audits: {
+      大峡谷: audit({ scale: "multi-day", durationHours: 16, bestTime: "上午" }),
+      高原湖泊: audit({ scale: "multi-day", durationHours: 16, bestTime: "下午" }),
+      黄果树瀑布: audit({ scale: "large", durationHours: 5, bestTime: "上午" }),
+    },
+  });
+
+  assert.equal(days.length, 2);
+  const second = attractionNames(days[1]);
+  assert.ok(second.some((name) => name.includes("大峡谷")));
+  assert.ok(!second.some((name) => name.includes("黄果树瀑布")), "第二天不得同时包含峡谷和瀑布");
+  assert.ok(days.every((day) => !attractionNames(day).some((name) => name.includes("黄果树瀑布"))));
+  assert.ok(days.every((day) => !attractionNames(day).some((name) => name.includes("高原湖泊"))));
+
+  const cautions = days.flatMap((day) => day.cautions);
+  assert.ok(cautions.some((text) => text.includes("高原湖泊")), "跨日景点冲突应写入说明");
+  assert.ok(cautions.some((text) => text.includes("黄果树瀑布")), "被独占日期挤出的普通景点应写入说明");
+});
