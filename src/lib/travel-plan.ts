@@ -4,6 +4,15 @@ import type { TransportMode } from "./route-planner";
 export type TransportPreference = Extract<TransportMode, "economy" | "balanced" | "speed">;
 export type Travelers = { adults: number; children: number };
 
+export type VehicleEnergy = "fuel" | "electric" | "hybrid";
+
+export type TripBrief = Travelers & {
+  startTime: string;
+  endTime: string;
+  totalBudget: number;
+  vehicleEnergy: VehicleEnergy | null;
+};
+
 export type BudgetRange = { min: number; max: number };
 export type BudgetCategoryInput = number | BudgetRange;
 export type BudgetCategory = BudgetRange & { amount: number; ratio: number };
@@ -225,6 +234,31 @@ function category(range: BudgetRange, estimatedTotal: number): BudgetCategory {
     amount,
     ratio: estimatedTotal === 0 ? 0 : amount / estimatedTotal,
   };
+}
+
+const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+// 在进入规划流程前集中校验出行人数、预算和每日可用时间。
+export function validateTripBrief(brief: TripBrief): string[] {
+  const errors: string[] = [];
+  if (!Number.isInteger(brief.adults) || brief.adults < 1) {
+    errors.push("至少需要 1 位成人");
+  }
+  if (!Number.isInteger(brief.children) || brief.children < 0) {
+    errors.push("儿童人数必须是非负整数");
+  }
+  if (!Number.isFinite(brief.totalBudget) || brief.totalBudget <= 0) {
+    errors.push("请填写全团总预算");
+  }
+  if (!timePattern.test(brief.startTime)) {
+    errors.push("请填写有效的每日出发时间");
+  }
+  if (!timePattern.test(brief.endTime)) {
+    errors.push("请填写有效的每日最晚结束时间");
+  } else if (timePattern.test(brief.startTime) && brief.endTime <= brief.startTime) {
+    errors.push("每日最晚结束时间必须晚于出发时间");
+  }
+  return errors;
 }
 
 export function calculateRooms(adults: number): number {

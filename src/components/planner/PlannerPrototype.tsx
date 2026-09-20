@@ -54,9 +54,10 @@ import {
   type TravelStyle,
 } from "@/lib/route-planner";
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
+import { validateTripBrief, type TripBrief as TravelerBudgetTripBrief } from "@/lib/travel-plan";
 import {
+  buildRouteFallbackDays,
   classifyWeather,
-  splitPlacesAcrossDays,
   type Pace,
   type Place,
   type WeatherDay,
@@ -64,17 +65,19 @@ import {
 import { buildSceneGuide } from "@/lib/scene-guide";
 import { cn } from "@/lib/utils";
 import { ItineraryDay } from "./ItineraryDay";
+import { PlaceAdvice } from "./PlaceAdvice";
 import {
   InspirationCatalogProvider,
   useInspirationCatalog,
   useInspirationCatalogRefresh,
 } from "./InspirationCatalogProvider";
 import { TravelDatePicker } from "./TravelDatePicker";
+import { TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
 import { WeatherStrip } from "./WeatherStrip";
 
 type Screen = "landing" | "known" | "unknown" | "result";
 
-type TripBrief = {
+type TripBrief = TravelerBudgetTripBrief & {
   origin: string;
   destinationId: string;
   destinationName: string;
@@ -94,9 +97,24 @@ type TripBrief = {
 
 type UnknownAnswers = {
   mood: string;
-  days: number;
-  pace: Pace;
+  days: number | null;
+  pace: string | null;
   interest: string;
+  origin: string;
+  startDate: string;
+  transport: string | null;
+  routeMode: string | null;
+  confirm: null;
+};
+
+type WizardStep = {
+  key: keyof UnknownAnswers;
+  title: string;
+  subtitle: string;
+  options: { value: string | number; label: string; hint: string }[];
+  customPlaceholder?: string;
+  inputMode?: "text" | "numeric";
+  kind?: "options" | "date" | "details";
 };
 
 const SAVED_KEY = "xuxiake-planner:prototype-saves";
@@ -119,6 +137,13 @@ const transportOptions: { id: TransportMode; label: string }[] = [
   { id: "bus", label: "长途汽车" },
   { id: "ship", label: "轮船" },
 ];
+const transportLabels: Record<TransportMode, string> = Object.fromEntries(
+  transportOptions.map((option) => [option.id, option.label]),
+) as Record<TransportMode, string>;
+const travelStyleLabels: Record<TravelStyle, string> = {
+  direct: "全程直达",
+  wander: "沿途边走边玩",
+};
 
 function dateInputValue(date: Date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
@@ -227,6 +252,12 @@ function createDefaultBrief(): TripBrief {
     startDate: dateInputValue(new Date()),
     days: 2,
     dailyHours: 6,
+    startTime: "09:00",
+    endTime: "21:00",
+    adults: 2,
+    children: 0,
+    totalBudget: 0,
+    vehicleEnergy: null,
     pace: "balanced",
     interests: ["自然山水", "古村古镇"],
     waypoints: [],
@@ -280,11 +311,57 @@ function resolveTripDestination(
     places: [],
   };
 }
-function recommendDestination(answers: UnknownAnswers) {
-  if (answers.mood === "water-town" || answers.interest === "古村古镇") return "jiangnan";
-  if (answers.mood === "mountain" && answers.days >= 4) return "guilin";
-  if (answers.mood === "mountain") return "huangshan";
-  return answers.days >= 4 ? "guilin" : "huangshan";
+function normalizePaceAnswer(value: string): Pace {
+  if (/轻松|休闲|慢|松弛|少走/.test(value)) return "relaxed";
+  if (/紧凑|充实|赶|暴走|多走/.test(value)) return "deep";
+  return "balanced";
+}
+
+function normalizeTransportAnswer(value: string): TransportMode {
+  if (/自驾|开车/.test(value)) return "drive";
+  if (/高铁|火车|铁路/.test(value)) return "train";
+  if (/飞机|航班|航空/.test(value)) return "flight";
+  if (/大巴|长途汽车|客车/.test(value)) return "bus";
+  if (/轮船|邮轮|坐船/.test(value)) return "ship";
+  if (/经济|省钱|便宜|预算/.test(value)) return "economy";
+  if (/效率|最快|省时|少请假|赶时间/.test(value)) return "speed";
+  return value === "economy" || value === "speed" ? value : "balanced";
+}
+
+function parseRouteAnswer(value: string) {
+  if (value === "oneway" || /单程|不回|无需返程|只去不回/.test(value)) {
+    return { roundTrip: false, returnMode: "fast" as ReturnMode, defaultTravelStyle: "direct" as TravelStyle };
+  }
+  if (value === "roundtrip-scenic" || /回程.*(玩|绕|停)|沿途.*回|边走边玩/.test(value)) {
+    return { roundTrip: true, returnMode: "scenic" as ReturnMode, defaultTravelStyle: "direct" as TravelStyle };
+  }
+  return { roundTrip: true, returnMode: "fast" as ReturnMode, defaultTravelStyle: "direct" as TravelStyle };
+}
+
+function recommendDestination(answers: UnknownAnswers, catalog: InspirationDestination[]) {
+  const mood = answers.mood.trim().toLowerCase();
+  const days = answers.days ?? 2;
+  if (mood === "water-town" || answers.interest === "古村古镇") return "jiangnan";
+  if (mood === "mountain" && days >= 4) return "guilin";
+  if (mood === "mountain") return "huangshan";
+
+  if (mood && mood !== "anything") {
+    const directMatch = catalog.find((destination) =>
+      [destination.name, destination.region, ...destination.tags].some((term) => {
+        const normalizedTerm = term.trim().toLowerCase();
+        return normalizedTerm && (normalizedTerm.includes(mood) || mood.includes(normalizedTerm));
+      }),
+    );
+    if (directMatch) return directMatch.id;
+
+    if (/海|岛|沙滩|潜水|椰林|海岸/.test(mood)) return "sanya";
+    if (/草原|牧场|沙漠|星空|公路/.test(mood)) return "hulunbuir";
+    if (/雪山|冰川|盐湖|高原|湖泊/.test(mood)) return "chaka-salt-lake";
+    if (/古镇|水乡|园林|街巷|老街/.test(mood)) return "jiangnan";
+    if (/山|峰|云海|峡谷|森林/.test(mood)) return days >= 4 ? "guilin" : "huangshan";
+  }
+
+  return days >= 4 ? "guilin" : "huangshan";
 }
 
 function notifyDiscoveries(discoveries: DiscoveryNotice[]) {
@@ -314,6 +391,7 @@ function readSaved() {
 function PlannerPrototypeContent() {
   const variant: DesignVariant = "scroll";
   const [screen, setScreen] = useState<Screen>("landing");
+  const [resultOrigin, setResultOrigin] = useState<"known" | "unknown">("known");
   const [brief, setBrief] = useState<TripBrief>(createDefaultBrief);
   const [savedIds, setSavedIds] = useState<string[]>([]);
 
@@ -356,7 +434,10 @@ function PlannerPrototypeContent() {
           brief={brief}
           onBrief={setBrief}
           onBack={() => setScreen("landing")}
-          onSubmit={() => setScreen("result")}
+          onSubmit={() => {
+            setResultOrigin("known");
+            setScreen("result");
+          }}
         />
       ) : null}
 
@@ -366,6 +447,7 @@ function PlannerPrototypeContent() {
           onBack={() => setScreen("landing")}
           onComplete={(nextBrief) => {
             setBrief(nextBrief);
+            setResultOrigin("unknown");
             setScreen("result");
           }}
         />
@@ -376,8 +458,8 @@ function PlannerPrototypeContent() {
           variant={variant}
           brief={brief}
           saved={saved}
-          onBack={() => setScreen("known")}
-          onEdit={() => setScreen(brief.destinationId ? "known" : "unknown")}
+          onBack={() => setScreen(resultOrigin)}
+          onEdit={() => setScreen(resultOrigin)}
           onSave={toggleSave}
         />
       ) : null}
@@ -476,7 +558,7 @@ function LandingScreen({
             </span>
             <span>
               <span className="choice-title">帮我决定去哪</span>
-              <span className="choice-copy">通过 4 个选择缩小范围</span>
+              <span className="choice-copy">通过一组选择确定目的地、时间与往返方式</span>
             </span>
             <ArrowRight className="ml-auto size-5 shrink-0" />
           </button>
@@ -533,6 +615,7 @@ function KnownPlanScreen({
   const today = dateInputValue(new Date());
   const maxDate = addDays(today, Math.max(0, 16 - brief.days));
   const [customDaysOpen, setCustomDaysOpen] = useState(false);
+  const [briefErrors, setBriefErrors] = useState<string[]>([]);
   const [customDaysDraft, setCustomDaysDraft] = useState(String(brief.days));
   const [inspirationRegion, setInspirationRegion] = useState("");
   const inspirationMatches = useMemo(
@@ -600,6 +683,17 @@ function KnownPlanScreen({
     brief.roundTrip,
     brief.waypoints,
   ]);
+
+  const usesDrive =
+    routePlan?.legs.some(
+      (leg) => (brief.legPreferences[leg.id]?.transport ?? leg.transport) === "drive",
+    ) ?? false;
+
+  const submitBrief = () => {
+    const errors = validateTripBrief(brief);
+    setBriefErrors(errors);
+    if (errors.length === 0) onSubmit();
+  };
 
   const inspirationBatch = inspirationCycle.batch
     .map((id) => inspirationCatalog.find((destination) => destination.id === id))
@@ -797,6 +891,17 @@ function KnownPlanScreen({
           <RouteBuilder brief={brief} route={routePlan} onBrief={onBrief} />
 
           <div className="mt-6">
+            <TravelerBudgetFields
+              value={brief}
+              onChange={(nextBrief) => {
+                onBrief({ ...brief, ...nextBrief });
+                setBriefErrors([]);
+              }}
+              showVehicleEnergy={usesDrive}
+            />
+          </div>
+
+          <div className="mt-6">
             <span className="planner-field-label">节奏</span>
             <div className="grid gap-3 sm:grid-cols-3">
               {paceOptions.map((pace) => (
@@ -837,11 +942,18 @@ function KnownPlanScreen({
             size="lg"
             className="mt-8 w-full sm:w-auto"
             disabled={!routePlan}
-            onClick={onSubmit}
+            onClick={submitBrief}
           >
             生成旅行规划
             <ArrowRight className="size-4" />
           </Button>
+          {briefErrors.length > 0 ? (
+            <ul className="mt-3 space-y-1 text-xs leading-5 text-[var(--v-seal)]">
+              {briefErrors.map((error) => (
+                <li key={error}>{error}</li>
+              ))}
+            </ul>
+          ) : null}
           {!routePlan ? (
             <p className="mt-3 text-xs leading-5 text-[var(--v-seal)]">
               请先填写出发地和目的地，途经点最多 5 个。
@@ -1230,15 +1342,32 @@ function UnknownPlanScreen({
   onComplete: (brief: TripBrief) => void;
 }) {
   const inspirationCatalog = useInspirationCatalog();
+  const today = dateInputValue(new Date());
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<UnknownAnswers>({
     mood: "",
-    days: 2,
-    pace: "balanced",
+    days: null,
+    pace: null,
     interest: "",
+    origin: "",
+    startDate: today,
+    transport: null,
+    routeMode: null,
+    confirm: null,
+  });
+  const [customDraft, setCustomDraft] = useState("");
+  const [customError, setCustomError] = useState("");
+  const [briefErrors, setBriefErrors] = useState<string[]>([]);
+  const [travelerInput, setTravelerInput] = useState<TravelerBudgetTripBrief>({
+    startTime: "09:00",
+    endTime: "21:00",
+    adults: 2,
+    children: 0,
+    totalBudget: 0,
+    vehicleEnergy: null,
   });
 
-  const steps = [
+  const steps: WizardStep[] = [
     {
       key: "mood",
       title: "你最想看到什么样的风景？",
@@ -1248,6 +1377,8 @@ function UnknownPlanScreen({
         { value: "water-town", label: "水乡与古镇", hint: "湖泊、园林、老街与慢游" },
         { value: "anything", label: "都可以", hint: "让我根据时间和季节推荐" },
       ],
+      customPlaceholder: "例如：雪山、草原、海边慢游",
+      inputMode: "text",
     },
     {
       key: "days",
@@ -1258,6 +1389,8 @@ function UnknownPlanScreen({
         label: `${days} 天`,
         hint: days <= 2 ? "适合一个核心片区" : "可以组合城市与周边景区",
       })),
+      customPlaceholder: "输入 1–365 天",
+      inputMode: "numeric",
     },
     {
       key: "pace",
@@ -1268,48 +1401,155 @@ function UnknownPlanScreen({
         label: pace.title,
         hint: pace.description,
       })),
+      customPlaceholder: "例如：每天轻松走两三个地方",
+      inputMode: "text",
     },
     {
       key: "interest",
-      title: "有没有特别想体验的？",
-      subtitle: "最后一个问题。",
+      title: "旅途中还想加入什么体验？",
+      subtitle: "这一步只补充玩法，不再重复选择风景方向。",
       options: [
-        { value: "自然山水", label: "自然山水", hint: "优先观景、徒步和游船" },
-        { value: "古村古镇", label: "古村古镇", hint: "优先街巷、建筑与在地生活" },
-        { value: "人文建筑", label: "人文建筑", hint: "博物馆、寺院和传统建筑" },
-        { value: "美食街区", label: "美食街区", hint: "把吃饭和街区漫游排进路线" },
+        { value: "摄影", label: "摄影与出片", hint: "优先晨昏光线、观景位和好拍路线" },
+        { value: "美食街区", label: "在地美食", hint: "把市场、老字号和夜间街区排进路线" },
+        { value: "人文建筑", label: "人文建筑", hint: "博物馆、寺院、传统建筑与讲解" },
+        { value: "夜游演出", label: "夜游与演出", hint: "安排夜景、灯会、演出或夜市" },
       ],
+      customPlaceholder: "例如：看日出、逛市集、拍星空",
+      inputMode: "text",
+    },
+    {
+      key: "origin",
+      title: "你从哪里出发？",
+      subtitle: "出发地会影响路线顺序、交通方式和每天可用时间。",
+      options: [
+        { value: "北京", label: "北京", hint: "华北出发，适合高铁或航班联运" },
+        { value: "上海", label: "上海", hint: "华东出发，高铁与航班选择较多" },
+        { value: "广州", label: "广州", hint: "华南出发，适合飞机或高铁" },
+        { value: "深圳", label: "深圳", hint: "华南出发，优先考虑时间效率" },
+        { value: "成都", label: "成都", hint: "西南出发，周边与长线都覆盖" },
+      ],
+      customPlaceholder: "输入出发城市，例如：杭州",
+      inputMode: "text",
+    },
+    {
+      key: "startDate",
+      title: "计划什么时候出发？",
+      subtitle: "可选日期会结合这次旅行的天数和预报范围。",
+      options: [],
+      kind: "date",
+    },
+    {
+      key: "transport",
+      title: "交通上更看重什么？",
+      subtitle: "先确定整体取舍，之后仍可在行程里调整单段交通。",
+      options: [
+        { value: "economy", label: "经济优先", hint: "更关注总花费，接受更多换乘或较慢车次" },
+        { value: "balanced", label: "均衡推荐", hint: "在价格、时间和舒适度之间平衡" },
+        { value: "speed", label: "效率优先", hint: "优先少请假、少换乘和最短耗时" },
+      ],
+      customPlaceholder: "例如：优先高铁、尽量坐飞机、自驾",
+      inputMode: "text",
+    },
+    {
+      key: "routeMode",
+      title: "这趟需要往返吗？",
+      subtitle: "如果是往返，还可以决定回程是快速返回还是继续沿途玩。",
+      options: [
+        { value: "roundtrip-fast", label: "往返 · 快速返程", hint: "去程顺畅，回程优先节省时间" },
+        { value: "roundtrip-scenic", label: "往返 · 回程再玩", hint: "回程换路线或顺路多停一处" },
+        { value: "oneway", label: "单程 · 只去不回", hint: "只规划出发到目的地的沿途行程" },
+      ],
+      customPlaceholder: "例如：往返，但回程想绕路看海",
+      inputMode: "text",
+    },
+    {
+      key: "confirm",
+      title: "最后补充同行信息和预算",
+      subtitle: "这些信息会用于控制预算与每天的时间安排。",
+      options: [],
+      kind: "details",
     },
   ];
 
   const current = steps[step];
+  const usesDrive = normalizeTransportAnswer(answers.transport ?? "balanced") === "drive";
+  const wizardMaxDate = addDays(today, Math.max(0, 16 - (answers.days ?? 2)));
+  const currentAnswer = answers[current.key];
+  const customAnswerActive =
+    Boolean(currentAnswer) && !current.options.some((option) => option.value === currentAnswer);
 
-  const pick = (value: string | number) => {
-    const nextAnswers = { ...answers, [current.key]: value } as UnknownAnswers;
-    setAnswers(nextAnswers);
-    if (step < steps.length - 1) {
-      window.setTimeout(() => setStep((currentStep) => currentStep + 1), 120);
-      return;
-    }
-    const destinationId = recommendDestination(nextAnswers);
+  const goToStep = (nextStep: number, sourceAnswers: UnknownAnswers = answers) => {
+    const nextKey = steps[nextStep].key;
+    const nextAnswer = sourceAnswers[nextKey];
+    const isPreset = steps[nextStep].options.some((option) => option.value === nextAnswer);
+    setCustomDraft(isPreset ? "" : String(nextAnswer ?? ""));
+    setCustomError("");
+    setStep(nextStep);
+  };
+
+  const completeTrip = (sourceAnswers: UnknownAnswers = answers) => {
+    const destinationId = recommendDestination(sourceAnswers, inspirationCatalog);
     const destination = findInspiration(destinationId, inspirationCatalog);
+    const routeDecision = parseRouteAnswer(sourceAnswers.routeMode ?? "roundtrip-fast");
+    const transport = normalizeTransportAnswer(sourceAnswers.transport ?? "balanced");
+    const legPreferences: Record<string, RouteLegPreference> = {
+      "outbound:0": { transport },
+      ...(routeDecision.roundTrip ? { return: { transport } } : {}),
+    };
     onComplete({
-      origin: "北京",
+      ...travelerInput,
+      vehicleEnergy: transport === "drive" ? travelerInput.vehicleEnergy : null,
+      origin: sourceAnswers.origin.trim() || "北京",
       destinationId,
       destinationName: destination?.name ?? "黄山",
       latitude: destination?.latitude,
       longitude: destination?.longitude,
-      startDate: dateInputValue(new Date()),
-      days: nextAnswers.days,
+      startDate: sourceAnswers.startDate || today,
+      days: sourceAnswers.days ?? 2,
       dailyHours: 6,
-      pace: nextAnswers.pace,
-      interests: [nextAnswers.interest],
+      pace: normalizePaceAnswer(sourceAnswers.pace ?? "balanced"),
+      interests: sourceAnswers.interest ? [sourceAnswers.interest] : [],
       waypoints: [],
-      roundTrip: false,
-      returnMode: "fast",
-      defaultTravelStyle: "direct",
-      legPreferences: {},
+      roundTrip: routeDecision.roundTrip,
+      returnMode: routeDecision.returnMode,
+      defaultTravelStyle: routeDecision.defaultTravelStyle,
+      legPreferences,
     });
+  };
+
+  const pick = (value: string | number) => {
+    setCustomError("");
+    const answerValue = value;
+    const nextAnswers = { ...answers, [current.key]: answerValue } as UnknownAnswers;
+    if (current.key === "days" && typeof answerValue === "number") {
+      const nextMaxDate = addDays(today, Math.max(0, 16 - answerValue));
+      nextAnswers.startDate =
+        nextAnswers.startDate > nextMaxDate ? nextMaxDate : nextAnswers.startDate;
+    }
+    setAnswers(nextAnswers);
+    if (step < steps.length - 1) {
+      window.setTimeout(() => goToStep(step + 1, nextAnswers), 120);
+    }
+  };
+
+  const submitCustom = () => {
+    const value = customDraft.trim();
+    if (!value) {
+      setCustomError("请先填写你的答案");
+      return;
+    }
+
+    if (current.key === "days") {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsed) || parsed < MIN_TRIP_DAYS || parsed > MAX_TRIP_DAYS) {
+        setCustomError(`请输入 ${MIN_TRIP_DAYS}–${MAX_TRIP_DAYS} 天`);
+        return;
+      }
+      pick(parsed);
+      return;
+    }
+
+    pick(value);
   };
 
   return (
@@ -1350,6 +1590,52 @@ function UnknownPlanScreen({
             {current.title}
           </h2>
           <p className="mt-3 text-sm text-[var(--v-muted)]">{current.subtitle}</p>
+          {current.kind === "date" ? (
+            <div className="mt-8 rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-soft)] p-4">
+              <TravelDatePicker
+                value={answers.startDate}
+                min={today}
+                max={wizardMaxDate}
+                onChange={(startDate) =>
+                  setAnswers((previous) => ({ ...previous, startDate }))
+                }
+              />
+              <Button type="button" className="mt-4" onClick={() => goToStep(step + 1)}>
+                继续
+              </Button>
+            </div>
+          ) : current.kind === "details" ? (
+            <div className="mt-8">
+              <TravelerBudgetFields
+                value={travelerInput}
+                onChange={(nextInput) => {
+                  setTravelerInput(nextInput);
+                  setBriefErrors([]);
+                }}
+                showVehicleEnergy={usesDrive}
+              />
+              {briefErrors.length > 0 ? (
+                <ul className="mt-3 space-y-1 text-xs leading-5 text-[var(--v-seal)]">
+                  {briefErrors.map((error) => (
+                    <li key={error}>{error}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <Button
+                type="button"
+                className="mt-4 w-full sm:w-auto"
+                onClick={() => {
+                  const errors = validateTripBrief(travelerInput);
+                  setBriefErrors(errors);
+                  if (errors.length === 0) completeTrip();
+                }}
+              >
+                生成旅行规划
+                <ArrowRight className="size-4" />
+              </Button>
+            </div>
+          ) : (
+            <>
           <div className="mt-8 grid gap-3">
             {current.options.map((option) => {
               const active = answers[current.key as keyof UnknownAnswers] === option.value;
@@ -1369,11 +1655,56 @@ function UnknownPlanScreen({
               );
             })}
           </div>
+          <form
+            className={cn(
+              "mt-3 rounded-[var(--v-card-radius)] border border-dashed border-[var(--v-line)] bg-[var(--v-soft)] p-4 transition",
+              customAnswerActive && "border-[var(--v-accent)]",
+            )}
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitCustom();
+            }}
+          >
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-sm font-medium text-[var(--v-ink)]">或者自己填写</span>
+              <small className="text-xs text-[var(--v-muted)]">
+                {step === steps.length - 1 ? "填写后生成推荐" : "填写后继续"}
+              </small>
+            </div>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+              <input
+                aria-label={`${current.title}自定义答案`}
+                type="text"
+                inputMode={current.inputMode}
+                autoComplete="off"
+                value={customDraft}
+                placeholder={current.customPlaceholder}
+                className="planner-input min-w-0 flex-1"
+                onChange={(event) => {
+                  const raw = event.target.value;
+                  setCustomDraft(
+                    current.key === "days"
+                      ? raw.replace(/\D/g, "").slice(0, 3)
+                      : raw.slice(0, 40),
+                  );
+                  if (customError) setCustomError("");
+                }}
+              />
+              <Button type="submit" className="shrink-0">
+                {step === steps.length - 1 ? "生成推荐" : "继续"}
+              </Button>
+            </div>
+            {customError ? (
+              <p className="mt-2 text-xs text-[var(--v-seal)]">{customError}</p>
+            ) : null}
+          </form>
+            </>
+          )}
           {step > 0 ? (
             <button
               type="button"
               className="mt-6 text-sm text-[var(--v-muted)] hover:text-[var(--v-ink)]"
-              onClick={() => setStep(step - 1)}
+              onClick={() => goToStep(step - 1)}
             >
               返回上一题
             </button>
@@ -1549,6 +1880,7 @@ function ItineraryScreen({
         region: destination.region,
         days: brief.days,
         seedPlaces: destination.places.map((place) => place.name),
+        route: routePlan,
       });
 
       longPlannerFn({
@@ -1617,9 +1949,25 @@ function ItineraryScreen({
             ...day,
             weather: weather[day.day - 1],
           }))
-        : splitPlacesAcrossDays(destination.places, weather, brief.pace),
-    [brief.pace, destination.places, livePlan, weather],
+        : routePlan
+          ? buildRouteFallbackDays({
+              route: routePlan,
+              days: brief.days,
+              destinationPlaces: destination.places,
+              weather,
+              pace: brief.pace,
+            })
+          : [],
+    [brief.days, brief.pace, destination.places, livePlan, routePlan, weather],
   );
+  const routeSummary = routePlan
+    ? routePlan.legs
+        .map(
+          (leg) =>
+            `${leg.from}→${leg.to}：${transportLabels[leg.transport]}，${travelStyleLabels[leg.style]}`,
+        )
+        .join("；")
+    : "";
 
   const rainDays = weather.filter((day) => {
     const tone = classifyWeather(day.code).tone;
@@ -1656,14 +2004,31 @@ function ItineraryScreen({
             </span>
           </div>
           {routePlan ? (
-            <p className="result-route-path">
-              {routePlan.legs.map((leg) => leg.from).join(" → ")} → {routePlan.legs.at(-1)?.to}
-              {routePlan.roundTrip
-                ? routePlan.returnMode === "scenic"
-                  ? " · 不走回头"
-                  : " · 快速回家"
-                : ""}
-            </p>
+            <div>
+              <p className="result-route-path">
+                {routePlan.legs.map((leg) => leg.from).join(" → ")} → {routePlan.legs.at(-1)?.to}
+                {routePlan.roundTrip
+                  ? routePlan.returnMode === "scenic"
+                    ? " · 不走回头"
+                    : " · 快速回家"
+                  : ""}
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {routePlan.legs.map((leg, index) => (
+                  <div
+                    key={leg.id}
+                    className="rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-xs text-white/75"
+                  >
+                    <strong className="block font-medium text-white">
+                      {index + 1}. {leg.from} → {leg.to}
+                    </strong>
+                    <span className="mt-1 block">
+                      {transportLabels[leg.transport]} · {travelStyleLabels[leg.style]}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : null}
         </div>
         <div className="result-hero-actions">
@@ -1807,6 +2172,12 @@ function ItineraryScreen({
               <p className="mt-4 text-sm leading-7 text-[var(--v-muted)]">
                 {selectedPlace.summary}
               </p>
+              <PlaceAdvice
+                place={selectedPlace}
+                destinationName={destination.name}
+                startDate={brief.startDate}
+                routeSummary={routeSummary}
+              />
               <div className="mt-6 grid grid-cols-2 gap-3">
                 <div className="rounded-[var(--v-card-radius)] bg-[var(--v-soft)] p-4">
                   <Timer className="size-4 text-[var(--v-accent)]" />

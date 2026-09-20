@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { estimateBudget, normalizeRadarScores } from "./travel-plan.ts";
+import { estimateBudget, normalizeRadarScores, validateTripBrief } from "./travel-plan.ts";
 import type { Pace } from "./planner.ts";
 import type { TransportMode } from "./route-planner.ts";
 import type {
@@ -9,6 +9,30 @@ import type {
   TripMeta,
   TripTimelineNode,
 } from "./travel-plan.ts";
+
+test("requires a total budget and at least one adult", () => {
+  const errors = validateTripBrief({
+    adults: 0,
+    children: 1,
+    totalBudget: 0,
+    startTime: "09:00",
+    endTime: "21:00",
+    vehicleEnergy: null,
+  });
+  assert.deepEqual(errors, ["至少需要 1 位成人", "请填写全团总预算"]);
+});
+
+test("requires the end time to be later than the start time", () => {
+  const errors = validateTripBrief({
+    adults: 2,
+    children: 0,
+    totalBudget: 3000,
+    startTime: "18:00",
+    endTime: "09:00",
+    vehicleEnergy: null,
+  });
+  assert.deepEqual(errors, ["每日最晚结束时间必须晚于出发时间"]);
+});
 
 type Equal<Left, Right> = [Left] extends [Right] ? ([Right] extends [Left] ? true : false) : false;
 type Expect<Value extends true> = Value;
