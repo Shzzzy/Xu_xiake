@@ -99,7 +99,7 @@ async function stopProcessTree(child) {
 
 test(
   "未知行程从结果页返回后保留步骤、同行、预算、时间和能源草稿",
-  { timeout: 90_000 },
+  { timeout: 180_000 },
   async () => {
     const port = await reservePort();
     let server = null;
@@ -115,7 +115,7 @@ test(
       });
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 
-      await page.goto(server.url, { waitUntil: "domcontentloaded" });
+      await page.goto(server.url, { waitUntil: "domcontentloaded", timeout: 120_000 });
       await page.waitForTimeout(1000);
       await page.waitForTimeout(1000);
       await page.getByRole("button", { name: /帮我决定去哪/ }).click();

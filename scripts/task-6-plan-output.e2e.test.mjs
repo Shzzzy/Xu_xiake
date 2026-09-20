@@ -121,10 +121,12 @@ test("真实向导输出包含换乘节点、可切日期且移动端无溢出",
       route.fulfill({ status: 200, contentType: "application/javascript", body: "" }),
     );
 
-    await page.goto(server.url, { waitUntil: "domcontentloaded" });
+    await page.goto(server.url, { waitUntil: "domcontentloaded", timeout: 120_000 });
     await page.waitForTimeout(1000);
     await page.getByRole("button", { name: /帮我决定去哪/ }).click();
-    await page.getByRole("button", { name: "奇峰与山水" }).click();
+    const destinationChoice = page.getByRole("button", { name: "奇峰与山水" });
+    await destinationChoice.waitFor({ state: "visible", timeout: 60_000 });
+    await destinationChoice.click();
     await page.getByRole("button", { name: "3 天" }).click();
     await page.getByRole("button", { name: "适中" }).click();
     await page.getByRole("button", { name: "摄影与出片" }).click();

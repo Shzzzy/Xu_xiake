@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import test from "node:test";
+import { renderGuidebookHtml } from "./guidebook-html.server.ts";
 import type { BudgetCategory, TripPlan } from "./travel-plan.ts";
 import {
   exportGuidebookForTest,
   installGuidebookRequestGuard,
+  prepareGuidebookPlan,
   isGuidebookRequestAllowed,
   renderGuidebookPdf,
   resolveGuidebookRedirect,
@@ -56,12 +58,18 @@ const fixturePlan: TripPlan = {
     distanceKm: 150,
     durationMinutes: 120,
     returnMode: null,
+    staticMapUrl:
+      "https://restapi.amap.com/v3/staticmap?zoom=10&size=750*500&paths=10,0x4A7C8A,1,,:121.47,31.23;120.43,30.88&key=leaked-plan-key",
   },
   days: [
     {
       date: "2026-09-20",
       theme: "水乡慢游",
       weather: "多云",
+      mapUrl:
+        "https://restapi.amap.com/v3/staticmap?zoom=12&size=750*500&paths=10,0x4A7C8A,1,,:121.47,31.23;120.43,30.88&key=leaked-plan-key",
+      qrCodeUrl:
+        "https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=https%3A%2F%2Furi.amap.com%2Fnavigation&token=leaked-token",
       nodes: [],
       estimatedCost: 1500,
       radar: { physical: 42, childFit: 72, weatherSensitivity: 48, timeCost: 44, crowding: 58 },
@@ -200,6 +208,114 @@ test(
     }
   },
 );
+
+test("prepares AMap maps and trusted QR images as data URLs without leaking keys", async () => {
+  const requestedUrls: string[] = [];
+  const fetchImpl = (async (input: string | URL | Request) => {
+    requestedUrls.push(String(input));
+    return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+      headers: { "content-type": "image/png" },
+    });
+  }) as typeof fetch;
+
+  const prepared = await prepareGuidebookPlan(fixturePlan, {
+    fetchImpl,
+    amapKey: "server-only-key",
+  });
+
+  assert.match(prepared.route.staticMapUrl ?? "", /^data:image\/png;base64,/);
+  assert.match(prepared.days[0]?.mapUrl ?? "", /^data:image\/png;base64,/);
+  assert.match(prepared.days[0]?.qrCodeUrl ?? "", /^data:image\/png;base64,/);
+
+  const amapRequests = requestedUrls.filter((url) => url.includes("restapi.amap.com"));
+  assert.equal(amapRequests.length, 2);
+  assert.ok(amapRequests.every((url) => url.includes("key=server-only-key")));
+  assert.ok(amapRequests.every((url) => !url.includes("leaked-plan-key")));
+  assert.doesNotMatch(JSON.stringify(prepared), /server-only-key|leaked-plan-key|leaked-token/);
+
+  const html = renderGuidebookHtml(prepared);
+  assert.doesNotMatch(html, /<img[^>]+src="https?:\/\//i);
+  assert.match(html, /src="data:image\/png;base64,/);
+});
+
+test("uses local SVG placeholders when approved map or QR fetching fails", async () => {
+  const prepared = await prepareGuidebookPlan(fixturePlan, {
+    amapKey: "server-only-key",
+    fetchImpl: async () => {
+      throw new Error("offline");
+    },
+  });
+  const html = renderGuidebookHtml(prepared);
+
+  assert.match(html, /src="data:image\/svg\+xml;base64,/);
+  assert.doesNotMatch(html, /<img[^>]+src="https?:\/\//i);
+  assert.doesNotMatch(html, /server-only-key|leaked-plan-key|leaked-token/);
+});
+
+test("replaces untrusted remote image URLs with local SVG placeholders", async () => {
+  let fetchCalls = 0;
+  const untrustedPlan: TripPlan = {
+    ...fixturePlan,
+    route: { ...fixturePlan.route, staticMapUrl: "https://tracker.example/map.png" },
+    days: fixturePlan.days.map((day) => ({
+      ...day,
+      mapUrl: "https://tracker.example/day.png",
+      qrCodeUrl: "https://tracker.example/qr.png",
+    })),
+  };
+
+  const prepared = await prepareGuidebookPlan(untrustedPlan, {
+    amapKey: "server-only-key",
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        headers: { "content-type": "image/png" },
+      });
+    },
+  });
+  const html = renderGuidebookHtml(prepared);
+
+  assert.equal(fetchCalls, 0);
+  assert.match(html, /src="data:image\/svg\+xml;base64,/);
+  assert.doesNotMatch(html, /<img[^>]+src="https?:\/\//i);
+});
+
+test("renders a PDF from a local map placeholder data image", async () => {
+  const prepared = await prepareGuidebookPlan(fixturePlan, {
+    amapKey: "server-only-key",
+    fetchImpl: async () => {
+      throw new Error("offline");
+    },
+  });
+  const placeholder = prepared.route.staticMapUrl;
+  assert.match(placeholder ?? "", /^data:image\/svg\+xml;base64,/);
+
+  const pdf = await renderGuidebookPdf(
+    `<!doctype html><html><body><img src="${placeholder}" alt="地图暂不可用"></body></html>`,
+  );
+
+  assert.equal(Buffer.from(pdf.subarray(0, 4)).toString("ascii"), "%PDF");
+  assert.ok(pdf.byteLength > 1_000);
+});
+
+test("export pipeline passes only prepared data images to PDF rendering", async () => {
+  let renderedHtml = "";
+  const result = await exportGuidebookForTest(fixturePlan, {
+    amapKey: "server-only-key",
+    fetchImpl: async () => {
+      throw new Error("offline");
+    },
+    renderPdf: async (html) => {
+      renderedHtml = html;
+      return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    },
+  });
+
+  assert.equal(result.status, "ok");
+  assert.match(renderedHtml, /src="data:image\/svg\+xml;base64,/);
+  assert.doesNotMatch(renderedHtml, /<img[^>]+src="https?:\/\//i);
+  assert.doesNotMatch(renderedHtml, /server-only-key|leaked-plan-key|leaked-token/);
+});
 
 test("returns a named PDF download from the rendered guidebook", async () => {
   let renderedHtml = "";

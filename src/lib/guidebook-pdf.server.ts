@@ -11,6 +11,21 @@ const ALLOWED_GUIDEBOOK_ASSET_HOSTS = [
   "fonts.gstatic.com",
   "cdn.jsdelivr.net",
 ] as const;
+const AMAP_STATIC_MAP_HOST = "restapi.amap.com";
+const AMAP_STATIC_MAP_PATH = "/v3/staticmap";
+const TRUSTED_GUIDEBOOK_QR_HOSTS = ["api.qrserver.com"] as const;
+const GUIDEBOOK_IMAGE_TIMEOUT_MS = 10_000;
+const GUIDEBOOK_IMAGE_MAX_BYTES = 5_000_000;
+const MAX_GUIDEBOOK_IMAGE_REDIRECTS = 3;
+const SENSITIVE_IMAGE_QUERY_KEYS = [
+  "key",
+  "api_key",
+  "apikey",
+  "access_key",
+  "accesskey",
+  "secret",
+  "token",
+] as const;
 
 function normalizeHostname(hostname: string): string {
   return hostname
@@ -154,6 +169,190 @@ export async function installGuidebookRequestGuard(page: Page): Promise<void> {
   });
 }
 
+export type GuidebookImageKind = "map" | "qr";
+
+export type GuidebookImageFetchOptions = {
+  fetchImpl?: typeof fetch;
+  amapKey?: string | null;
+};
+
+function isSensitiveImageQueryKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  return (
+    SENSITIVE_IMAGE_QUERY_KEYS.includes(
+      normalized as (typeof SENSITIVE_IMAGE_QUERY_KEYS)[number],
+    ) ||
+    normalized.endsWith("_api_key") ||
+    normalized.endsWith("_access_key") ||
+    normalized.endsWith("_token")
+  );
+}
+
+function guidebookAmapKey(override: string | null | undefined): string {
+  if (override !== undefined) return override?.trim() ?? "";
+  return (
+    process.env.AMAP_WEB_SERVICE_KEY?.trim() ||
+    process.env.AMAP_API_KEY?.trim() ||
+    process.env.AMAP_KEY?.trim() ||
+    ""
+  );
+}
+
+function secureGuidebookImageUrl(
+  value: string,
+  kind: GuidebookImageKind,
+  amapKey: string,
+): URL | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+
+    const hostname = normalizeHostname(url.hostname);
+    if (isBlockedGuidebookHost(hostname)) return null;
+
+    if (kind === "map") {
+      if (hostname !== AMAP_STATIC_MAP_HOST || url.pathname !== AMAP_STATIC_MAP_PATH || !amapKey) {
+        return null;
+      }
+      for (const key of [...url.searchParams.keys()]) {
+        if (isSensitiveImageQueryKey(key)) url.searchParams.delete(key);
+      }
+      url.searchParams.set("key", amapKey);
+      return url;
+    }
+
+    if (!TRUSTED_GUIDEBOOK_QR_HOSTS.some((host) => hostname === host)) return null;
+    for (const key of [...url.searchParams.keys()]) {
+      if (isSensitiveImageQueryKey(key)) url.searchParams.delete(key);
+    }
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function guidebookPlaceholderSvg(kind: GuidebookImageKind): string {
+  const label = kind === "map" ? "地图暂不可用" : "二维码暂不可用";
+  const detail = kind === "map" ? "已使用本地路线占位图" : "可先使用导航链接";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="750" height="500" viewBox="0 0 750 500"><rect width="750" height="500" rx="24" fill="#f5f4ed"/><rect x="28" y="28" width="694" height="444" rx="18" fill="#faf9f5" stroke="#d1cfc5" stroke-width="2"/><path d="M170 250h410M280 150l95 100-95 100M470 150l-95 100 95 100" fill="none" stroke="#c96442" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><text x="375" y="395" text-anchor="middle" fill="#524f4a" font-family="serif" font-size="30">${label}</text><text x="375" y="430" text-anchor="middle" fill="#87867f" font-family="sans-serif" font-size="18">${detail}</text></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+}
+
+function isSafeInlineImage(value: string): boolean {
+  return /^data:image\/(?:png|jpe?g|gif|webp|svg\+xml);base64,/i.test(value);
+}
+
+function isRemoteImageUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+async function responseBytesWithinLimit(response: Response): Promise<Uint8Array | null> {
+  const contentLength = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(contentLength) && contentLength > GUIDEBOOK_IMAGE_MAX_BYTES) return null;
+
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return bytes.byteLength <= GUIDEBOOK_IMAGE_MAX_BYTES ? bytes : null;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > GUIDEBOOK_IMAGE_MAX_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function fetchGuidebookImageDataUrl(
+  value: string,
+  kind: GuidebookImageKind,
+  options: GuidebookImageFetchOptions,
+): Promise<string | null> {
+  if (isSafeInlineImage(value)) return value;
+  if (!isRemoteImageUrl(value)) return null;
+
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const amapKey = guidebookAmapKey(options.amapKey);
+  let nextUrl = secureGuidebookImageUrl(value, kind, amapKey);
+
+  for (let redirectCount = 0; redirectCount <= MAX_GUIDEBOOK_IMAGE_REDIRECTS; redirectCount += 1) {
+    if (!nextUrl) return null;
+
+    try {
+      const response = await fetchImpl(nextUrl, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(GUIDEBOOK_IMAGE_TIMEOUT_MS),
+        headers: { accept: "image/*" },
+      });
+      const location = response.headers.get("location");
+      if (response.status >= 300 && response.status < 400 && location) {
+        nextUrl = secureGuidebookImageUrl(new URL(location, nextUrl).toString(), kind, amapKey);
+        continue;
+      }
+      if (!response.ok) return null;
+
+      const contentType = (response.headers.get("content-type") ?? "")
+        .split(";")[0]
+        .trim()
+        .toLowerCase();
+      if (!contentType.startsWith("image/")) return null;
+
+      const bytes = await responseBytesWithinLimit(response);
+      if (!bytes) return null;
+      return `data:${contentType};base64,${Buffer.from(bytes).toString("base64")}`;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+export async function prepareGuidebookPlan(
+  plan: TripPlan,
+  options: GuidebookImageFetchOptions = {},
+): Promise<TripPlan> {
+  const prepareImage = async (
+    value: string | undefined,
+    kind: GuidebookImageKind,
+  ): Promise<string | undefined> => {
+    if (!value) return value;
+    const dataUrl = await fetchGuidebookImageDataUrl(value, kind, options);
+    return dataUrl ?? guidebookPlaceholderSvg(kind);
+  };
+
+  const staticMapUrl = await prepareImage(plan.route.staticMapUrl, "map");
+  const days = await Promise.all(
+    plan.days.map(async (day) => ({
+      ...day,
+      mapUrl: await prepareImage(day.mapUrl, "map"),
+      qrCodeUrl: await prepareImage(day.qrCodeUrl, "qr"),
+    })),
+  );
+
+  return {
+    ...plan,
+    route: { ...plan.route, staticMapUrl },
+    days,
+  };
+}
+
 function chromiumExecutablePath(): string | undefined {
   const configured = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
   if (configured && existsSync(configured)) return configured;
@@ -232,11 +431,16 @@ function fallbackMessage(error: unknown): string {
     : "PDF 生成失败，已改为可打印 HTML。";
 }
 
+export type GuidebookExportDependencies = GuidebookImageFetchOptions & {
+  renderPdf: GuidebookPdfRenderer;
+};
+
 export async function exportGuidebookForTest(
   plan: TripPlan,
-  dependencies: { renderPdf: GuidebookPdfRenderer },
+  dependencies: GuidebookExportDependencies,
 ): Promise<GuidebookExportResult> {
-  const html = renderGuidebookHtml(plan);
+  const preparedPlan = await prepareGuidebookPlan(plan, dependencies);
+  const html = renderGuidebookHtml(preparedPlan);
 
   try {
     const pdf = await dependencies.renderPdf(html);
