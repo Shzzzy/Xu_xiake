@@ -63,6 +63,7 @@ import {
   type UnknownPlanDraft,
 } from "@/lib/unknown-plan-draft";
 import {
+  buildRouteFallbackDays,
   classifyWeather,
   splitPlacesAcrossDays,
   type Pace,
@@ -1950,8 +1951,16 @@ function ItineraryScreen({
             ...day,
             weather: weather[day.day - 1],
           }))
-        : splitPlacesAcrossDays(destination.places, weather, brief.pace),
-    [brief.pace, destination.places, livePlan, weather],
+        : routePlan
+          ? buildRouteFallbackDays({
+              route: routePlan,
+              days: brief.days,
+              destinationPlaces: destination.places,
+              weather,
+              pace: brief.pace,
+            })
+          : splitPlacesAcrossDays(destination.places, weather, brief.pace),
+    [brief.days, brief.pace, destination.places, livePlan, routePlan, weather],
   );
 
   const executionPlan = useMemo(

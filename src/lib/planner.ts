@@ -1,3 +1,5 @@
+import type { RoutePlan } from "./route-planner";
+
 export type WeatherTone = "clear" | "cloudy" | "rain" | "storm" | "snow" | "fog";
 export type Pace = "relaxed" | "balanced" | "deep";
 
@@ -86,6 +88,72 @@ export function splitPlacesAcrossDays(
   return rows;
 }
 
+function routeStopPlace(name: string, area: string, idPrefix: string, index: number): Place {
+  return {
+    id: `${idPrefix}:${index}:${name}`,
+    name,
+    area,
+    indoor: false,
+    duration: 180,
+    summary: "作为路线中的实际停留点，建议到达后按现场情况安排游玩，并给下一段交通留出缓冲。",
+    source: "https://maps.google.com",
+  };
+}
+
+function fallbackDayNote(weather?: WeatherDay) {
+  const condition = weather ? classifyWeather(weather.code) : undefined;
+  if (condition?.tone === "rain" || condition?.tone === "storm") {
+    return "优先安排短时或室内停留，下午根据降水情况调整。";
+  }
+  if (condition?.tone === "fog") {
+    return "能见度有限，优先近景区域，暂缓登高观景。";
+  }
+  if (condition?.tone === "clear") {
+    return "晴好天气，优先安排视野最好的户外路段。";
+  }
+  return "按填写顺序推进路线，减少来回折返。";
+}
+
+export function buildRouteFallbackDays(input: {
+  route: RoutePlan;
+  days: number;
+  destinationPlaces: Place[];
+  weather: WeatherDay[];
+  pace: Pace;
+}): PlannedDay[] {
+  const dayCount = Math.max(1, input.days);
+  const waypointStops = input.route.waypoints.map((name, index) =>
+    routeStopPlace(name, `途经点 ${index + 1}`, "fallback-waypoint", index),
+  );
+  const destinationAnchor = routeStopPlace(
+    input.route.destination,
+    "目的地",
+    "fallback-destination",
+    0,
+  );
+  const destinationStops =
+    input.destinationPlaces.length > 0 ? input.destinationPlaces : [destinationAnchor];
+  const maxStops = Math.max(waypointStops.length + 1, dayCount * PACE_LIMIT[input.pace]);
+  const orderedStops = [...waypointStops, ...destinationStops].slice(0, maxStops);
+
+  const baseSize = Math.floor(orderedStops.length / dayCount);
+  const extra = orderedStops.length % dayCount;
+  let cursor = 0;
+
+  return Array.from({ length: dayCount }, (_, index) => {
+    const size = baseSize + (index < extra ? 1 : 0);
+    const places = orderedStops.slice(cursor, cursor + size);
+    const weather = input.weather[index];
+    cursor += size;
+    return {
+      day: index + 1,
+      places,
+      weather,
+      note: fallbackDayNote(weather),
+    };
+  });
+}
+
 export function weatherToneClass(tone?: WeatherTone) {
   if (tone === "rain" || tone === "storm") return "weather-rain";
   if (tone === "clear") return "weather-clear";
@@ -99,4 +167,3 @@ export function formatDuration(minutes: number) {
   const hours = Math.round((minutes / 60) * 10) / 10;
   return `${hours} 小时`;
 }
-
