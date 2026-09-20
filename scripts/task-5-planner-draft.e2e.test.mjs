@@ -60,17 +60,13 @@ async function waitForServer(url, child, output) {
 }
 
 async function startDevServer(port) {
-  const child = spawn(
-    npmCommand(),
-    ["run", "dev", "--", "--port", String(port), "--strictPort"],
-    {
-      cwd: ROOT,
-      env: { ...process.env, BROWSER_SMOKE_TIMEOUT_MS: String(START_TIMEOUT_MS) },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      shell: process.platform === "win32",
-    },
-  );
+  const child = spawn(npmCommand(), ["run", "dev", "--", "--port", String(port), "--strictPort"], {
+    cwd: ROOT,
+    env: { ...process.env, BROWSER_SMOKE_TIMEOUT_MS: String(START_TIMEOUT_MS) },
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    shell: process.platform === "win32",
+  });
   let output = "";
   child.stdout.on("data", (chunk) => {
     output += chunk.toString();
@@ -97,10 +93,7 @@ async function stopProcessTree(child) {
     return;
   }
   child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    delay(3000),
-  ]);
+  await Promise.race([new Promise((resolve) => child.once("exit", resolve)), delay(3000)]);
   if (child.exitCode === null) child.kill("SIGKILL");
 }
 
@@ -122,7 +115,8 @@ test(
       });
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 
-      await page.goto(server.url, { waitUntil: "load" });
+      await page.goto(server.url, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(1000);
       await page.waitForTimeout(1000);
       await page.getByRole("button", { name: /帮我决定去哪/ }).click();
 

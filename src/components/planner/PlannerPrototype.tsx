@@ -54,15 +54,8 @@ import {
   type TravelStyle,
 } from "@/lib/route-planner";
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
-import {
-  estimateBudget,
-  validateTripBrief,
-  type AttractionAudit,
-  type TripPlan,
-  type TripRoute,
-  type TripBrief as TravelerBudgetTripBrief,
-} from "@/lib/travel-plan";
-import { buildExecutionDays } from "@/lib/travel-schedule";
+import { buildTripPlanOutput } from "@/lib/plan-output-adapter";
+import { validateTripBrief, type TripBrief as TravelerBudgetTripBrief } from "@/lib/travel-plan";
 import {
   createUnknownPlanDraft,
   updateUnknownPlanDraft,
@@ -74,7 +67,6 @@ import {
   splitPlacesAcrossDays,
   type Pace,
   type Place,
-  type PlannedDay,
   type WeatherDay,
 } from "@/lib/planner";
 import { buildSceneGuide } from "@/lib/scene-guide";
@@ -154,7 +146,6 @@ function dateInputValue(date: Date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 10);
 }
-
 
 function addDays(date: string, amount: number) {
   const next = new Date(`${date}T12:00:00`);
@@ -336,12 +327,24 @@ function normalizeTransportAnswer(value: string): TransportMode {
 
 function parseRouteAnswer(value: string) {
   if (value === "oneway" || /单程|不回|无需返程|只去不回/.test(value)) {
-    return { roundTrip: false, returnMode: "fast" as ReturnMode, defaultTravelStyle: "direct" as TravelStyle };
+    return {
+      roundTrip: false,
+      returnMode: "fast" as ReturnMode,
+      defaultTravelStyle: "direct" as TravelStyle,
+    };
   }
   if (value === "roundtrip-scenic" || /回程.*(玩|绕|停)|沿途.*回|边走边玩/.test(value)) {
-    return { roundTrip: true, returnMode: "scenic" as ReturnMode, defaultTravelStyle: "direct" as TravelStyle };
+    return {
+      roundTrip: true,
+      returnMode: "scenic" as ReturnMode,
+      defaultTravelStyle: "direct" as TravelStyle,
+    };
   }
-  return { roundTrip: true, returnMode: "fast" as ReturnMode, defaultTravelStyle: "direct" as TravelStyle };
+  return {
+    roundTrip: true,
+    returnMode: "fast" as ReturnMode,
+    defaultTravelStyle: "direct" as TravelStyle,
+  };
 }
 
 function recommendDestination(answers: UnknownAnswers, catalog: InspirationDestination[]) {
@@ -1596,9 +1599,7 @@ function UnknownPlanScreen({
                 value={answers.startDate}
                 min={today}
                 max={wizardMaxDate}
-                onChange={(startDate) =>
-                  updateDraft({ answers: { ...answers, startDate } })
-                }
+                onChange={(startDate) => updateDraft({ answers: { ...answers, startDate } })}
               />
               <Button type="button" className="mt-4" onClick={() => goToStep(step + 1)}>
                 继续
@@ -1636,68 +1637,68 @@ function UnknownPlanScreen({
             </div>
           ) : (
             <>
-          <div className="mt-8 grid gap-3">
-            {current.options.map((option) => {
-              const active = answers[current.key as keyof UnknownAnswers] === option.value;
-              return (
-                <button
-                  key={String(option.value)}
-                  type="button"
-                  onClick={() => pick(option.value)}
-                  className={cn("wizard-option", active && "wizard-option-active")}
-                >
-                  <span>
-                    <strong>{option.label}</strong>
-                    <small>{option.hint}</small>
-                  </span>
-                  <ChevronRight className="size-5 shrink-0" />
-                </button>
-              );
-            })}
-          </div>
-          <form
-            className={cn(
-              "mt-3 rounded-[var(--v-card-radius)] border border-dashed border-[var(--v-line)] bg-[var(--v-soft)] p-4 transition",
-              customAnswerActive && "border-[var(--v-accent)]",
-            )}
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitCustom();
-            }}
-          >
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-sm font-medium text-[var(--v-ink)]">或者自己填写</span>
-              <small className="text-xs text-[var(--v-muted)]">
-                {step === steps.length - 1 ? "填写后生成推荐" : "填写后继续"}
-              </small>
-            </div>
-            <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-              <input
-                aria-label={`${current.title}自定义答案`}
-                type="text"
-                inputMode={current.inputMode}
-                autoComplete="off"
-                value={customDraft}
-                placeholder={current.customPlaceholder}
-                className="planner-input min-w-0 flex-1"
-                onChange={(event) => {
-                  const raw = event.target.value;
-                  setCustomDraft(
-                    current.key === "days"
-                      ? raw.replace(/\D/g, "").slice(0, 3)
-                      : raw.slice(0, 40),
+              <div className="mt-8 grid gap-3">
+                {current.options.map((option) => {
+                  const active = answers[current.key as keyof UnknownAnswers] === option.value;
+                  return (
+                    <button
+                      key={String(option.value)}
+                      type="button"
+                      onClick={() => pick(option.value)}
+                      className={cn("wizard-option", active && "wizard-option-active")}
+                    >
+                      <span>
+                        <strong>{option.label}</strong>
+                        <small>{option.hint}</small>
+                      </span>
+                      <ChevronRight className="size-5 shrink-0" />
+                    </button>
                   );
-                  if (customError) setCustomError("");
+                })}
+              </div>
+              <form
+                className={cn(
+                  "mt-3 rounded-[var(--v-card-radius)] border border-dashed border-[var(--v-line)] bg-[var(--v-soft)] p-4 transition",
+                  customAnswerActive && "border-[var(--v-accent)]",
+                )}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitCustom();
                 }}
-              />
-              <Button type="submit" className="shrink-0">
-                {step === steps.length - 1 ? "生成推荐" : "继续"}
-              </Button>
-            </div>
-            {customError ? (
-              <p className="mt-2 text-xs text-[var(--v-seal)]">{customError}</p>
-            ) : null}
-          </form>
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-sm font-medium text-[var(--v-ink)]">或者自己填写</span>
+                  <small className="text-xs text-[var(--v-muted)]">
+                    {step === steps.length - 1 ? "填写后生成推荐" : "填写后继续"}
+                  </small>
+                </div>
+                <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+                  <input
+                    aria-label={`${current.title}自定义答案`}
+                    type="text"
+                    inputMode={current.inputMode}
+                    autoComplete="off"
+                    value={customDraft}
+                    placeholder={current.customPlaceholder}
+                    className="planner-input min-w-0 flex-1"
+                    onChange={(event) => {
+                      const raw = event.target.value;
+                      setCustomDraft(
+                        current.key === "days"
+                          ? raw.replace(/\D/g, "").slice(0, 3)
+                          : raw.slice(0, 40),
+                      );
+                      if (customError) setCustomError("");
+                    }}
+                  />
+                  <Button type="submit" className="shrink-0">
+                    {step === steps.length - 1 ? "生成推荐" : "继续"}
+                  </Button>
+                </div>
+                {customError ? (
+                  <p className="mt-2 text-xs text-[var(--v-seal)]">{customError}</p>
+                ) : null}
+              </form>
             </>
           )}
           {step > 0 ? (
@@ -1714,144 +1715,6 @@ function UnknownPlanScreen({
       {variant === "journal" ? <div className="journal-page-number">PLAN / 01</div> : null}
     </main>
   );
-}
-
-function clampScore(value: number) {
-  return Math.max(1, Math.min(10, Math.round(value)));
-}
-
-function auditForPlace(place: Place): AttractionAudit {
-  const durationHours = Math.max(0.5, Math.round((place.duration / 60) * 10) / 10);
-  const scale = durationHours >= 7 ? "large" : durationHours >= 3 ? "medium" : "small";
-
-  return {
-    scale,
-    durationHours,
-    physical: clampScore(place.indoor ? 2 : 3 + durationHours / 1.5),
-    childFit: clampScore(place.indoor ? 8 : 7 - durationHours / 3),
-    weatherSensitivity: clampScore(place.indoor ? 2 : 7),
-    timeCost: clampScore(scale === "large" ? 8 : scale === "medium" ? 6 : 3),
-    crowding: clampScore(place.indoor ? 5 : 6),
-    bestTime: place.indoor ? "下午" : "上午",
-  };
-}
-
-function weatherText(weather?: WeatherDay) {
-  if (!weather) return undefined;
-  return `${classifyWeather(weather.code).label} ${Math.round(weather.tempMin)}–${Math.round(weather.tempMax)}°`;
-}
-
-function transportPreferenceForRoute(routePlan: RoutePlan | null): TripPlan["meta"]["transportPreference"] {
-  const firstMode = routePlan?.legs[0]?.transport;
-  return firstMode === "economy" || firstMode === "speed" ? firstMode : "balanced";
-}
-
-function buildTripRoute(routePlan: RoutePlan | null, roundTrip: boolean, returnMode: ReturnMode): TripRoute {
-  const toSegment = (leg: RoutePlan["legs"][number]) => ({
-    from: leg.from,
-    to: leg.to,
-    mode: leg.transport,
-    distanceKm: 0,
-    durationMinutes: 0,
-    navigation: "",
-  });
-  const outboundSegments = routePlan?.legs.filter((leg) => leg.kind === "outbound").map(toSegment) ?? [];
-  const returnSegments = routePlan?.legs.filter((leg) => leg.kind === "return").map(toSegment) ?? [];
-
-  return {
-    outbound: [],
-    returnPath: [],
-    outboundSegments,
-    returnSegments,
-    distanceKm: 0,
-    durationMinutes: 0,
-    returnMode: roundTrip ? returnMode : null,
-  };
-}
-
-function buildExecutionTripPlan({
-  brief,
-  destination,
-  plannedDays,
-  routePlan,
-  title,
-}: {
-  brief: TripBrief;
-  destination: Destination;
-  plannedDays: PlannedDay[];
-  routePlan: RoutePlan | null;
-  title?: string;
-}): TripPlan {
-  const dayCount = Math.max(1, plannedDays.length, brief.days);
-  const days = Array.from({ length: dayCount }, (_, index) => {
-    const planned = plannedDays[index];
-    return (
-      planned ?? {
-        day: index + 1,
-        places: [],
-        note: "当天保留机动时间，可按天气与体力继续探索。",
-      }
-    );
-  });
-  const places = days.flatMap((day) => day.places);
-  const audits = Object.fromEntries(places.map((place) => [place.name, auditForPlace(place)]));
-  const nightActivities = days.map((day, index) => {
-    if (dayCount > 1 && index === dayCount - 1) return "";
-    const eveningPlace = day.places.find((place) => /夜|晚|灯光|夜市|江畔|湖畔/.test(`${place.name}${place.summary}`));
-    return eveningPlace?.name ?? "城市夜游";
-  });
-  const executionDays = buildExecutionDays({
-    startDate: brief.startDate,
-    days: dayCount,
-    pace: brief.pace,
-    travelers: { adults: brief.adults, children: brief.children },
-    routeNodes: places.map((place) => place.name),
-    audits,
-    nightActivity: nightActivities,
-    lodging: `${destination.name}精选酒店`,
-    dayStart: brief.startTime,
-    dayEnd: brief.endTime,
-  });
-  const tripDays = executionDays.map((day, index) => ({
-    ...day,
-    weather: weatherText(days[index]?.weather),
-  }));
-  const travelerCount = Math.max(1, brief.adults + brief.children);
-  const rooms = Math.max(1, Math.ceil(Math.max(1, brief.adults) / 2));
-  const nights = Math.max(1, dayCount - 1);
-  const legs = Math.max(1, routePlan?.legs.length ?? 1);
-  const budget = estimateBudget({
-    totalBudget: Math.max(0, brief.totalBudget),
-    travelers: { adults: brief.adults, children: brief.children },
-    transport: Math.round(legs * 420 * travelerCount),
-    lodging: nights * rooms * 480,
-    food: dayCount * travelerCount * 160,
-    tickets: Math.max(1, places.length) * 95 * travelerCount,
-  });
-
-  return {
-    meta: {
-      title: title ?? `${destination.name}${dayCount}日执行计划`,
-      origin: brief.origin,
-      waypoints: brief.waypoints,
-      destination: destination.name,
-      startDate: brief.startDate,
-      days: dayCount,
-      travelers: { adults: brief.adults, children: brief.children },
-      perPersonBudget: Math.round(brief.totalBudget / travelerCount),
-      transportPreference: transportPreferenceForRoute(routePlan),
-      pace: brief.pace,
-      interests: brief.interests,
-    },
-    budget,
-    route: buildTripRoute(routePlan, brief.roundTrip, brief.returnMode),
-    days: tripDays,
-    closing: {
-      quote: null,
-      source: null,
-      message: "行程节点已按时间与预算展开，出发前请再核对天气、开放时间和交通班次。",
-    },
-  };
 }
 
 function ItineraryScreen({
@@ -2092,9 +1955,20 @@ function ItineraryScreen({
 
   const executionPlan = useMemo(
     () =>
-      buildExecutionTripPlan({
-        brief,
+      buildTripPlanOutput({
+        origin: brief.origin,
         destination,
+        startDate: brief.startDate,
+        days: brief.days,
+        pace: brief.pace,
+        interests: brief.interests,
+        waypoints: brief.waypoints,
+        roundTrip: brief.roundTrip,
+        returnMode: brief.returnMode,
+        travelers: { adults: brief.adults, children: brief.children },
+        totalBudget: brief.totalBudget,
+        startTime: brief.startTime,
+        endTime: brief.endTime,
         plannedDays,
         routePlan,
         title: livePlan?.title,
@@ -2218,93 +2092,93 @@ function ItineraryScreen({
 
       {!detailedTrip ? (
         <div className={cn("result-layout", variant === "atlas" && "atlas-result-layout")}>
-        <aside className="result-brief">
-          <p className="text-xs tracking-[0.22em] text-[var(--v-accent)]">TRIP BRIEF</p>
-          <h2>这趟行程怎么收敛</h2>
-          <dl>
-            <div>
-              <dt>目的地</dt>
-              <dd>{destination.name}</dd>
-            </div>
-            <div>
-              <dt>天数</dt>
-              <dd>{brief.days} 天</dd>
-            </div>
-            <div>
-              <dt>节奏</dt>
-              <dd>{paceOptions.find((item) => item.id === brief.pace)?.title}</dd>
-            </div>
-            <div>
-              <dt>每天时间</dt>
-              <dd>{brief.dailyHours} 小时</dd>
-            </div>
-          </dl>
-          <div className="mt-5 flex flex-wrap gap-2">
-            {brief.interests.map((interest) => (
-              <Badge key={interest}>{interest}</Badge>
-            ))}
-          </div>
-          <p className="mt-6 text-xs leading-6 text-[var(--v-muted)]">
-            {detailedTrip
-              ? plannerState === "ready"
-                ? "当前景点由 Tavily 实时搜索、DeepSeek 规划排序，并保留来源链接。"
-                : "当前景点采用开发期精选数据并保留来源链接；配置实时服务后会自动替换。"
-              : plannerState === "ready"
-                ? "当前路线由 DeepSeek 按阶段汇总，适合长线行程先定大方向。"
-                : "当前展示阶段路线框架；配置实时服务后会替换为模型规划结果。"}
-          </p>
-        </aside>
-        <section className="result-days">
-          <div className="section-kicker">
-            <span>{detailedTrip ? "ITINERARY / 每日行程" : "ROUTE / 路线阶段"}</span>
-            <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-[var(--v-muted)]">
-              <Badge>
-                {detailedTrip
-                  ? plannerState === "ready"
-                    ? "DeepSeek 实时编排"
-                    : plannerState === "loading"
-                      ? "DeepSeek 正在编排"
-                      : "开发期精选数据"
-                  : plannerState === "ready"
-                    ? "DeepSeek 阶段汇总"
-                    : plannerState === "loading"
-                      ? "正在收敛路线"
-                      : "阶段路线框架"}
-              </Badge>
-              {detailedTrip ? "点击景点查看详情与来源" : "长线行程只汇总路线阶段，不逐日展开"}
-            </span>
-          </div>
-          {plannerState === "fallback" ? (
-            <div className="mb-5 rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-soft)] px-4 py-3 text-xs leading-6 text-[var(--v-muted)]">
-              {detailedTrip
-                ? "实时搜索与 DeepSeek 尚未配置，当前展示开发期精选行程。配置完成后会自动切换为联网景区与实时排序。"
-                : "DeepSeek 长线规划暂不可用，当前展示按路线拆分的阶段框架。"}
-              {plannerMessage ? (
-                <span className="mt-1 block opacity-75">{plannerMessage}</span>
-              ) : null}
-            </div>
-          ) : null}
-          {detailedTrip ? (
-            <div
-              className={cn(
-                variant === "scroll" && "mt-8",
-                variant === "atlas" && "mt-2",
-                variant === "journal" && "mt-5",
-              )}
-            >
-              {plannedDays.map((day) => (
-                <ItineraryDay
-                  key={day.day}
-                  day={day}
-                  variant={variant}
-                  onPlace={setSelectedPlace}
-                />
+          <aside className="result-brief">
+            <p className="text-xs tracking-[0.22em] text-[var(--v-accent)]">TRIP BRIEF</p>
+            <h2>这趟行程怎么收敛</h2>
+            <dl>
+              <div>
+                <dt>目的地</dt>
+                <dd>{destination.name}</dd>
+              </div>
+              <div>
+                <dt>天数</dt>
+                <dd>{brief.days} 天</dd>
+              </div>
+              <div>
+                <dt>节奏</dt>
+                <dd>{paceOptions.find((item) => item.id === brief.pace)?.title}</dd>
+              </div>
+              <div>
+                <dt>每天时间</dt>
+                <dd>{brief.dailyHours} 小时</dd>
+              </div>
+            </dl>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {brief.interests.map((interest) => (
+                <Badge key={interest}>{interest}</Badge>
               ))}
             </div>
-          ) : (
-            <LongPlanPhases plan={longPlan} loading={plannerState === "loading"} />
-          )}
-        </section>{" "}
+            <p className="mt-6 text-xs leading-6 text-[var(--v-muted)]">
+              {detailedTrip
+                ? plannerState === "ready"
+                  ? "当前景点由 Tavily 实时搜索、DeepSeek 规划排序，并保留来源链接。"
+                  : "当前景点采用开发期精选数据并保留来源链接；配置实时服务后会自动替换。"
+                : plannerState === "ready"
+                  ? "当前路线由 DeepSeek 按阶段汇总，适合长线行程先定大方向。"
+                  : "当前展示阶段路线框架；配置实时服务后会替换为模型规划结果。"}
+            </p>
+          </aside>
+          <section className="result-days">
+            <div className="section-kicker">
+              <span>{detailedTrip ? "ITINERARY / 每日行程" : "ROUTE / 路线阶段"}</span>
+              <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-[var(--v-muted)]">
+                <Badge>
+                  {detailedTrip
+                    ? plannerState === "ready"
+                      ? "DeepSeek 实时编排"
+                      : plannerState === "loading"
+                        ? "DeepSeek 正在编排"
+                        : "开发期精选数据"
+                    : plannerState === "ready"
+                      ? "DeepSeek 阶段汇总"
+                      : plannerState === "loading"
+                        ? "正在收敛路线"
+                        : "阶段路线框架"}
+                </Badge>
+                {detailedTrip ? "点击景点查看详情与来源" : "长线行程只汇总路线阶段，不逐日展开"}
+              </span>
+            </div>
+            {plannerState === "fallback" ? (
+              <div className="mb-5 rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-soft)] px-4 py-3 text-xs leading-6 text-[var(--v-muted)]">
+                {detailedTrip
+                  ? "实时搜索与 DeepSeek 尚未配置，当前展示开发期精选行程。配置完成后会自动切换为联网景区与实时排序。"
+                  : "DeepSeek 长线规划暂不可用，当前展示按路线拆分的阶段框架。"}
+                {plannerMessage ? (
+                  <span className="mt-1 block opacity-75">{plannerMessage}</span>
+                ) : null}
+              </div>
+            ) : null}
+            {detailedTrip ? (
+              <div
+                className={cn(
+                  variant === "scroll" && "mt-8",
+                  variant === "atlas" && "mt-2",
+                  variant === "journal" && "mt-5",
+                )}
+              >
+                {plannedDays.map((day) => (
+                  <ItineraryDay
+                    key={day.day}
+                    day={day}
+                    variant={variant}
+                    onPlace={setSelectedPlace}
+                  />
+                ))}
+              </div>
+            ) : (
+              <LongPlanPhases plan={longPlan} loading={plannerState === "loading"} />
+            )}
+          </section>{" "}
         </div>
       ) : null}
 

@@ -1,5 +1,12 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { chromium } from "playwright";
 import { checkedOutputPath, checkedUrl } from "./browser-guard.mjs";
@@ -89,11 +96,26 @@ function compareAgainstBaseline(verdict) {
   }
 }
 
+function browserExecutable() {
+  const configured = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  if (configured && existsSync(configured)) return configured;
+  const bundled = chromium.executablePath();
+  if (bundled && existsSync(bundled)) return bundled;
+  return [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  ].find((candidate) => existsSync(candidate));
+}
 let browser = null;
 try {
+  const executablePath = browserExecutable();
+  if (!executablePath) throw new Error("没有可用的 Chromium、Chrome 或 Edge 浏览器");
   browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    executablePath,
+    args: ["--no-sandbox", "--disable-dev-shm-usage", "--no-proxy-server"],
   });
 
   const viewports = {};
@@ -106,6 +128,10 @@ try {
       if (msg.type() === "error") errors.consoleErrors.push(msg.text());
     });
     page.on("pageerror", (err) => errors.pageErrors.push(String(err?.message || err)));
+    // 平台品牌脚本依赖外部域名；烟测中返回空脚本，避免把外部网络失败误判为应用错误。
+    await page.route("https://grok.com/grok-app-builder/extensions.js", (route) =>
+      route.fulfill({ status: 200, contentType: "application/javascript", body: "" }),
+    );
     // `domcontentloaded`, not `networkidle`: Vite keeps an HMR websocket open, so
     // networkidle never settles and would burn the whole timeout.
     const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
