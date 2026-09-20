@@ -1,3 +1,4 @@
+import { buildTripMapLayers } from "./amap.server.ts";
 import {
   normalizeRadarScores,
   type BudgetCategory,
@@ -198,47 +199,47 @@ function renderSectionHeading(kicker: string, title: string): string {
 }
 
 function renderSchematicMap(
-  outbound: Coordinate[],
-  returnPath: Coordinate[] = [],
+  route: Pick<TripPlan["route"], "outbound" | "returnPath" | "returnMode">,
   label = "路线示意图",
-  returnMode: TripPlan["route"]["returnMode"] = null,
 ): string {
-  if (outbound.length + returnPath.length < 2) {
+  const layers = buildTripMapLayers(route);
+  const points = layers.flatMap((layer) => layer.points);
+  if (points.length < 2) {
     return `<div class="map-placeholder"><i class="ti ti-map-off"></i><span>地图暂不可用，请按导航链接与时间轴执行。</span></div>`;
   }
 
-  const points = [...outbound, ...returnPath];
-  const longitudes = points.map(([longitude]) => longitude);
-  const latitudes = points.map(([, latitude]) => latitude);
+  const longitudes = points.map((point) => point.longitude);
+  const latitudes = points.map((point) => point.latitude);
   const minLongitude = Math.min(...longitudes);
   const maxLongitude = Math.max(...longitudes);
   const minLatitude = Math.min(...latitudes);
   const maxLatitude = Math.max(...latitudes);
   const longitudeSpan = Math.max(0.0001, maxLongitude - minLongitude);
   const latitudeSpan = Math.max(0.0001, maxLatitude - minLatitude);
-  const project = ([longitude, latitude]: Coordinate) => {
+  const project = ({ longitude, latitude }: (typeof points)[number]) => {
     const x = 52 + ((longitude - minLongitude) / longitudeSpan) * 536;
     const y = 250 - ((latitude - minLatitude) / latitudeSpan) * 200;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
+    return { x, y };
   };
-  const outboundPoints = outbound.map(project).join(" ");
-  const returnPoints = returnPath.map(project).join(" ");
+  const formatPoint = ({ x, y }: { x: number; y: number }) => `${x.toFixed(1)},${y.toFixed(1)}`;
+  const polylines = layers
+    .map((layer) => {
+      const color = layer.color.replace(/^0x/i, "#");
+      const dash = layer.lineStyle === "dashed" ? ` stroke-dasharray="9 8"` : "";
+      return `<polyline data-layer="${layer.kind}" points="${layer.points.map(project).map(formatPoint).join(" ")}" fill="none" stroke="${color}" stroke-width="${layer.kind === "outbound" ? 6 : 4}" stroke-linecap="round" stroke-linejoin="round"${dash}></polyline>`;
+    })
+    .join("");
+  const markers = layers
+    .flatMap((layer) =>
+      layer.points.map((point) => {
+        const projected = project(point);
+        const color = layer.color.replace(/^0x/i, "#");
+        return `<circle cx="${projected.x.toFixed(1)}" cy="${projected.y.toFixed(1)}" r="${layer.kind === "outbound" ? 7 : 6}" fill="${color}" stroke="#f8f4e9" stroke-width="3"></circle>`;
+      }),
+    )
+    .join("");
 
-  return `<div class="schematic-map" role="img" aria-label="${escapeHtml(label)}"><svg viewBox="0 0 640 300" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="1" width="638" height="298" rx="18" fill="#f8f4e9" stroke="#d8d1c2"></rect>${[0, 1, 2, 3, 4].map((index) => `<path d="M ${80 + index * 100} 24 V 276" stroke="#e7e0d2" stroke-width="1"></path>`).join("")}${[0, 1, 2, 3].map((index) => `<path d="M 24 ${60 + index * 55} H 616" stroke="#e7e0d2" stroke-width="1"></path>`).join("")}${outboundPoints ? `<polyline points="${outboundPoints}" fill="none" stroke="#4a7c8a" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"></polyline>` : ""}${returnPoints ? `<polyline points="${returnPoints}" fill="none" stroke="#c96442" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"${returnMode === "fast" ? ` stroke-dasharray="9 8"` : ""}></polyline>` : ""}${outbound
-    .map(project)
-    .map(
-      (point) =>
-        `<circle cx="${point.split(",")[0]}" cy="${point.split(",")[1]}" r="7" fill="#4a7c8a" stroke="#f8f4e9" stroke-width="3"></circle>`,
-    )
-    .join("")}${returnPath
-    .map(project)
-    .map(
-      (point) =>
-        `<circle cx="${point.split(",")[0]}" cy="${point.split(",")[1]}" r="6" fill="#c96442" stroke="#f8f4e9" stroke-width="3"></circle>`,
-    )
-    .join(
-      "",
-    )}<text x="28" y="32" fill="#776f63" font-size="14" font-family="sans-serif">${escapeHtml(label)}</text></svg></div>`;
+  return `<div class="schematic-map" role="img" aria-label="${escapeHtml(label)}"><svg viewBox="0 0 640 300" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="1" width="638" height="298" rx="18" fill="#f8f4e9" stroke="#d8d1c2"></rect>${[0, 1, 2, 3, 4].map((index) => `<path d="M ${80 + index * 100} 24 V 276" stroke="#e7e0d2" stroke-width="1"></path>`).join("")}${[0, 1, 2, 3].map((index) => `<path d="M 24 ${60 + index * 55} H 616" stroke="#e7e0d2" stroke-width="1"></path>`).join("")}${polylines}${markers}<text x="28" y="32" fill="#776f63" font-size="14" font-family="sans-serif">${escapeHtml(label)}</text></svg></div>`;
 }
 
 function renderMapImage(url: string | null, alt: string): string {
@@ -293,12 +294,7 @@ function renderRoute(plan: TripPlan): string {
   const staticMap = sanitizeUrl(plan.route.staticMapUrl);
   const map = staticMap
     ? renderMapImage(staticMap, "高德全程路线地图")
-    : renderSchematicMap(
-        plan.route.outbound,
-        plan.route.returnPath,
-        "全程路线示意图",
-        plan.route.returnMode,
-      );
+    : renderSchematicMap(plan.route, "全程路线示意图");
   const outbound = plan.route.outboundSegments.length
     ? plan.route.outboundSegments.map(renderSegmentCard).join("")
     : `<p class="empty-copy">去程分段暂未生成，请按路线节点和时间轴执行。</p>`;
@@ -356,8 +352,13 @@ function hotelForDay(day: TripDay): TripTimelineNode | undefined {
 function mapForDay(plan: TripPlan, day: TripDay): string {
   const mapUrl = sanitizeUrl(day.mapUrl) ?? sanitizeUrl(plan.route.staticMapUrl);
   if (mapUrl) return renderMapImage(mapUrl, `${day.theme}每日地图`);
-  const coordinates = day.nodes.flatMap((node) => (node.coordinates ? [node.coordinates] : []));
-  return renderSchematicMap(coordinates, [], `${day.theme}路线示意图`);
+  const coordinates: Coordinate[] = day.nodes.flatMap((node) =>
+    node.coordinates ? [node.coordinates] : [],
+  );
+  return renderSchematicMap(
+    { outbound: coordinates, returnPath: [], returnMode: null },
+    `${day.theme}路线示意图`,
+  );
 }
 
 function renderQrBlock(day: TripDay): string {
@@ -537,17 +538,13 @@ function renderClosing(plan: TripPlan): string {
   const mapUrl = sanitizeUrl(plan.route.staticMapUrl);
   const map = mapUrl
     ? renderMapImage(mapUrl, "旅行回望全程地图")
-    : renderSchematicMap(
-        plan.route.outbound,
-        plan.route.returnMode === null ? [] : plan.route.returnPath,
-        "旅行回望路线示意图",
-        plan.route.returnMode,
-      );
+    : renderSchematicMap(plan.route, "旅行回望路线示意图");
   const closingQuote =
     plan.closing.source?.trim() && plan.closing.quote?.trim()
       ? `<blockquote class="closing-quote"><p>${escapeHtml(plan.closing.quote)}</p><cite>${escapeHtml(plan.closing.source)}</cite></blockquote>`
       : "";
-  const body = `${renderSectionHeading("JOURNEY IN RETROSPECT / 返程与回望", "旅行回望")}<div class="closing-map">${map}</div><div class="route-legend"><span class="outbound">去程实线</span><span class="return ${plan.route.returnMode === "fast" ? "dashed" : ""}">${escapeHtml(routeSummaryText(plan))}</span>${plan.route.returnMode === null ? `<span class="single">未安排返程</span>` : ""}</div><section class="reflection-card"><h3>往返回望</h3><p>${escapeHtml(plan.closing.message)}</p><div class="reflection-stats"><span>${plan.meta.days} 天</span><span>${plan.route.distanceKm > 0 ? `${formatNumber(plan.route.distanceKm)} km` : "里程待核验"}</span><span>${escapeHtml(routeSummaryText(plan))}</span></div></section>${closingQuote}`;
+  const summary = `<section class="reflection-card trip-summary"><h3>旅程总结</h3><p>${escapeHtml(plan.closing.message)}</p><div class="reflection-stats"><span>${plan.meta.days} 天</span><span>${plan.route.distanceKm > 0 ? `${formatNumber(plan.route.distanceKm)} km` : "里程待核验"}</span><span>${escapeHtml(routeSummaryText(plan))}</span></div></section>`;
+  const body = `${renderSectionHeading("JOURNEY IN RETROSPECT / 返程与回望", "旅行回望")}${summary}<div class="closing-map">${map}</div><div class="route-legend"><span class="outbound">去程实线</span><span class="return ${plan.route.returnMode === "fast" ? "dashed" : ""}">${escapeHtml(routeSummaryText(plan))}</span>${plan.route.returnMode === null ? `<span class="single">未安排返程</span>` : ""}</div>${closingQuote}`;
   return renderPage("closing-page", "closing", "旅行回望", body);
 }
 

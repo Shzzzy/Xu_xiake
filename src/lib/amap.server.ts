@@ -1,3 +1,5 @@
+import type { TripRoute } from "./travel-plan.ts";
+
 export type AmapCoordinate = [longitude: number, latitude: number];
 
 export type StaticMapPoint = {
@@ -13,6 +15,13 @@ export type StaticMapInput = {
   size?: { width: number; height: number };
 };
 
+export type StaticMapLayer = {
+  kind: "outbound" | "return";
+  color: string;
+  lineStyle: "solid" | "dashed";
+  points: StaticMapPoint[];
+};
+
 export type NavigationInput = {
   from: AmapCoordinate;
   to: AmapCoordinate;
@@ -24,8 +33,48 @@ export type NavigationInput = {
 const AMAP_STATIC_MAP_URL = "https://restapi.amap.com/v3/staticmap";
 const AMAP_NAVIGATION_URL = "https://uri.amap.com/navigation";
 const OUTBOUND_COLOR = "0x4A7C8A";
-const RETURN_COLOR = "0xC96442";
+const SCENIC_RETURN_COLOR = "0xC96442";
 const FAST_RETURN_COLOR = "0x8A6A58";
+
+function toStaticMapPoint([longitude, latitude]: readonly [number, number]): StaticMapPoint {
+  return { longitude, latitude };
+}
+
+function buildMapLayers(
+  outbound: StaticMapPoint[],
+  returnPath: StaticMapPoint[],
+  returnMode: StaticMapInput["returnMode"],
+): StaticMapLayer[] {
+  const layers: StaticMapLayer[] = [
+    {
+      kind: "outbound",
+      color: OUTBOUND_COLOR,
+      lineStyle: "solid",
+      points: outbound,
+    },
+  ];
+
+  if (returnMode && returnPath.length > 0) {
+    layers.push({
+      kind: "return",
+      color: returnMode === "fast" ? FAST_RETURN_COLOR : SCENIC_RETURN_COLOR,
+      lineStyle: returnMode === "fast" ? "dashed" : "solid",
+      points: returnPath,
+    });
+  }
+
+  return layers;
+}
+
+export function buildTripMapLayers(
+  route: Pick<TripRoute, "outbound" | "returnPath" | "returnMode">,
+): StaticMapLayer[] {
+  return buildMapLayers(
+    route.outbound.map(toStaticMapPoint),
+    route.returnPath.map(toStaticMapPoint),
+    route.returnMode,
+  );
+}
 
 function assertCoordinateRange(longitude: number, latitude: number) {
   if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
@@ -58,15 +107,12 @@ export function buildStaticMapUrl(input: StaticMapInput): string {
 
   const url = new URL(AMAP_STATIC_MAP_URL);
   const size = input.size ?? { width: 750, height: 500 };
+  const layers = buildMapLayers(input.outbound, input.returnPath ?? [], input.returnMode);
 
   url.searchParams.set("zoom", String(input.zoom ?? 10));
   url.searchParams.set("size", `${size.width}*${size.height}`);
 
-  const paths = [formatPath(input.outbound, OUTBOUND_COLOR)];
-  if (input.returnPath?.length) {
-    const color = input.returnMode === "fast" ? FAST_RETURN_COLOR : RETURN_COLOR;
-    paths.push(formatPath(input.returnPath, color));
-  }
+  const paths = layers.map((layer) => formatPath(layer.points, layer.color));
   url.searchParams.set("paths", paths.join("|"));
 
   const outboundStart = input.outbound[0];
@@ -77,10 +123,10 @@ export function buildStaticMapUrl(input: StaticMapInput): string {
     formatMarker(outboundStart, "A", OUTBOUND_COLOR),
     formatMarker(outboundEnd, "B", OUTBOUND_COLOR),
   ];
-  const returnEnd = input.returnPath?.at(-1);
-  if (returnEnd) {
-    const color = input.returnMode === "fast" ? FAST_RETURN_COLOR : RETURN_COLOR;
-    markers.push(formatMarker(returnEnd, "C", color));
+  const returnLayer = layers.find((layer) => layer.kind === "return");
+  const returnEnd = returnLayer?.points.at(-1);
+  if (returnLayer && returnEnd) {
+    markers.push(formatMarker(returnEnd, "C", returnLayer.color));
   }
   url.searchParams.set("markers", markers.join("|"));
 

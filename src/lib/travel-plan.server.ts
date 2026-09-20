@@ -757,15 +757,80 @@ export function parseTripClosing(value: unknown): TripClosing {
   return { quote: verified.quote, source: verified.source, message };
 }
 
-function modernClosingMessage(value: unknown, input: TripClosingInput): string {
-  const record = isRecord(value) ? value : {};
-  const modelMessage = readOptionalString(record.message);
+function cleanStrings(values: readonly (string | undefined)[]): string[] {
+  return [
+    ...new Set(
+      values.flatMap((value) => (typeof value === "string" && value.trim() ? [value.trim()] : [])),
+    ),
+  ];
+}
+
+function journeyLabel(days: number | undefined): string {
+  return typeof days === "number" && Number.isFinite(days) && days > 0
+    ? `这趟${Math.round(days)}天旅程`
+    : "这段旅程";
+}
+
+function buildRouteSummary(input: TripClosingInput): string {
+  const explicitNodes = cleanStrings(input.routeNodes ?? []);
+  const fallbackNodes = cleanStrings([input.origin, ...(input.waypoints ?? []), input.destination]);
+  const nodes = explicitNodes.length >= 2 ? explicitNodes : fallbackNodes;
+  if (nodes.length > 0) {
+    return `${journeyLabel(input.days)}沿${nodes.join(" → ")}展开，路线把出发、停靠与返程连成完整回忆。`;
+  }
+
+  const travelSummary = input.travelSummary?.trim();
+  return travelSummary
+    ? travelSummary
+    : `${journeyLabel(input.days)}在山水、城镇与人情之间展开，形成了属于自己的路线记忆。`;
+}
+
+function buildTravelEvaluation(input: TripClosingInput, modelMessage?: string): string {
+  if (modelMessage) return modelMessage;
+
+  const highlights = cleanStrings(input.highlights ?? []);
+  if (highlights.length > 0) {
+    return `这趟旅程把${highlights.slice(0, 3).join("、")}串成连续体验，让风景不只停留在抵达，也成为观察地方与生活的窗口。`;
+  }
+
+  const interests = cleanStrings(input.interests ?? []);
+  if (interests.length > 0) {
+    return `一路围绕${interests.slice(0, 3).join("、")}展开，所见所感让地图上的名字有了更具体的温度。`;
+  }
+
+  return "一路所见所感让地图上的名字变成真实的风物与人情，也让行程有了可回想的层次。";
+}
+
+function buildEncouragement(input: TripClosingInput): string {
   const destination = input.destination?.trim();
-  const routeSummary = destination
-    ? `这段${input.days ? `${input.days}天` : ""}旅程从${input.origin?.trim() || "出发地"}走向${destination}，在行走中感受山河辽阔与人文温度。`
-    : "这段旅程在行走中感受山河辽阔与人文温度。";
-  const evaluation = modelMessage ? `旅行评价：${modelMessage}` : "旅行评价：一路所见，皆有回响。";
-  return `${routeSummary}${evaluation} 愿你把沿途风景化成继续出发的力量。${MODERN_CLOSING}`;
+  const place = destination ? `${destination}的山水与街巷` : "沿途的山水与街巷";
+  const pace =
+    input.pace === "relaxed"
+      ? "从容节奏"
+      : input.pace === "deep"
+        ? "深入探索的节奏"
+        : "张弛有度的节奏";
+  const interest = cleanStrings(input.interests ?? [])[0];
+  const interestCopy = interest ? `，也把对${interest}的好奇带向下一程` : "";
+  return `愿${place}继续提醒你放慢脚步、认真观看${interestCopy}，带着${pace}走向下一次出发。`;
+}
+
+function buildClosingWish(input: TripClosingInput): string {
+  const destination = input.destination?.trim();
+  const memory = destination ? `${destination}的记忆` : "这段旅程的记忆";
+  return `愿${memory}不只在相册里，而成为理解世界、尊重相遇的坐标。${MODERN_CLOSING}`;
+}
+
+function composeTripClosingMessage(input: TripClosingInput, modelMessage?: string): string {
+  return `路线总结：${buildRouteSummary(input)} 旅行评价：${buildTravelEvaluation(input, modelMessage)} 继续出发：${buildEncouragement(input)} 寄语：${buildClosingWish(input)}`;
+}
+
+function readModelEvaluation(value: unknown): string | undefined {
+  const record = isRecord(value) ? value : {};
+  if ("quote" in record || "source" in record) return undefined;
+  const quoteId = readOptionalString(record.quoteId);
+  if (quoteId && !verifiedQuoteById.has(quoteId)) return undefined;
+  return readOptionalString(record.message);
 }
 
 export async function buildTripClosingWithDeepSeek(
@@ -779,11 +844,11 @@ export async function buildTripClosingWithDeepSeek(
       "旅行结束语",
       jsonMessages({
         system:
-          "你是中文旅行路书编辑。只返回 quoteId 和 message。quoteId 只能从输入 allowedQuotes 中选择 id；没有合适引用时必须返回 null。禁止返回 quote 原文、source 或自行编造引用。message 必须包含路线总结、旅行评价、继续出发的鼓励和现代寄语。",
+          "你是中文旅行路书编辑。只返回 quoteId 和 message。quoteId 只能从输入 allowedQuotes 中选择 id；没有合适引用时必须返回 null。禁止返回 quote 原文、source 或自行编造引用。message 只写旅行评价，路线总结、继续出发的鼓励和现代寄语由服务端组合。",
         task: "生成旅行回望与结束语",
         schema: {
           quoteId: "allowedQuotes 中的 id 或 null",
-          message: "路线总结、旅行评价、鼓励和现代寄语",
+          message: "旅行评价正文，不要重复路线总结、鼓励或寄语",
         },
         payload: {
           ...input,
@@ -797,8 +862,13 @@ export async function buildTripClosingWithDeepSeek(
       deps,
       3_000,
     );
-    return parseTripClosing(result);
+    const parsed = parseTripClosing(result);
+    return { ...parsed, message: composeTripClosingMessage(input, readModelEvaluation(result)) };
   } catch {
-    return { quote: null, source: null, message: modernClosingMessage(result, input) };
+    return {
+      quote: null,
+      source: null,
+      message: composeTripClosingMessage(input, readModelEvaluation(result)),
+    };
   }
 }

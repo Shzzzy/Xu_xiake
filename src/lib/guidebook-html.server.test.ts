@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildTripMapLayers } from "./amap.server.ts";
 import type { BudgetCategory, TripPlan } from "./travel-plan.ts";
 import { renderGuidebookHtml } from "./guidebook-html.server.ts";
+import { buildTripClosingWithDeepSeek, verifiedQuotes } from "./travel-plan.server.ts";
+
+function deepSeekFetch(content: unknown): typeof fetch {
+  return (async () =>
+    Response.json({
+      choices: [{ message: { content: JSON.stringify(content) } }],
+    })) as typeof fetch;
+}
 
 function category(amount: number, ratio: number): BudgetCategory {
   return { min: amount, max: amount, amount, ratio };
@@ -418,4 +427,112 @@ test("uses dashed fast returns but keeps scenic and single trips distinct", () =
   assert.match(scenicHtml, /回程再玩/);
   assert.doesNotMatch(scenicHtml, /stroke-dasharray="9 8"/);
   assert.match(singleHtml, /未安排返程/);
+});
+
+test("builds separate solid map layers for scenic returns", () => {
+  const layers = buildTripMapLayers({ ...fixturePlan.route, returnMode: "scenic" });
+
+  assert.deepEqual(
+    layers.map((layer) => layer.kind),
+    ["outbound", "return"],
+  );
+  assert.equal(layers[0]?.lineStyle, "solid");
+  assert.equal(layers[1]?.lineStyle, "solid");
+  assert.notEqual(layers[0]?.color, layers[1]?.color);
+});
+
+test("builds a dashed return layer for fast returns", () => {
+  const layers = buildTripMapLayers({ ...fixturePlan.route, returnMode: "fast" });
+
+  assert.equal(layers.at(-1)?.kind, "return");
+  assert.equal(layers.at(-1)?.lineStyle, "dashed");
+  assert.notEqual(layers[0]?.color, layers[1]?.color);
+});
+
+test("builds only the outbound layer for one-way trips", () => {
+  const layers = buildTripMapLayers({ ...fixturePlan.route, returnMode: null });
+
+  assert.deepEqual(
+    layers.map((layer) => layer.kind),
+    ["outbound"],
+  );
+});
+
+test("starts the trip summary at the top of a new recap page", () => {
+  const html = renderGuidebookHtml({
+    ...fixturePlan,
+    route: { ...fixturePlan.route, staticMapUrl: undefined },
+  });
+  const closingPage = pageFragments(html, "closing")[0];
+
+  assert.ok(closingPage);
+  assert.match(
+    closingPage,
+    /<div class="page-content"><header class="section-heading">[\s\S]*?<h2>旅行回望<\/h2><\/header><section class="reflection-card trip-summary"><h3>旅程总结<\/h3>/,
+  );
+});
+
+test("builds route-aware closing text with all required sections and a verified quote", async () => {
+  const quote = verifiedQuotes[0];
+  const closing = await buildTripClosingWithDeepSeek(
+    {
+      origin: "上海",
+      waypoints: ["杭州"],
+      destination: "黄山",
+      days: 2,
+      pace: "balanced",
+      interests: ["自然山水"],
+    },
+    {
+      apiKey: "test-key",
+      fetchImpl: deepSeekFetch({
+        quoteId: quote.id,
+        message: "一路所见让山海与古城都有了可以回想的细节。",
+      }),
+    },
+  );
+
+  assert.equal(closing.quote, quote.quote);
+  assert.equal(closing.source, quote.source);
+  assert.match(closing.message, /路线总结/);
+  assert.match(closing.message, /上海/);
+  assert.match(closing.message, /黄山/);
+  assert.match(closing.message, /旅行评价/);
+  assert.match(closing.message, /继续出发/);
+  assert.match(closing.message, /寄语/);
+});
+
+test("generates different closing text for different journeys", async () => {
+  const modelContent = {
+    quoteId: null,
+    message: "沿途的山水与人文让旅程有了耐心观察的尺度。",
+  };
+  const first = await buildTripClosingWithDeepSeek(
+    { origin: "上海", destination: "黄山", days: 2, pace: "relaxed" },
+    { apiKey: "test-key", fetchImpl: deepSeekFetch(modelContent) },
+  );
+  const second = await buildTripClosingWithDeepSeek(
+    { origin: "北京", destination: "敦煌", days: 6, pace: "deep" },
+    { apiKey: "test-key", fetchImpl: deepSeekFetch(modelContent) },
+  );
+
+  assert.notEqual(first.message, second.message);
+  assert.match(first.message, /上海.*黄山|上海.*杭州|上海/);
+  assert.match(second.message, /北京.*敦煌|敦煌/);
+  assert.equal(first.quote, null);
+  assert.equal(second.quote, null);
+});
+
+test("accepts only Task 4 verified quote ids in final closing text", async () => {
+  const unknownQuote = await buildTripClosingWithDeepSeek(
+    { destination: "黄山", days: 2 },
+    {
+      apiKey: "test-key",
+      fetchImpl: deepSeekFetch({ quoteId: "model-invented-quote", message: "自编引用不应生效。" }),
+    },
+  );
+
+  assert.equal(unknownQuote.quote, null);
+  assert.equal(unknownQuote.source, null);
+  assert.doesNotMatch(unknownQuote.message, /自编引用不应生效/);
 });
