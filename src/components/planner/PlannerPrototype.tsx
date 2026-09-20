@@ -54,7 +54,15 @@ import {
   type TravelStyle,
 } from "@/lib/route-planner";
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
-import { validateTripBrief, type TripBrief as TravelerBudgetTripBrief } from "@/lib/travel-plan";
+import {
+  estimateBudget,
+  validateTripBrief,
+  type AttractionAudit,
+  type TripPlan,
+  type TripRoute,
+  type TripBrief as TravelerBudgetTripBrief,
+} from "@/lib/travel-plan";
+import { buildExecutionDays } from "@/lib/travel-schedule";
 import {
   createUnknownPlanDraft,
   updateUnknownPlanDraft,
@@ -66,6 +74,7 @@ import {
   splitPlacesAcrossDays,
   type Pace,
   type Place,
+  type PlannedDay,
   type WeatherDay,
 } from "@/lib/planner";
 import { buildSceneGuide } from "@/lib/scene-guide";
@@ -78,6 +87,7 @@ import {
 } from "./InspirationCatalogProvider";
 import { TravelDatePicker } from "./TravelDatePicker";
 import { TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
+import { TripOverview } from "./plan-output/TripOverview";
 import { WeatherStrip } from "./WeatherStrip";
 
 type Screen = "landing" | "known" | "unknown" | "result";
@@ -1706,6 +1716,144 @@ function UnknownPlanScreen({
   );
 }
 
+function clampScore(value: number) {
+  return Math.max(1, Math.min(10, Math.round(value)));
+}
+
+function auditForPlace(place: Place): AttractionAudit {
+  const durationHours = Math.max(0.5, Math.round((place.duration / 60) * 10) / 10);
+  const scale = durationHours >= 7 ? "large" : durationHours >= 3 ? "medium" : "small";
+
+  return {
+    scale,
+    durationHours,
+    physical: clampScore(place.indoor ? 2 : 3 + durationHours / 1.5),
+    childFit: clampScore(place.indoor ? 8 : 7 - durationHours / 3),
+    weatherSensitivity: clampScore(place.indoor ? 2 : 7),
+    timeCost: clampScore(scale === "large" ? 8 : scale === "medium" ? 6 : 3),
+    crowding: clampScore(place.indoor ? 5 : 6),
+    bestTime: place.indoor ? "下午" : "上午",
+  };
+}
+
+function weatherText(weather?: WeatherDay) {
+  if (!weather) return undefined;
+  return `${classifyWeather(weather.code).label} ${Math.round(weather.tempMin)}–${Math.round(weather.tempMax)}°`;
+}
+
+function transportPreferenceForRoute(routePlan: RoutePlan | null): TripPlan["meta"]["transportPreference"] {
+  const firstMode = routePlan?.legs[0]?.transport;
+  return firstMode === "economy" || firstMode === "speed" ? firstMode : "balanced";
+}
+
+function buildTripRoute(routePlan: RoutePlan | null, roundTrip: boolean, returnMode: ReturnMode): TripRoute {
+  const toSegment = (leg: RoutePlan["legs"][number]) => ({
+    from: leg.from,
+    to: leg.to,
+    mode: leg.transport,
+    distanceKm: 0,
+    durationMinutes: 0,
+    navigation: "",
+  });
+  const outboundSegments = routePlan?.legs.filter((leg) => leg.kind === "outbound").map(toSegment) ?? [];
+  const returnSegments = routePlan?.legs.filter((leg) => leg.kind === "return").map(toSegment) ?? [];
+
+  return {
+    outbound: [],
+    returnPath: [],
+    outboundSegments,
+    returnSegments,
+    distanceKm: 0,
+    durationMinutes: 0,
+    returnMode: roundTrip ? returnMode : null,
+  };
+}
+
+function buildExecutionTripPlan({
+  brief,
+  destination,
+  plannedDays,
+  routePlan,
+  title,
+}: {
+  brief: TripBrief;
+  destination: Destination;
+  plannedDays: PlannedDay[];
+  routePlan: RoutePlan | null;
+  title?: string;
+}): TripPlan {
+  const dayCount = Math.max(1, plannedDays.length, brief.days);
+  const days = Array.from({ length: dayCount }, (_, index) => {
+    const planned = plannedDays[index];
+    return (
+      planned ?? {
+        day: index + 1,
+        places: [],
+        note: "当天保留机动时间，可按天气与体力继续探索。",
+      }
+    );
+  });
+  const places = days.flatMap((day) => day.places);
+  const audits = Object.fromEntries(places.map((place) => [place.name, auditForPlace(place)]));
+  const nightActivities = days.map((day, index) => {
+    if (dayCount > 1 && index === dayCount - 1) return "";
+    const eveningPlace = day.places.find((place) => /夜|晚|灯光|夜市|江畔|湖畔/.test(`${place.name}${place.summary}`));
+    return eveningPlace?.name ?? "城市夜游";
+  });
+  const executionDays = buildExecutionDays({
+    startDate: brief.startDate,
+    days: dayCount,
+    pace: brief.pace,
+    travelers: { adults: brief.adults, children: brief.children },
+    routeNodes: places.map((place) => place.name),
+    audits,
+    nightActivity: nightActivities,
+    lodging: `${destination.name}精选酒店`,
+    dayStart: brief.startTime,
+    dayEnd: brief.endTime,
+  });
+  const tripDays = executionDays.map((day, index) => ({
+    ...day,
+    weather: weatherText(days[index]?.weather),
+  }));
+  const travelerCount = Math.max(1, brief.adults + brief.children);
+  const rooms = Math.max(1, Math.ceil(Math.max(1, brief.adults) / 2));
+  const nights = Math.max(1, dayCount - 1);
+  const legs = Math.max(1, routePlan?.legs.length ?? 1);
+  const budget = estimateBudget({
+    totalBudget: Math.max(0, brief.totalBudget),
+    travelers: { adults: brief.adults, children: brief.children },
+    transport: Math.round(legs * 420 * travelerCount),
+    lodging: nights * rooms * 480,
+    food: dayCount * travelerCount * 160,
+    tickets: Math.max(1, places.length) * 95 * travelerCount,
+  });
+
+  return {
+    meta: {
+      title: title ?? `${destination.name}${dayCount}日执行计划`,
+      origin: brief.origin,
+      waypoints: brief.waypoints,
+      destination: destination.name,
+      startDate: brief.startDate,
+      days: dayCount,
+      travelers: { adults: brief.adults, children: brief.children },
+      perPersonBudget: Math.round(brief.totalBudget / travelerCount),
+      transportPreference: transportPreferenceForRoute(routePlan),
+      pace: brief.pace,
+      interests: brief.interests,
+    },
+    budget,
+    route: buildTripRoute(routePlan, brief.roundTrip, brief.returnMode),
+    days: tripDays,
+    closing: {
+      quote: null,
+      source: null,
+      message: "行程节点已按时间与预算展开，出发前请再核对天气、开放时间和交通班次。",
+    },
+  };
+}
+
 function ItineraryScreen({
   variant,
   brief,
@@ -1942,6 +2090,17 @@ function ItineraryScreen({
     [brief.pace, destination.places, livePlan, weather],
   );
 
+  const executionPlan = useMemo(
+    () =>
+      buildExecutionTripPlan({
+        brief,
+        destination,
+        plannedDays,
+        routePlan,
+        title: livePlan?.title,
+      }),
+    [brief, destination, livePlan?.title, plannedDays, routePlan],
+  );
   const rainDays = weather.filter((day) => {
     const tone = classifyWeather(day.code).tone;
     return tone === "rain" || tone === "storm";
@@ -2046,7 +2205,19 @@ function ItineraryScreen({
         ) : null}
       </section>
 
-      <div className={cn("result-layout", variant === "atlas" && "atlas-result-layout")}>
+      {detailedTrip ? (
+        <div className="space-y-4">
+          {plannerState === "fallback" ? (
+            <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-soft)] px-4 py-3 text-xs leading-6 text-[var(--v-muted)]">
+              当前展示开发期精选数据；实时搜索与 DeepSeek 可用后会自动更新执行时间轴。
+            </div>
+          ) : null}
+          <TripOverview plan={executionPlan} />
+        </div>
+      ) : null}
+
+      {!detailedTrip ? (
+        <div className={cn("result-layout", variant === "atlas" && "atlas-result-layout")}>
         <aside className="result-brief">
           <p className="text-xs tracking-[0.22em] text-[var(--v-accent)]">TRIP BRIEF</p>
           <h2>这趟行程怎么收敛</h2>
@@ -2134,7 +2305,8 @@ function ItineraryScreen({
             <LongPlanPhases plan={longPlan} loading={plannerState === "loading"} />
           )}
         </section>{" "}
-      </div>
+        </div>
+      ) : null}
 
       <Sheet open={Boolean(selectedPlace)} onOpenChange={(open) => !open && setSelectedPlace(null)}>
         <SheetContent>
