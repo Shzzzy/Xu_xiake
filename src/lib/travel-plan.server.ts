@@ -4,6 +4,7 @@ import type {
   AttractionScale,
   BudgetRange,
   CostEstimateInput,
+  ReturnMode,
   RoadTripBudgetDetails,
   Travelers,
   TripBudget,
@@ -161,6 +162,7 @@ export type TripClosingInput = {
   waypoints?: string[];
   routeNodes?: string[];
   days?: number;
+  returnMode?: ReturnMode;
   pace?: Pace;
   transportPreference?: string;
   interests?: string[];
@@ -775,14 +777,27 @@ function buildRouteSummary(input: TripClosingInput): string {
   const explicitNodes = cleanStrings(input.routeNodes ?? []);
   const fallbackNodes = cleanStrings([input.origin, ...(input.waypoints ?? []), input.destination]);
   const nodes = explicitNodes.length >= 2 ? explicitNodes : fallbackNodes;
+  const journey = journeyLabel(input.days);
+  const returnMode = input.returnMode ?? null;
+
+  if (returnMode === "fast") {
+    return nodes.length > 0
+      ? `${journey}沿${nodes.join(" → ")}展开，采用快速返程完成往返。`
+      : `${journey}采用快速返程完成往返，在目的地停留后回到起点。`;
+  }
+
+  if (returnMode === "scenic") {
+    return nodes.length > 0
+      ? `${journey}沿${nodes.join(" → ")}展开，返程不走回头路，继续串联沿途风景。`
+      : `${journey}返程不走回头路，继续串联沿途风景。`;
+  }
+
   if (nodes.length > 0) {
-    return `${journeyLabel(input.days)}沿${nodes.join(" → ")}展开，路线把出发、停靠与返程连成完整回忆。`;
+    return `${journey}从${nodes[0]}到${nodes.at(-1)}，是一段从出发到目的地的一段完整探索。`;
   }
 
   const travelSummary = input.travelSummary?.trim();
-  return travelSummary
-    ? travelSummary
-    : `${journeyLabel(input.days)}在山水、城镇与人情之间展开，形成了属于自己的路线记忆。`;
+  return travelSummary ? travelSummary : `${journey}是一段从出发到目的地的一段完整探索。`;
 }
 
 function buildTravelEvaluation(input: TripClosingInput, modelMessage?: string): string {
@@ -822,7 +837,8 @@ function buildClosingWish(input: TripClosingInput): string {
 }
 
 function composeTripClosingMessage(input: TripClosingInput, modelMessage?: string): string {
-  return `路线总结：${buildRouteSummary(input)} 旅行评价：${buildTravelEvaluation(input, modelMessage)} 继续出发：${buildEncouragement(input)} 寄语：${buildClosingWish(input)}`;
+  const message = `路线总结：${buildRouteSummary(input)} 旅行评价：${buildTravelEvaluation(input, modelMessage)} 继续出发：${buildEncouragement(input)} 寄语：${buildClosingWish(input)}`;
+  return (input.returnMode ?? null) === null ? message.replaceAll("返程", "后续") : message;
 }
 
 function readModelEvaluation(value: unknown): string | undefined {

@@ -407,26 +407,31 @@ test("escapes plan content and strips API keys from rendered URLs", () => {
   assert.doesNotMatch(html, /(?:[?&](?:key|api_key|apikey|access_key|accesskey|secret|token)=)/i);
 });
 
-test("uses dashed fast returns but keeps scenic and single trips distinct", () => {
-  const noMap = { ...fixturePlan.route, staticMapUrl: undefined };
+test("keeps return route line styles on the main map when a static map URL exists", () => {
   const fastHtml = renderGuidebookHtml({
     ...fixturePlan,
-    route: { ...noMap, returnMode: "fast" },
+    route: { ...fixturePlan.route, returnMode: "fast" },
   });
   const scenicHtml = renderGuidebookHtml({
     ...fixturePlan,
-    route: { ...noMap, returnMode: "scenic" },
+    route: { ...fixturePlan.route, returnMode: "scenic" },
   });
   const singleHtml = renderGuidebookHtml({
     ...fixturePlan,
-    route: { ...noMap, returnMode: null },
+    route: { ...fixturePlan.route, returnMode: null },
   });
 
-  assert.match(fastHtml, /stroke-dasharray="9 8"/);
+  assert.match(
+    fastHtml,
+    /<polyline data-layer="return"[^>]*stroke="#8A6A58"[^>]*stroke-dasharray="9 8"/,
+  );
   assert.match(fastHtml, /快速返程/);
+  assert.doesNotMatch(fastHtml, /maps\.example\.test\/static/);
   assert.match(scenicHtml, /回程再玩/);
+  assert.match(scenicHtml, /<polyline data-layer="return"[^>]*stroke="#C96442"[^>]*>/);
   assert.doesNotMatch(scenicHtml, /stroke-dasharray="9 8"/);
   assert.match(singleHtml, /未安排返程/);
+  assert.doesNotMatch(singleHtml, /data-layer="return"/);
 });
 
 test("builds separate solid map layers for scenic returns", () => {
@@ -521,6 +526,34 @@ test("generates different closing text for different journeys", async () => {
   assert.match(second.message, /北京.*敦煌|敦煌/);
   assert.equal(first.quote, null);
   assert.equal(second.quote, null);
+});
+
+test("generates distinct closing route summaries for fast, scenic and one-way trips", async () => {
+  const modelContent = {
+    quoteId: null,
+    message: "沿途的山水与人文让旅程有了耐心观察的尺度。",
+  };
+  const baseInput = { origin: "上海", waypoints: ["杭州"], destination: "黄山", days: 2 };
+  const fast = await buildTripClosingWithDeepSeek(
+    { ...baseInput, returnMode: "fast" },
+    { apiKey: "test-key", fetchImpl: deepSeekFetch(modelContent) },
+  );
+  const scenic = await buildTripClosingWithDeepSeek(
+    { ...baseInput, returnMode: "scenic" },
+    { apiKey: "test-key", fetchImpl: deepSeekFetch(modelContent) },
+  );
+  const single = await buildTripClosingWithDeepSeek(
+    { ...baseInput, returnMode: null },
+    { apiKey: "test-key", fetchImpl: deepSeekFetch(modelContent) },
+  );
+
+  assert.notEqual(fast.message, scenic.message);
+  assert.notEqual(fast.message, single.message);
+  assert.notEqual(scenic.message, single.message);
+  assert.match(fast.message, /快速返程|往返/);
+  assert.match(scenic.message, /不走回头/);
+  assert.match(single.message, /从出发到目的地的一段完整探索/);
+  assert.doesNotMatch(single.message, /返程/);
 });
 
 test("accepts only Task 4 verified quote ids in final closing text", async () => {

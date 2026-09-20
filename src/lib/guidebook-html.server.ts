@@ -247,6 +247,11 @@ function renderMapImage(url: string | null, alt: string): string {
   return `<figure class="map-figure"><img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" referrerpolicy="no-referrer" /></figure>`;
 }
 
+function renderRouteMap(plan: TripPlan, alt: string, label: string): string {
+  const staticMap = plan.route.returnMode === null ? sanitizeUrl(plan.route.staticMapUrl) : null;
+  return staticMap ? renderMapImage(staticMap, alt) : renderSchematicMap(plan.route, label);
+}
+
 function renderExternalLink(url: string | null | undefined, label: string): string {
   const href = sanitizeUrl(url);
   if (!href)
@@ -291,10 +296,7 @@ function renderSegmentCard(segment: RouteSegment, index: number): string {
 }
 
 function renderRoute(plan: TripPlan): string {
-  const staticMap = sanitizeUrl(plan.route.staticMapUrl);
-  const map = staticMap
-    ? renderMapImage(staticMap, "高德全程路线地图")
-    : renderSchematicMap(plan.route, "全程路线示意图");
+  const map = renderRouteMap(plan, "高德全程路线地图", "全程路线示意图");
   const outbound = plan.route.outboundSegments.length
     ? plan.route.outboundSegments.map(renderSegmentCard).join("")
     : `<p class="empty-copy">去程分段暂未生成，请按路线节点和时间轴执行。</p>`;
@@ -535,10 +537,7 @@ function routeSummaryText(plan: TripPlan): string {
 }
 
 function renderClosing(plan: TripPlan): string {
-  const mapUrl = sanitizeUrl(plan.route.staticMapUrl);
-  const map = mapUrl
-    ? renderMapImage(mapUrl, "旅行回望全程地图")
-    : renderSchematicMap(plan.route, "旅行回望路线示意图");
+  const map = renderRouteMap(plan, "旅行回望全程地图", "旅行回望路线示意图");
   const closingQuote =
     plan.closing.source?.trim() && plan.closing.quote?.trim()
       ? `<blockquote class="closing-quote"><p>${escapeHtml(plan.closing.quote)}</p><cite>${escapeHtml(plan.closing.source)}</cite></blockquote>`
