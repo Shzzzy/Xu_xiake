@@ -49,6 +49,8 @@ export type Coordinate = [longitude: number, latitude: number];
 export type TripTimelineNode = {
   startTime: string;
   endTime: string;
+  // 展示用时段：轻松档写「上午/中午/下午/晚上」等宽松时段，适中与充实档写具体时刻。
+  timeLabel: string;
   type: TimelineNodeType;
   name: string;
   location?: string;

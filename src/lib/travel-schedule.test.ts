@@ -66,6 +66,7 @@ test("every node carries explicit time, type, cost and navigation", () => {
     assert.match(node.startTime, /^\d{2}:\d{2}$/);
     assert.match(node.endTime, /^\d{2}:\d{2}$/);
     assert.ok(node.startTime < node.endTime, `${node.name} 的起止时间应为升序`);
+    assert.ok(node.timeLabel.length > 0);
     assert.equal(typeof node.name, "string");
     assert.ok(node.name.length > 0);
     assert.equal(typeof node.estimatedCost, "number");
@@ -202,4 +203,137 @@ test("derives the daily radar, theme and cost from scheduled attractions", () =>
   assert.ok(day.purpose.length > 0);
   // 门票 100 × 2 人 + 午餐 50 × 2 + 晚餐 50 × 2 + 住宿 300
   assert.equal(day.estimatedCost, 200 + 100 + 100 + 300);
+});
+
+test("shows loose display time labels on relaxed days", () => {
+  const [relaxed] = buildExecutionDays({
+    startDate: "2026-09-20",
+    days: 1,
+    pace: "relaxed",
+    travelers: { adults: 2, children: 0 },
+    routeNodes: ["古镇"],
+    audits: { 古镇: audit({ durationHours: 3 }) },
+    nightActivity: "灯会",
+  });
+
+  const labels = relaxed.nodes.map((node) => node.timeLabel);
+  assert.ok(labels.length > 0);
+  assert.ok(labels.every((label) => /^(清晨|上午|中午|下午|傍晚|晚上|夜间)$/.test(label)));
+  assert.ok(labels.every((label) => !/\d/.test(label) && !label.includes(":")));
+  // 节点内部仍保留分钟级起止时间，用于排序与容量计算
+  assert.ok(relaxed.nodes.every((node) => /^\d{2}:\d{2}$/.test(node.startTime)));
+  assert.ok(relaxed.nodes.every((node) => node.startTime < node.endTime));
+
+  const [balanced] = buildExecutionDays({
+    startDate: "2026-09-20",
+    days: 1,
+    pace: "balanced",
+    travelers: { adults: 2, children: 0 },
+    routeNodes: ["古镇"],
+    audits: { 古镇: audit({ durationHours: 3 }) },
+  });
+  assert.ok(balanced.nodes.every((node) => /^\d{2}:\d{2}–\d{2}:\d{2}$/.test(node.timeLabel)));
+});
+
+test("keeps multi-day attractions on at least two consecutive days", () => {
+  const build = (requested: number) =>
+    buildExecutionDays({
+      startDate: "2026-09-20",
+      days: 3,
+      pace: "balanced",
+      travelers: { adults: 2, children: 0 },
+      routeNodes: ["大峡谷", "古镇"],
+      audits: {
+        大峡谷: audit({ scale: "multi-day", durationHours: 16 }),
+        古镇: audit({ durationHours: 3, bestTime: "下午" }),
+      },
+      multiDayDays: { 大峡谷: requested },
+    });
+
+  for (const requested of [1, 1.9, 2.7]) {
+    const days = build(requested);
+    const first = attractionNames(days[0]);
+    const second = attractionNames(days[1]);
+    assert.ok(
+      first.some((name) => name.includes("大峡谷") && name.includes("第 1/2 天")),
+      `${requested} 天应被修正为至少 2 天`,
+    );
+    assert.ok(second.some((name) => name.includes("大峡谷") && name.includes("第 2/2 天")));
+    assert.ok(!first.some((name) => name.includes("古镇")));
+    assert.ok(attractionNames(days[2]).some((name) => name.includes("古镇")));
+  }
+});
+
+test("never packs two multi-day attractions into the same day", () => {
+  const days = buildExecutionDays({
+    startDate: "2026-09-20",
+    days: 3,
+    pace: "balanced",
+    travelers: { adults: 2, children: 1 },
+    routeNodes: ["大峡谷", "高原湖泊"],
+    audits: {
+      大峡谷: audit({ scale: "multi-day", durationHours: 16, bestTime: "上午" }),
+      高原湖泊: audit({ scale: "multi-day", durationHours: 16, bestTime: "下午" }),
+    },
+  });
+
+  for (const day of days) {
+    const names = attractionNames(day).join(" ");
+    assert.ok(!(names.includes("大峡谷") && names.includes("高原湖泊")), `${day.date} 同时排入两个跨日景点`);
+  }
+  assert.equal(days.filter((day) => attractionNames(day).some((name) => name.includes("大峡谷"))).length, 2);
+  assert.ok(days.every((day) => !attractionNames(day).some((name) => name.includes("高原湖泊"))));
+  assert.ok(days.at(-1)?.cautions.some((text) => text.includes("高原湖泊")));
+});
+
+test("stops scheduling once a single day runs out of time", () => {
+  const routeNodes = Array.from({ length: 40 }, (_, index) => `景点${index + 1}`);
+  const audits = Object.fromEntries(
+    routeNodes.map((name) => [name, audit({ scale: "large", durationHours: 4 })]),
+  );
+  const [day] = buildExecutionDays({
+    startDate: "2026-09-20",
+    days: 1,
+    pace: "deep",
+    travelers: { adults: 2, children: 0 },
+    routeNodes,
+    audits,
+  });
+
+  const bounds = resolveDayBounds("deep");
+  assert.ok(day.nodes.length > 0);
+  for (let index = 0; index < day.nodes.length; index += 1) {
+    const node = day.nodes[index];
+    assert.ok(node.startTime < node.endTime, `${node.name} 的时长为零`);
+    assert.ok(node.endTime <= bounds.end, `${node.name} 超过当天结束时间`);
+    if (index > 0) {
+      assert.ok(node.startTime >= day.nodes[index - 1].endTime, `${node.name} 与上一节点重叠`);
+      assert.ok(node.startTime > day.nodes[index - 1].startTime, `${node.name} 起始时间未严格递增`);
+    }
+  }
+  assert.ok(day.nodes.every((node) => node.endTime !== "23:59"));
+  assert.ok(attractionNames(day).length < 40);
+  assert.ok(day.cautions.some((text) => text.includes("未排入")));
+});
+
+test("aligns custom bounds to the pace granularity and reports the effective end", () => {
+  const routeNodes = Array.from({ length: 20 }, (_, index) => `景点${index + 1}`);
+  const audits = Object.fromEntries(
+    routeNodes.map((name) => [name, audit({ scale: "large", durationHours: 5 })]),
+  );
+  const [day] = buildExecutionDays({
+    startDate: "2026-09-20",
+    days: 1,
+    pace: "balanced",
+    travelers: { adults: 2, children: 0 },
+    routeNodes,
+    audits,
+    dayStart: "08:37",
+    dayEnd: "20:20",
+  });
+
+  assert.equal(day.nodes[0]?.startTime, "08:45");
+  assert.equal(day.nodes.at(-1)?.endTime, "20:15");
+  assert.ok(day.cautions.some((text) => text.includes("20:15")));
+  assert.ok(day.cautions.every((text) => !text.includes("21:00")));
 });
