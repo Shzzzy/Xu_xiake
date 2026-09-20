@@ -17,7 +17,7 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/travel-plan.test.ts src/lib/planner.test.ts src/lib/inspiration.test.ts src/lib/place-discovery.test.ts src/lib/place-verification.test.ts src/lib/discovered-places.integration.test.ts src/lib/scene-art.test.ts src/lib/scene-catalog.test.ts src/lib/scene-guide.test.ts src/lib/live-planner.test.ts src/lib/long-planner.test.ts src/lib/route-planner.test.ts src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts",
+    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/travel-plan.test.ts src/lib/travel-schedule.test.ts src/lib/planner.test.ts src/lib/inspiration.test.ts src/lib/place-discovery.test.ts src/lib/place-verification.test.ts src/lib/discovered-places.integration.test.ts src/lib/scene-art.test.ts src/lib/scene-catalog.test.ts src/lib/scene-guide.test.ts src/lib/live-planner.test.ts src/lib/long-planner.test.ts src/lib/route-planner.test.ts src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
