@@ -1,3 +1,7 @@
+import type { Pace } from "./planner";
+import type { TransportMode } from "./route-planner";
+
+export type TransportPreference = Extract<TransportMode, "economy" | "balanced" | "speed">;
 export type Travelers = { adults: number; children: number };
 
 export type BudgetCategory = { amount: number; ratio: number };
@@ -49,12 +53,13 @@ export type TripTimelineNode = {
   name: string;
   location?: string;
   coordinates?: Coordinate;
-  transportMode?: string;
+  transportMode?: TransportMode;
   transportMinutes?: number;
   stayMinutes?: number;
   estimatedCost: number;
   tips?: string;
-  navigation?: string;
+  // 无法生成导航链接时必须显式写入 null，表示已降级。
+  navigation: string | null;
 };
 
 export type TripDay = {
@@ -75,7 +80,7 @@ export type TripDay = {
 export type RouteSegment = {
   from: string;
   to: string;
-  mode: string;
+  mode: TransportMode;
   distanceKm: number;
   durationMinutes: number;
   navigation: string;
@@ -103,8 +108,8 @@ export type TripMeta = {
   days: number;
   travelers: Travelers;
   perPersonBudget: number;
-  transportPreference: string;
-  pace: string;
+  transportPreference: TransportPreference;
+  pace: Pace;
   interests: string[];
 };
 
