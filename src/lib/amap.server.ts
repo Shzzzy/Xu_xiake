@@ -9,7 +9,6 @@ export type StaticMapInput = {
   outbound: StaticMapPoint[];
   returnPath?: StaticMapPoint[];
   returnMode?: "fast" | "scenic" | null;
-  apiKey?: string;
   zoom?: number;
   size?: { width: number; height: number };
 };
@@ -28,7 +27,21 @@ const OUTBOUND_COLOR = "0x4A7C8A";
 const RETURN_COLOR = "0xC96442";
 const FAST_RETURN_COLOR = "0x8A6A58";
 
-function formatPoint(point: StaticMapPoint): string {
+function assertCoordinateRange(longitude: number, latitude: number) {
+  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+    throw new Error("高德坐标必须是有效的经度和纬度");
+  }
+  if (longitude < -180 || longitude > 180) {
+    throw new Error("经度必须在 -180 到 180 之间");
+  }
+  if (latitude < -90 || latitude > 90) {
+    throw new Error("纬度必须在 -90 到 90 之间");
+  }
+}
+
+function formatPoint(point: StaticMapPoint | undefined): string {
+  if (!point) throw new Error("静态地图坐标不能为空");
+  assertCoordinateRange(point.longitude, point.latitude);
   return `${point.longitude},${point.latitude}`;
 }
 
@@ -41,6 +54,8 @@ function formatMarker(point: StaticMapPoint, label: string, color: string): stri
 }
 
 export function buildStaticMapUrl(input: StaticMapInput): string {
+  if (input.outbound.length === 0) throw new Error("静态地图至少需要去程坐标");
+
   const url = new URL(AMAP_STATIC_MAP_URL);
   const size = input.size ?? { width: 750, height: 500 };
 
@@ -54,17 +69,21 @@ export function buildStaticMapUrl(input: StaticMapInput): string {
   }
   url.searchParams.set("paths", paths.join("|"));
 
+  const outboundStart = input.outbound[0];
+  const outboundEnd = input.outbound.at(-1);
+  if (!outboundStart || !outboundEnd) throw new Error("静态地图至少需要去程坐标");
+
   const markers = [
-    formatMarker(input.outbound[0], "A", OUTBOUND_COLOR),
-    formatMarker(input.outbound.at(-1) ?? input.outbound[0], "B", OUTBOUND_COLOR),
+    formatMarker(outboundStart, "A", OUTBOUND_COLOR),
+    formatMarker(outboundEnd, "B", OUTBOUND_COLOR),
   ];
-  if (input.returnPath?.length) {
+  const returnEnd = input.returnPath?.at(-1);
+  if (returnEnd) {
     const color = input.returnMode === "fast" ? FAST_RETURN_COLOR : RETURN_COLOR;
-    markers.push(formatMarker(input.returnPath.at(-1) as StaticMapPoint, "C", color));
+    markers.push(formatMarker(returnEnd, "C", color));
   }
   url.searchParams.set("markers", markers.join("|"));
 
-  if (input.apiKey) url.searchParams.set("key", input.apiKey);
   return url.toString();
 }
 
@@ -78,7 +97,7 @@ export function buildNavigationUrl(input: NavigationInput): string {
     subway: "bus",
   }[input.mode];
   const formatCoordinate = (coordinate: AmapCoordinate, name?: string) =>
-    `${coordinate[0]},${coordinate[1]}${name ? `,${name}` : ""}`;
+    `${coordinateQuery(coordinate)}${name ? `,${name}` : ""}`;
 
   url.searchParams.set("from", formatCoordinate(input.from, input.fromName));
   url.searchParams.set("to", formatCoordinate(input.to, input.toName));
@@ -105,6 +124,7 @@ export type AmapRouteStep = {
   durationSeconds: number;
   path: AmapCoordinate[];
   lineName?: string;
+  lineType?: string;
 };
 
 export type AmapRoute = {
@@ -176,6 +196,7 @@ export type WeatherInput = {
 
 export type AmapClient = {
   searchPoi(input: SearchPoiInput): Promise<AmapPoi[]>;
+  fetchStaticMap(input: StaticMapInput): Promise<Uint8Array>;
   route(input: RouteInput): Promise<AmapRoute>;
   geocode(input: GeocodeInput): Promise<AmapGeocode[]>;
   weather(input: WeatherInput): Promise<AmapWeather[]>;
@@ -185,6 +206,7 @@ const AMAP_REST_API_URL = "https://restapi.amap.com";
 const AMAP_REQUEST_TIMEOUT_MS = 15_000;
 
 type JsonRecord = Record<string, unknown>;
+type AmapResponseFormat = "v3" | "v4";
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
@@ -210,21 +232,30 @@ function asNumber(value: unknown): number | undefined {
   return Number.isFinite(number) ? number : undefined;
 }
 
+function isCoordinateInRange(longitude: number, latitude: number): boolean {
+  return (
+    Number.isFinite(longitude) &&
+    Number.isFinite(latitude) &&
+    longitude >= -180 &&
+    longitude <= 180 &&
+    latitude >= -90 &&
+    latitude <= 90
+  );
+}
+
 function parseCoordinate(value: unknown): AmapCoordinate | null {
   const text = asText(value);
   if (!text) return null;
   const [longitudeText, latitudeText] = text.split(",");
   const longitude = Number(longitudeText);
   const latitude = Number(latitudeText);
-  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return null;
+  if (!isCoordinateInRange(longitude, latitude)) return null;
   return [longitude, latitude];
 }
 
 function coordinateQuery(coordinate: AmapCoordinate): string {
   const [longitude, latitude] = coordinate;
-  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
-    throw new Error("高德坐标必须是有效的经度和纬度");
-  }
+  assertCoordinateRange(longitude, latitude);
   return `${longitude},${latitude}`;
 }
 
@@ -248,6 +279,7 @@ async function requestAmapJson(
   operation: string,
   url: URL,
   fetchImpl: typeof fetch,
+  format: AmapResponseFormat,
 ): Promise<JsonRecord> {
   let response: Response;
   try {
@@ -270,12 +302,44 @@ async function requestAmapJson(
   }
 
   const record = asRecord(payload);
-  const status = asText(record.status);
-  const errorCode = asNumber(record.errcode);
-  if ((status && status !== "1") || (errorCode !== undefined && errorCode !== 0)) {
-    throw new Error(`高德 ${operation}失败：${errorDetail(record)}`);
+  if (format === "v3") {
+    const status = asText(record.status);
+    if (!status) throw new Error(`高德 ${operation}失败：响应缺少 status`);
+    if (status !== "1") throw new Error(`高德 ${operation}失败：${errorDetail(record)}`);
+  } else {
+    const errorCode = asNumber(record.errcode);
+    if (errorCode === undefined) throw new Error(`高德 ${operation}失败：响应缺少 errcode`);
+    if (errorCode !== 0) throw new Error(`高德 ${operation}失败：${errorDetail(record)}`);
   }
   return record;
+}
+
+async function requestAmapBytes(
+  operation: string,
+  url: URL,
+  fetchImpl: typeof fetch,
+): Promise<Uint8Array> {
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { signal: AbortSignal.timeout(AMAP_REQUEST_TIMEOUT_MS) });
+  } catch (error) {
+    const detail =
+      error instanceof Error && error.name === "TimeoutError" ? "请求超时" : "网络请求失败";
+    throw new Error(`高德 ${operation}失败：${detail}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`高德 ${operation}失败（HTTP ${response.status}）`);
+  }
+
+  try {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length === 0) throw new Error("图片内容为空");
+    return bytes;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "图片内容读取失败";
+    throw new Error(`高德 ${operation}失败：${detail}`);
+  }
 }
 
 function normalizePoi(value: unknown): AmapPoi | null {
@@ -332,21 +396,38 @@ function normalizePathRoute(value: unknown, input: RouteInput): AmapRoute {
     .filter((step): step is AmapRouteStep => step !== null);
   const path: AmapCoordinate[] = [];
   for (const step of steps) appendPath(path, step.path);
+  const distanceMeters = asNumber(pathRow.distance);
+  const durationSeconds = asNumber(pathRow.duration);
+
+  if (
+    steps.length === 0 ||
+    path.length === 0 ||
+    distanceMeters === undefined ||
+    durationSeconds === undefined
+  ) {
+    throw new Error(`高德 ${input.mode} 路线规划失败：未返回可用的路线`);
+  }
 
   return {
     mode: input.mode,
     origin: input.origin,
     destination: input.destination,
-    distanceMeters: asNumber(pathRow.distance) ?? 0,
-    durationSeconds: asNumber(pathRow.duration) ?? 0,
+    distanceMeters,
+    durationSeconds,
     path,
     steps,
   };
 }
 
+function isSubwayLine(lineName: string, lineType: string): boolean {
+  return /地铁|轨道|metro|subway/i.test(`${lineType} ${lineName}`);
+}
+
 function normalizeTransitRoute(value: unknown, input: RouteInput): AmapRoute {
   const transit = asRecord(value);
   const steps: AmapRouteStep[] = [];
+  let hasTransitLine = false;
+  let hasSubwayLine = false;
 
   for (const rawSegment of asArray(transit.segments)) {
     const segment = asRecord(rawSegment);
@@ -372,20 +453,32 @@ function normalizeTransitRoute(value: unknown, input: RouteInput): AmapRoute {
     for (const rawLine of asArray(bus.buslines)) {
       const line = asRecord(rawLine);
       const lineName = asText(line.name);
+      const lineType = asText(line.type);
       const path = parseCoordinateList(line.polyline);
-      if (!lineName && path.length === 0) continue;
+      if ((!lineName && !lineType) || path.length === 0) continue;
+
+      hasTransitLine = true;
+      if (isSubwayLine(lineName, lineType)) hasSubwayLine = true;
       steps.push({
-        instruction: lineName ? `乘坐${lineName}` : "乘坐公共交通",
+        instruction: lineName ? `乘坐${lineName}` : `乘坐${lineType}`,
         distanceMeters: asNumber(line.distance) ?? 0,
         durationSeconds: asNumber(line.duration) ?? 0,
         path,
         ...(lineName ? { lineName } : {}),
+        ...(lineType ? { lineType } : {}),
       });
     }
   }
 
   const path: AmapCoordinate[] = [];
   for (const step of steps) appendPath(path, step.path);
+
+  if (!hasTransitLine || steps.length === 0 || path.length === 0) {
+    throw new Error(`高德 ${input.mode} 路线规划失败：未找到有效的公共交通路线`);
+  }
+  if (input.mode === "subway" && !hasSubwayLine) {
+    throw new Error("高德 subway 路线规划失败：候选中未包含地铁线路");
+  }
 
   return {
     mode: input.mode,
@@ -424,10 +517,16 @@ export function createAmapClient(apiKey: string, fetchImpl: typeof fetch = fetch
         offset: String(input.pageSize ?? 20),
         extensions: "all",
       });
-      const payload = await requestAmapJson("POI 搜索", url, fetchImpl);
+      const payload = await requestAmapJson("POI 搜索", url, fetchImpl, "v3");
       return asArray(payload.pois)
         .map(normalizePoi)
         .filter((poi): poi is AmapPoi => poi !== null);
+    },
+
+    async fetchStaticMap(input) {
+      const url = new URL(buildStaticMapUrl(input));
+      url.searchParams.set("key", normalizedKey);
+      return requestAmapBytes("静态地图", url, fetchImpl);
     },
 
     async route(input) {
@@ -443,7 +542,12 @@ export function createAmapClient(apiKey: string, fetchImpl: typeof fetch = fetch
           input.strategy !== undefined ? String(input.strategy) : isTransit ? "0" : undefined,
         extensions: input.mode === "car" || isTransit ? "all" : undefined,
       });
-      const payload = await requestAmapJson(`${input.mode} 路线规划`, url, fetchImpl);
+      const payload = await requestAmapJson(
+        `${input.mode} 路线规划`,
+        url,
+        fetchImpl,
+        input.mode === "bicycling" ? "v4" : "v3",
+      );
 
       if (isTransit) {
         const route = asRecord(payload.route);
@@ -460,7 +564,7 @@ export function createAmapClient(apiKey: string, fetchImpl: typeof fetch = fetch
         address: input.address.trim(),
         city: input.city?.trim(),
       });
-      const payload = await requestAmapJson("地理编码", url, fetchImpl);
+      const payload = await requestAmapJson("地理编码", url, fetchImpl, "v3");
       return asArray(payload.geocodes).flatMap((value) => {
         const geocode = asRecord(value);
         const location = parseCoordinate(geocode.location);
@@ -484,7 +588,7 @@ export function createAmapClient(apiKey: string, fetchImpl: typeof fetch = fetch
         city: input.city.trim(),
         extensions: input.extensions ?? "all",
       });
-      const payload = await requestAmapJson("天气查询", url, fetchImpl);
+      const payload = await requestAmapJson("天气查询", url, fetchImpl, "v3");
       const forecasts = asArray(payload.forecasts);
       if (forecasts.length > 0) {
         return forecasts.map((value) => {

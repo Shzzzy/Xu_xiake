@@ -331,3 +331,220 @@ test("maps every navigation mode to the AMap URI API mode", () => {
     assert.equal(url.searchParams.get("mode"), uriMode);
   }
 });
+
+test("encodes static map path order, colors, coordinates and marker ownership", () => {
+  const url = new URL(
+    buildStaticMapUrl({
+      outbound: [
+        { longitude: 120.15, latitude: 30.27 },
+        { longitude: 120.49, latitude: 30.74 },
+      ],
+      returnPath: [
+        { longitude: 120.49, latitude: 30.74 },
+        { longitude: 120.15, latitude: 30.27 },
+      ],
+      returnMode: "scenic",
+    }),
+  );
+
+  assert.equal(
+    url.searchParams.get("paths"),
+    "10,0x4A7C8A,1,,:120.15,30.27;120.49,30.74|10,0xC96442,1,,:120.49,30.74;120.15,30.27",
+  );
+  assert.equal(
+    url.searchParams.get("markers"),
+    "mid,0x4A7C8A,A:120.15,30.27|mid,0x4A7C8A,B:120.49,30.74|mid,0xC96442,C:120.15,30.27",
+  );
+});
+
+test("keeps the AMap key out of public static map URLs and returned bytes", async () => {
+  const input = {
+    outbound: [
+      { longitude: 120.15, latitude: 30.27 },
+      { longitude: 120.49, latitude: 30.74 },
+    ],
+    returnPath: [
+      { longitude: 120.49, latitude: 30.74 },
+      { longitude: 120.15, latitude: 30.27 },
+    ],
+    returnMode: "scenic" as const,
+    apiKey: "server-key-must-not-leak",
+  };
+  const publicUrl = new URL(buildStaticMapUrl(input));
+  assert.equal(publicUrl.searchParams.has("key"), false);
+
+  const calls: FetchCall[] = [];
+  const imageBytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const fetchImpl = (async (request: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: new URL(String(request)), init });
+    return new Response(imageBytes, { headers: { "content-type": "image/png" } });
+  }) as typeof fetch;
+  const client = createAmapClient("server-key-must-not-leak", fetchImpl);
+
+  const bytes = await client.fetchStaticMap(input);
+
+  assert.equal(calls[0]?.url.searchParams.get("key"), "server-key-must-not-leak");
+  assert.deepEqual(Array.from(bytes), Array.from(imageBytes));
+  assert.equal(new TextDecoder().decode(bytes).includes("server-key-must-not-leak"), false);
+});
+
+test("rejects a bus-only transit candidate when subway is requested", async () => {
+  const { fetchImpl } = recordingFetch(() => ({
+    status: "1",
+    route: {
+      transits: [
+        {
+          distance: "5000",
+          duration: "1200",
+          segments: [
+            {
+              bus: {
+                buslines: [
+                  {
+                    name: "公交 7 路",
+                    type: "公交线路",
+                    distance: "5000",
+                    duration: "1200",
+                    polyline: "120.15,30.27;120.49,30.74",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    },
+  }));
+  const client = createAmapClient("server-key", fetchImpl);
+
+  await assert.rejects(
+    () =>
+      client.route({
+        origin: [120.15, 30.27],
+        destination: [120.49, 30.74],
+        mode: "subway",
+        city: "0571",
+        destinationCity: "0571",
+      }),
+    /未包含地铁线路/,
+  );
+});
+
+test("keeps subway line metadata when a subway candidate is present", async () => {
+  const { fetchImpl } = recordingFetch(() => ({
+    status: "1",
+    route: {
+      transits: [
+        {
+          distance: "5000",
+          duration: "1200",
+          segments: [
+            {
+              bus: {
+                buslines: [
+                  {
+                    name: "地铁 1 号线",
+                    type: "地铁线路",
+                    distance: "5000",
+                    duration: "1200",
+                    polyline: "120.15,30.27;120.49,30.74",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    },
+  }));
+  const client = createAmapClient("server-key", fetchImpl);
+
+  const route = await client.route({
+    origin: [120.15, 30.27],
+    destination: [120.49, 30.74],
+    mode: "subway",
+    city: "0571",
+    destinationCity: "0571",
+  });
+
+  assert.equal(route.steps[0]?.lineType, "地铁线路");
+});
+
+test("requires native v3 status and v4 errcode fields", async () => {
+  const v3 = recordingFetch(() => ({ info: "OK" }));
+  const v3Client = createAmapClient("server-key", v3.fetchImpl);
+  await assert.rejects(() => v3Client.searchPoi({ keywords: "西湖" }), /缺少 status/);
+
+  const v4 = recordingFetch(() => ({
+    data: {
+      paths: [
+        {
+          distance: "900",
+          duration: "300",
+          steps: [
+            {
+              instruction: "沿西湖骑行",
+              distance: "900",
+              duration: "300",
+              polyline: "120.15,30.27;120.16,30.28",
+            },
+          ],
+        },
+      ],
+    },
+  }));
+  const v4Client = createAmapClient("server-key", v4.fetchImpl);
+  await assert.rejects(
+    () =>
+      v4Client.route({ origin: [120.15, 30.27], destination: [120.49, 30.74], mode: "bicycling" }),
+    /缺少 errcode/,
+  );
+});
+
+test("rejects successful responses without a usable route candidate", async () => {
+  const payloads = [
+    { status: "1" },
+    { status: "1", route: { paths: [] } },
+    { status: "1", route: { transits: [] } },
+  ];
+
+  for (const [index, payload] of payloads.entries()) {
+    const { fetchImpl } = recordingFetch(() => payload);
+    const client = createAmapClient("server-key", fetchImpl);
+    const mode = index === 2 ? "transit" : "car";
+    const options = {
+      origin: [120.15, 30.27] as [number, number],
+      destination: [120.49, 30.74] as [number, number],
+      mode,
+      ...(mode === "transit" ? { city: "0571", destinationCity: "0571" } : {}),
+    } as const;
+
+    await assert.rejects(
+      () => client.route(options),
+      index === 2 ? /未找到有效的公共交通路线/ : /未返回可用的路线/,
+    );
+  }
+});
+
+test("rejects empty outbound routes and out-of-range coordinates", async () => {
+  assert.throws(() => buildStaticMapUrl({ outbound: [] }), /至少需要去程坐标/);
+  assert.throws(
+    () => buildStaticMapUrl({ outbound: [{ longitude: 181, latitude: 30 }] }),
+    /经度必须在 -180 到 180 之间/,
+  );
+  assert.throws(
+    () => buildStaticMapUrl({ outbound: [{ longitude: 120, latitude: -91 }] }),
+    /纬度必须在 -90 到 90 之间/,
+  );
+  assert.throws(
+    () => buildNavigationUrl({ from: [181, 30], to: [120, 30], mode: "car" }),
+    /经度必须在 -180 到 180 之间/,
+  );
+
+  const client = createAmapClient("server-key", (async () =>
+    Response.json({ status: "1" })) as typeof fetch);
+  await assert.rejects(
+    () => client.route({ origin: [181, 30], destination: [120, 30], mode: "car" }),
+    /经度必须在 -180 到 180 之间/,
+  );
+});
