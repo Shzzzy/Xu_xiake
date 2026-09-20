@@ -85,6 +85,13 @@ export type TripTimelineNode = {
   navigation: string | null;
 };
 
+// 每日历史背景必须与可核验来源一起提供，执行提示不得冒充史实。
+export type TripHistoryNote = {
+  title: string;
+  background: string;
+  source: string;
+};
+
 export type TripDay = {
   date: string;
   theme: string;
@@ -98,6 +105,7 @@ export type TripDay = {
   purpose: string;
   highlights: string[];
   cautions: string[];
+  history?: TripHistoryNote[];
 };
 
 export type RouteSegment = {
@@ -239,7 +247,6 @@ function category(range: BudgetRange, estimatedTotal: number): BudgetCategory {
 const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 export type TripBriefValidationOptions = { selfDrive?: boolean };
-
 
 // 在进入规划流程前集中校验出行人数、预算和每日可用时间。
 export function validateTripBrief(

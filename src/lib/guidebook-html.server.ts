@@ -461,20 +461,36 @@ function summaryFocusItems(day: TripDay): string[] {
   return candidates.slice(0, 3);
 }
 
+function historyBackgroundForFocus(day: TripDay, focusTitle: string): string {
+  // 历史背景只能来自带来源的每日历史字段，节点提示仅用于执行信息。
+  const normalizedTitle = focusTitle.trim();
+  const note = day.history?.find((item) => {
+    const noteTitle = item.title.trim();
+    return (
+      noteTitle.length > 0 &&
+      (noteTitle === normalizedTitle ||
+        normalizedTitle.includes(noteTitle) ||
+        noteTitle.includes(normalizedTitle))
+    );
+  });
+  const background = note?.background.trim();
+  const source = note?.source.trim();
+
+  if (!background || !source) {
+    return "计划中未记录可核验的历史沿革，出发前请以景区说明、地方志或可靠史料为准。";
+  }
+
+  return `${background}（来源：${source}）`;
+}
+
 function renderDaySummary(day: TripDay, index: number): string {
   const focusItems = summaryFocusItems(day);
-  const attractionNodes = day.nodes.filter(
-    (node) => node.type === "attraction" || node.type === "night-activity",
-  );
   const focusMarkup = focusItems
     .map((item, index) => {
       const [title, detail] = item.includes("：")
         ? item.split("：", 2)
         : [item, "结合现场导览与个人兴趣安排停留重点。"];
-      const relatedNode = attractionNodes[index];
-      const history =
-        relatedNode?.tips?.trim() ||
-        "计划中未记录可核验的历史沿革，出发前请以景区说明、地方志或可靠史料为准。";
+      const history = historyBackgroundForFocus(day, title);
       return `<li class="summary-focus-item"><span class="summary-number">${index + 1}</span><div><strong>${escapeHtml(title)}</strong><p><em>游览重点：</em>${escapeHtml(detail)}</p><p><em>历史背景：</em>${escapeHtml(history)}</p></div></li>`;
     })
     .join("");

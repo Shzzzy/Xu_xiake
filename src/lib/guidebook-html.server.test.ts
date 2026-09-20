@@ -120,7 +120,7 @@ export const fixturePlan: TripPlan = {
           location: "杭州西湖风景名胜区",
           stayMinutes: 170,
           estimatedCost: 0,
-          tips: "白居易治理西湖的历史可在湖边展牌继续了解",
+          tips: "步道平缓，建议放慢速度观察湖岸景观",
           navigation: "https://uri.amap.com/marker?position=120.15,30.27",
         },
         {
@@ -173,6 +173,13 @@ export const fixturePlan: TripPlan = {
         "黄山南大门：为次日登山留足体力并核对天气。",
       ],
       cautions: ["长距离驾车要轮换休息", "提前确认黄山预约和索道信息"],
+      history: [
+        {
+          title: "西湖白堤",
+          background: "白堤之名与唐代杭州刺史白居易主持治理西湖的历史记忆相关。",
+          source: "杭州西湖风景名胜区公开资料",
+        },
+      ],
     },
     {
       date: "2026-09-21",
@@ -257,6 +264,23 @@ export const fixturePlan: TripPlan = {
   },
 };
 
+function pageFragments(html: string, pageName: string): string[] {
+  const matches = [...html.matchAll(/<section class="page [^"]*" data-page="([^"]+)"/g)];
+  return matches
+    .filter((match) => match[1] === pageName)
+    .map((match) => {
+      const start = match.index ?? 0;
+      const next = matches.find((candidate) => (candidate.index ?? 0) > start);
+      return html.slice(start, next?.index ?? html.length);
+    });
+}
+
+function summaryFocusFragment(pageHtml: string): string {
+  const start = pageHtml.indexOf('<div class="summary-focus">');
+  const end = pageHtml.indexOf('<div class="summary-cautions">', start);
+  return start >= 0 && end > start ? pageHtml.slice(start, end) : "";
+}
+
 test("renders cover, daily radar and closing pages", () => {
   const html = renderGuidebookHtml(fixturePlan);
   assert.match(html, /旅行回望/);
@@ -287,6 +311,19 @@ test("keeps the guidebook page order and daily double-page ownership", () => {
 
   assert.equal(html.match(/data-page="day-left"/g)?.length, 2);
   assert.equal(html.match(/data-page="day-right"/g)?.length, 2);
+  const leftPages = pageFragments(html, "day-left");
+  const rightPages = pageFragments(html, "day-right");
+  assert.equal(leftPages.length, 2);
+  assert.equal(rightPages.length, 2);
+  for (const page of leftPages) {
+    assert.match(page, /当日综合雷达/);
+    assert.doesNotMatch(page, /执行时间轴|今日总结/);
+  }
+  for (const page of rightPages) {
+    assert.match(page, /执行时间轴/);
+    assert.match(page, /今日总结/);
+    assert.doesNotMatch(page, /当日综合雷达/);
+  }
   assert.match(html, /高德每日地图/);
   assert.match(html, /导航二维码/);
   assert.match(html, /今晚住宿/);
@@ -305,6 +342,18 @@ test("keeps the guidebook page order and daily double-page ownership", () => {
   assert.match(html, /历史背景/);
 });
 
+test("renders only sourced daily history and never promotes node tips", () => {
+  const html = renderGuidebookHtml(fixturePlan);
+  const rightPages = pageFragments(html, "day-right");
+  assert.equal(rightPages.length, 2);
+
+  const summaryFocus = rightPages.map(summaryFocusFragment).join("");
+
+  assert.match(summaryFocus, /白堤之名与唐代杭州刺史白居易主持治理西湖的历史记忆相关/);
+  assert.match(summaryFocus, /来源：杭州西湖风景名胜区公开资料/);
+  assert.match(summaryFocus, /计划中未记录可核验的历史沿革/);
+  assert.doesNotMatch(summaryFocus, /步道平缓/);
+});
 test("only renders verified closing citations from TripClosing.source", () => {
   const withoutSource: TripPlan = {
     ...fixturePlan,
