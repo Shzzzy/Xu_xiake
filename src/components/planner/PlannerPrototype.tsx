@@ -56,8 +56,14 @@ import {
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
 import { validateTripBrief, type TripBrief as TravelerBudgetTripBrief } from "@/lib/travel-plan";
 import {
-  buildRouteFallbackDays,
+  createUnknownPlanDraft,
+  updateUnknownPlanDraft,
+  type UnknownPlanAnswers,
+  type UnknownPlanDraft,
+} from "@/lib/unknown-plan-draft";
+import {
   classifyWeather,
+  splitPlacesAcrossDays,
   type Pace,
   type Place,
   type WeatherDay,
@@ -65,7 +71,6 @@ import {
 import { buildSceneGuide } from "@/lib/scene-guide";
 import { cn } from "@/lib/utils";
 import { ItineraryDay } from "./ItineraryDay";
-import { PlaceAdvice } from "./PlaceAdvice";
 import {
   InspirationCatalogProvider,
   useInspirationCatalog,
@@ -95,17 +100,7 @@ type TripBrief = TravelerBudgetTripBrief & {
   legPreferences: Record<string, RouteLegPreference>;
 };
 
-type UnknownAnswers = {
-  mood: string;
-  days: number | null;
-  pace: string | null;
-  interest: string;
-  origin: string;
-  startDate: string;
-  transport: string | null;
-  routeMode: string | null;
-  confirm: null;
-};
+type UnknownAnswers = UnknownPlanAnswers;
 
 type WizardStep = {
   key: keyof UnknownAnswers;
@@ -149,6 +144,7 @@ function dateInputValue(date: Date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 10);
 }
+
 
 function addDays(date: string, amount: number) {
   const next = new Date(`${date}T12:00:00`);
@@ -393,6 +389,9 @@ function PlannerPrototypeContent() {
   const [screen, setScreen] = useState<Screen>("landing");
   const [resultOrigin, setResultOrigin] = useState<"known" | "unknown">("known");
   const [brief, setBrief] = useState<TripBrief>(createDefaultBrief);
+  const [unknownDraft, setUnknownDraft] = useState<UnknownPlanDraft>(() =>
+    createUnknownPlanDraft(dateInputValue(new Date())),
+  );
   const [savedIds, setSavedIds] = useState<string[]>([]);
 
   useEffect(() => {
@@ -444,6 +443,8 @@ function PlannerPrototypeContent() {
       {screen === "unknown" ? (
         <UnknownPlanScreen
           variant={variant}
+          draft={unknownDraft}
+          onDraftChange={setUnknownDraft}
           onBack={() => setScreen("landing")}
           onComplete={(nextBrief) => {
             setBrief(nextBrief);
@@ -690,7 +691,7 @@ function KnownPlanScreen({
     ) ?? false;
 
   const submitBrief = () => {
-    const errors = validateTripBrief(brief);
+    const errors = validateTripBrief(brief, { selfDrive: usesDrive });
     setBriefErrors(errors);
     if (errors.length === 0) onSubmit();
   };
@@ -1334,38 +1335,27 @@ function RouteBuilder({
 
 function UnknownPlanScreen({
   variant,
+  draft,
+  onDraftChange,
   onBack,
   onComplete,
 }: {
   variant: DesignVariant;
+  draft: UnknownPlanDraft;
+  onDraftChange: (update: (draft: UnknownPlanDraft) => UnknownPlanDraft) => void;
   onBack: () => void;
   onComplete: (brief: TripBrief) => void;
 }) {
   const inspirationCatalog = useInspirationCatalog();
   const today = dateInputValue(new Date());
-  const [step, setStep] = useState(0);
-  const [answers, setAnswers] = useState<UnknownAnswers>({
-    mood: "",
-    days: null,
-    pace: null,
-    interest: "",
-    origin: "",
-    startDate: today,
-    transport: null,
-    routeMode: null,
-    confirm: null,
-  });
+  const { step, answers, travelerInput } = draft;
   const [customDraft, setCustomDraft] = useState("");
   const [customError, setCustomError] = useState("");
   const [briefErrors, setBriefErrors] = useState<string[]>([]);
-  const [travelerInput, setTravelerInput] = useState<TravelerBudgetTripBrief>({
-    startTime: "09:00",
-    endTime: "21:00",
-    adults: 2,
-    children: 0,
-    totalBudget: 0,
-    vehicleEnergy: null,
-  });
+
+  const updateDraft = (patch: Partial<UnknownPlanDraft>) => {
+    onDraftChange((previous) => updateUnknownPlanDraft(previous, patch));
+  };
 
   const steps: WizardStep[] = [
     {
@@ -1484,7 +1474,7 @@ function UnknownPlanScreen({
     const isPreset = steps[nextStep].options.some((option) => option.value === nextAnswer);
     setCustomDraft(isPreset ? "" : String(nextAnswer ?? ""));
     setCustomError("");
-    setStep(nextStep);
+    updateDraft({ step: nextStep, answers: sourceAnswers });
   };
 
   const completeTrip = (sourceAnswers: UnknownAnswers = answers) => {
@@ -1526,7 +1516,7 @@ function UnknownPlanScreen({
       nextAnswers.startDate =
         nextAnswers.startDate > nextMaxDate ? nextMaxDate : nextAnswers.startDate;
     }
-    setAnswers(nextAnswers);
+    updateDraft({ answers: nextAnswers });
     if (step < steps.length - 1) {
       window.setTimeout(() => goToStep(step + 1, nextAnswers), 120);
     }
@@ -1597,7 +1587,7 @@ function UnknownPlanScreen({
                 min={today}
                 max={wizardMaxDate}
                 onChange={(startDate) =>
-                  setAnswers((previous) => ({ ...previous, startDate }))
+                  updateDraft({ answers: { ...answers, startDate } })
                 }
               />
               <Button type="button" className="mt-4" onClick={() => goToStep(step + 1)}>
@@ -1609,7 +1599,7 @@ function UnknownPlanScreen({
               <TravelerBudgetFields
                 value={travelerInput}
                 onChange={(nextInput) => {
-                  setTravelerInput(nextInput);
+                  updateDraft({ travelerInput: nextInput });
                   setBriefErrors([]);
                 }}
                 showVehicleEnergy={usesDrive}
@@ -1625,7 +1615,7 @@ function UnknownPlanScreen({
                 type="button"
                 className="mt-4 w-full sm:w-auto"
                 onClick={() => {
-                  const errors = validateTripBrief(travelerInput);
+                  const errors = validateTripBrief(travelerInput, { selfDrive: usesDrive });
                   setBriefErrors(errors);
                   if (errors.length === 0) completeTrip();
                 }}
@@ -1880,7 +1870,6 @@ function ItineraryScreen({
         region: destination.region,
         days: brief.days,
         seedPlaces: destination.places.map((place) => place.name),
-        route: routePlan,
       });
 
       longPlannerFn({
@@ -1949,25 +1938,9 @@ function ItineraryScreen({
             ...day,
             weather: weather[day.day - 1],
           }))
-        : routePlan
-          ? buildRouteFallbackDays({
-              route: routePlan,
-              days: brief.days,
-              destinationPlaces: destination.places,
-              weather,
-              pace: brief.pace,
-            })
-          : [],
-    [brief.days, brief.pace, destination.places, livePlan, routePlan, weather],
+        : splitPlacesAcrossDays(destination.places, weather, brief.pace),
+    [brief.pace, destination.places, livePlan, weather],
   );
-  const routeSummary = routePlan
-    ? routePlan.legs
-        .map(
-          (leg) =>
-            `${leg.from}→${leg.to}：${transportLabels[leg.transport]}，${travelStyleLabels[leg.style]}`,
-        )
-        .join("；")
-    : "";
 
   const rainDays = weather.filter((day) => {
     const tone = classifyWeather(day.code).tone;
@@ -2172,12 +2145,6 @@ function ItineraryScreen({
               <p className="mt-4 text-sm leading-7 text-[var(--v-muted)]">
                 {selectedPlace.summary}
               </p>
-              <PlaceAdvice
-                place={selectedPlace}
-                destinationName={destination.name}
-                startDate={brief.startDate}
-                routeSummary={routeSummary}
-              />
               <div className="mt-6 grid grid-cols-2 gap-3">
                 <div className="rounded-[var(--v-card-radius)] bg-[var(--v-soft)] p-4">
                   <Timer className="size-4 text-[var(--v-accent)]" />

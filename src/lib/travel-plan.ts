@@ -238,8 +238,14 @@ function category(range: BudgetRange, estimatedTotal: number): BudgetCategory {
 
 const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
+export type TripBriefValidationOptions = { selfDrive?: boolean };
+
+
 // 在进入规划流程前集中校验出行人数、预算和每日可用时间。
-export function validateTripBrief(brief: TripBrief): string[] {
+export function validateTripBrief(
+  brief: TripBrief,
+  options: TripBriefValidationOptions = {},
+): string[] {
   const errors: string[] = [];
   if (!Number.isInteger(brief.adults) || brief.adults < 1) {
     errors.push("至少需要 1 位成人");
@@ -257,6 +263,9 @@ export function validateTripBrief(brief: TripBrief): string[] {
     errors.push("请填写有效的每日最晚结束时间");
   } else if (timePattern.test(brief.startTime) && brief.endTime <= brief.startTime) {
     errors.push("每日最晚结束时间必须晚于出发时间");
+  }
+  if (options.selfDrive && (brief.vehicleEnergy === null || brief.vehicleEnergy === undefined)) {
+    errors.push("请选择自驾车辆能源类型");
   }
   return errors;
 }

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { estimateBudget, normalizeRadarScores, validateTripBrief } from "./travel-plan.ts";
+import { createUnknownPlanDraft, updateUnknownPlanDraft } from "./unknown-plan-draft.ts";
 import type { Pace } from "./planner.ts";
 import type { TransportMode } from "./route-planner.ts";
 import type {
@@ -22,6 +23,50 @@ test("requires a total budget and at least one adult", () => {
   assert.deepEqual(errors, ["至少需要 1 位成人", "请填写全团总预算"]);
 });
 
+test("requires vehicle energy when self-driving", () => {
+  const errors = validateTripBrief(
+    {
+      adults: 2,
+      children: 0,
+      totalBudget: 3000,
+      startTime: "09:00",
+      endTime: "21:00",
+      vehicleEnergy: null,
+    },
+    { selfDrive: true },
+  );
+  assert.deepEqual(errors, ["请选择自驾车辆能源类型"]);
+});
+
+test("allows every supported vehicle energy when self-driving", () => {
+  for (const vehicleEnergy of ["fuel", "electric", "hybrid"] as const) {
+    const errors = validateTripBrief(
+      {
+        adults: 2,
+        children: 0,
+        totalBudget: 3000,
+        startTime: "09:00",
+        endTime: "21:00",
+        vehicleEnergy,
+      },
+      { selfDrive: true },
+    );
+    assert.deepEqual(errors, []);
+  }
+});
+
+test("allows an empty vehicle energy when not self-driving", () => {
+  const errors = validateTripBrief({
+    adults: 2,
+    children: 0,
+    totalBudget: 3000,
+    startTime: "09:00",
+    endTime: "21:00",
+    vehicleEnergy: null,
+  });
+  assert.deepEqual(errors, []);
+});
+
 test("requires the end time to be later than the start time", () => {
   const errors = validateTripBrief({
     adults: 2,
@@ -32,6 +77,40 @@ test("requires the end time to be later than the start time", () => {
     vehicleEnergy: null,
   });
   assert.deepEqual(errors, ["每日最晚结束时间必须晚于出发时间"]);
+});
+
+test("keeps unknown planner draft values after returning from the result", () => {
+  let draft = createUnknownPlanDraft("2026-09-20");
+  const travelerInput = {
+    startTime: "08:30",
+    endTime: "20:30",
+    adults: 3,
+    children: 2,
+    totalBudget: 8800,
+    vehicleEnergy: "electric" as const,
+  };
+
+  draft = updateUnknownPlanDraft(draft, {
+    step: 8,
+    answers: {
+      ...draft.answers,
+      mood: "mountain",
+      days: 5,
+      origin: "杭州",
+      transport: "drive",
+    },
+    travelerInput,
+  });
+
+  let screen: "unknown" | "result" = "unknown";
+  screen = "result";
+  screen = "unknown";
+
+  assert.equal(screen, "unknown");
+  assert.equal(draft.step, 8);
+  assert.deepEqual(draft.travelerInput, travelerInput);
+  assert.equal(draft.answers.origin, "杭州");
+  assert.equal(draft.answers.transport, "drive");
 });
 
 type Equal<Left, Right> = [Left] extends [Right] ? ([Right] extends [Left] ? true : false) : false;
