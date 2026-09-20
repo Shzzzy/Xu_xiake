@@ -188,6 +188,13 @@ function readRecord(value: unknown): JsonRecord {
   return value;
 }
 
+function assertExactKeys(record: JsonRecord, allowedKeys: readonly string[], label: string): void {
+  const extraKeys = Object.keys(record).filter((key) => !allowedKeys.includes(key));
+  if (extraKeys.length > 0) {
+    throw new Error(`${label}包含不允许的额外字段：${extraKeys.join("、")}`);
+  }
+}
+
 function readString(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${label}必须是非空字符串`);
@@ -567,6 +574,7 @@ function readBudgetRange(value: unknown, label: string): BudgetRange {
   if (!("min" in record) || !("max" in record)) {
     throw new Error(`${label}必须使用 min 和 max 区间结构`);
   }
+  assertExactKeys(record, ["min", "max"], label);
   const min = readNumber(record.min, `${label}最小值`, 0);
   const max = readNumber(record.max, `${label}最大值`, 0);
   if (max < min) throw new Error(`${label}最大值不能小于最小值`);
@@ -575,8 +583,10 @@ function readBudgetRange(value: unknown, label: string): BudgetRange {
 
 function findBudgetCategories(value: unknown): JsonRecord {
   const root = readRecord(value);
+  assertExactKeys(root, ["categories", "roadTrip"], "预算根对象");
   const categories = root.categories;
   if (!isRecord(categories)) throw new Error("DeepSeek 预算结果缺少 categories 对象");
+  assertExactKeys(categories, ["transport", "lodging", "food", "tickets", "other"], "预算分类对象");
   return categories;
 }
 
@@ -586,6 +596,7 @@ function parseRoadTripDetails(value: unknown): RoadTripBudgetDetails {
   if (!isRecord(details)) {
     throw new Error("自驾预算必须包含 roadTrip 的能源费、高速费、节假日免费调整和停车费");
   }
+  assertExactKeys(details, ["energy", "toll", "holidayFreeAdjustment", "parking"], "自驾预算明细");
   return {
     energy: readBudgetRange(details.energy, "能源费"),
     toll: readBudgetRange(details.toll, "高速费"),
@@ -698,6 +709,7 @@ function readStringArray(value: unknown, label: string): string[] {
 
 export function parseDaySummary(value: unknown): DaySummary {
   const record = readRecord(value);
+  assertExactKeys(record, ["purpose", "highlights", "cautions"], "每日总结");
   return {
     purpose: readString(record.purpose, "purpose"),
     highlights: readStringArray(record.highlights, "highlights"),

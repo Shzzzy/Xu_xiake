@@ -348,6 +348,53 @@ test("budget schema rejects numeric and amount category values", () => {
   );
 });
 
+test("budget root and category objects reject extra keys", () => {
+  const validCategories = {
+    transport: { min: 800, max: 1200 },
+    lodging: { min: 900, max: 1100 },
+    food: { min: 500, max: 700 },
+    tickets: { min: 200, max: 300 },
+    other: { min: 200, max: 300 },
+  };
+
+  assert.throws(
+    () =>
+      parseBudgetEstimate({ categories: validCategories, extra: true }, 5000, {
+        adults: 2,
+        children: 0,
+      }),
+    /额外字段/,
+  );
+  assert.throws(
+    () =>
+      parseBudgetEstimate(
+        {
+          categories: {
+            ...validCategories,
+            transport: { ...validCategories.transport, extra: true },
+          },
+        },
+        5000,
+        { adults: 2, children: 0 },
+      ),
+    /额外字段/,
+  );
+  assert.throws(
+    () =>
+      parseBudgetEstimate(
+        {
+          categories: {
+            ...validCategories,
+            attraction: { min: 1, max: 2 },
+          },
+        },
+        5000,
+        { adults: 2, children: 0 },
+      ),
+    /额外字段/,
+  );
+});
+
 test("budget prompt includes travelers, child discounts and room rules", async () => {
   const requests: RecordedRequest[] = [];
   const fetchImpl = createDeepSeekFetch(
@@ -479,7 +526,7 @@ test("day summary requires exact fields and string arrays", () => {
         highlights: ["重点"],
         cautions: ["注意"],
       }),
-    /purpose/,
+    /额外字段/,
   );
   assert.throws(
     () =>
@@ -489,6 +536,26 @@ test("day summary requires exact fields and string arrays", () => {
         cautions: ["注意"],
       }),
     /字符串/,
+  );
+  assert.throws(
+    () =>
+      parseDaySummary({
+        purpose: "目的",
+        highlights: ["重点"],
+        cautions: ["注意"],
+        extra: true,
+      }),
+    /额外字段/,
+  );
+  assert.throws(
+    () =>
+      parseDaySummary({
+        purpose: "目的",
+        highlights: ["重点"],
+        cautions: ["注意"],
+        objective: "别名",
+      }),
+    /额外字段/,
   );
 });
 
@@ -503,7 +570,6 @@ test("closing degrades network and invalid JSON failures to modern text", async 
     Response.json({ choices: [{ message: { content: "{bad json" } }] })) as typeof fetch;
   const emptyContentFetch = (async () =>
     Response.json({ choices: [{ message: { content: "" } }] })) as typeof fetch;
-
   for (const fetchImpl of [timeoutFetch, networkFetch, invalidJsonFetch, emptyContentFetch]) {
     const closing = await buildTripClosingWithDeepSeek(
       { destination: "杭州", days: 2 },
@@ -513,6 +579,19 @@ test("closing degrades network and invalid JSON failures to modern text", async 
     assert.equal(closing.source, null);
     assert.match(closing.message, /山河/);
   }
+});
+
+test("closing degrades HTTP non-2xx responses to modern text", async () => {
+  const httpFetch = (async () => new Response("server error", { status: 500 })) as typeof fetch;
+
+  const closing = await buildTripClosingWithDeepSeek(
+    { destination: "杭州", days: 2 },
+    { apiKey: "test-key", fetchImpl: httpFetch },
+  );
+
+  assert.equal(closing.quote, null);
+  assert.equal(closing.source, null);
+  assert.match(closing.message, /山河/);
 });
 
 test("other services expose identifiable degradation errors", async () => {
