@@ -79,6 +79,7 @@ import {
 } from "./InspirationCatalogProvider";
 import { TravelDatePicker } from "./TravelDatePicker";
 import { TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
+import { ExportGuidebookButton } from "./plan-output/ExportGuidebookButton";
 import { TripOverview } from "./plan-output/TripOverview";
 import { WeatherStrip } from "./WeatherStrip";
 
@@ -2038,6 +2039,7 @@ function ItineraryScreen({
           ) : null}
         </div>
         <div className="result-hero-actions">
+          {detailedTrip ? <ExportGuidebookButton plan={executionPlan} /> : null}
           <Button variant="outline" size="sm" onClick={onEdit}>
             调整条件
           </Button>
