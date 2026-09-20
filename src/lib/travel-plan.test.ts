@@ -13,13 +13,13 @@ import type {
 type Equal<Left, Right> = [Left] extends [Right] ? ([Right] extends [Left] ? true : false) : false;
 type Expect<Value extends true> = Value;
 
-type NavigationIsRequiredNullable = Expect<Equal<TripTimelineNode["navigation"], string | null>>;
-type PaceReusesSharedType = Expect<Equal<TripMeta["pace"], Pace>>;
-type TransportPreferenceReusesSharedType = Expect<
+type _NavigationIsRequiredNullable = Expect<Equal<TripTimelineNode["navigation"], string | null>>;
+type _PaceReusesSharedType = Expect<Equal<TripMeta["pace"], Pace>>;
+type _TransportPreferenceReusesSharedType = Expect<
   Equal<TripMeta["transportPreference"], TransportPreference>
 >;
-type RouteModeReusesSharedType = Expect<Equal<RouteSegment["mode"], TransportMode>>;
-type NodeTransportModeReusesSharedType = Expect<
+type _RouteModeReusesSharedType = Expect<Equal<RouteSegment["mode"], TransportMode>>;
+type _NodeTransportModeReusesSharedType = Expect<
   Equal<TripTimelineNode["transportMode"], TransportMode | undefined>
 >;
 
@@ -80,4 +80,24 @@ test("uses shared semantic types and explicit null navigation fallback", () => {
   assert.deepEqual(meta, { pace: "balanced", transportPreference: "speed" });
   assert.equal(routeMode, "drive");
   assert.equal(nodeMode, "train");
+});
+
+test("derives rooms from adults and preserves budget ranges", () => {
+  const budget = estimateBudget({
+    totalBudget: 3000,
+    travelers: { adults: 3, children: 2 },
+    transport: { min: 1000, max: 1600 },
+    lodging: { min: 900, max: 1100 },
+    food: { min: 500, max: 700 },
+    tickets: { min: 200, max: 300 },
+    other: { min: 200, max: 300 },
+  });
+
+  assert.equal(budget.rooms, 2);
+  assert.equal(budget.transport.min, 1000);
+  assert.equal(budget.transport.max, 1600);
+  assert.equal(budget.totalMin, 2800);
+  assert.equal(budget.totalMax, 4000);
+  assert.equal(budget.overBudget, 1000);
+  assert.equal(budget.remaining, 0);
 });

@@ -4,20 +4,32 @@ import type { TransportMode } from "./route-planner";
 export type TransportPreference = Extract<TransportMode, "economy" | "balanced" | "speed">;
 export type Travelers = { adults: number; children: number };
 
-export type BudgetCategory = { amount: number; ratio: number };
+export type BudgetRange = { min: number; max: number };
+export type BudgetCategoryInput = number | BudgetRange;
+export type BudgetCategory = BudgetRange & { amount: number; ratio: number };
+export type RoadTripBudgetDetails = {
+  energy: BudgetRange;
+  toll: BudgetRange;
+  holidayFreeAdjustment: BudgetRange;
+  parking: BudgetRange;
+};
 
 export type TripBudget = {
   totalBudget: number;
   estimatedTotal: number;
+  totalMin: number;
+  totalMax: number;
   remaining: number;
   overBudget: number;
   perPersonBudget: number;
   perPersonEstimated: number;
+  rooms: number;
   transport: BudgetCategory;
   lodging: BudgetCategory;
   food: BudgetCategory;
   tickets: BudgetCategory;
   other: BudgetCategory;
+  roadTrip?: RoadTripBudgetDetails;
 };
 
 export type AttractionScale = "small" | "medium" | "large" | "multi-day";
@@ -132,11 +144,11 @@ export type TripPlan = {
 export type BudgetInput = {
   totalBudget: number;
   travelers: Travelers;
-  transport: number;
-  lodging: number;
-  food: number;
-  tickets: number;
-  other?: number;
+  transport: BudgetCategoryInput;
+  lodging: BudgetCategoryInput;
+  food: BudgetCategoryInput;
+  tickets: BudgetCategoryInput;
+  other?: BudgetCategoryInput;
 };
 
 export type CostEstimateInput = {
@@ -188,22 +200,70 @@ export function normalizeRadarScores(scores: number[], minimumSpread = 60): numb
   return scores.map((score) => expandClusteredScore(score, min, max));
 }
 
-function category(amount: number, estimatedTotal: number): BudgetCategory {
+function normalizeBudgetRange(value: BudgetCategoryInput, label: string): BudgetRange {
+  const range =
+    typeof value === "number" ? { min: value, max: value } : { min: value?.min, max: value?.max };
+  if (
+    !Number.isFinite(range.min) ||
+    !Number.isFinite(range.max) ||
+    range.min < 0 ||
+    range.max < range.min
+  ) {
+    throw new Error(`${label}必须是有效且不小于 0 的 min/max 区间`);
+  }
+  return { min: range.min, max: range.max };
+}
+
+function rangeMidpoint(range: BudgetRange): number {
+  return (range.min + range.max) / 2;
+}
+
+function category(range: BudgetRange, estimatedTotal: number): BudgetCategory {
+  const amount = rangeMidpoint(range);
   return {
+    ...range,
     amount,
     ratio: estimatedTotal === 0 ? 0 : amount / estimatedTotal,
   };
 }
 
+export function calculateRooms(adults: number): number {
+  if (!Number.isFinite(adults) || adults < 0) {
+    throw new Error("成人数必须是非负数字");
+  }
+  return adults <= 2 ? 1 : Math.ceil(adults / 2);
+}
+
 export function estimateBudget(input: BudgetInput): TripBudget;
 export function estimateBudget(input: CostEstimateInput): CostEstimate;
 export function estimateBudget(input: BudgetInput | CostEstimateInput): TripBudget | CostEstimate {
-  const subtotal = input.transport + input.lodging + input.food + input.tickets;
-  const other = input.other ?? Math.max(200, Math.round(subtotal * 0.1));
-  const estimatedTotal = subtotal + other;
+  const transport = normalizeBudgetRange(input.transport, "交通预算");
+  const lodging = normalizeBudgetRange(input.lodging, "住宿预算");
+  const food = normalizeBudgetRange(input.food, "餐饮预算");
+  const tickets = normalizeBudgetRange(input.tickets, "门票预算");
+  const subtotalMidpoint =
+    rangeMidpoint(transport) +
+    rangeMidpoint(lodging) +
+    rangeMidpoint(food) +
+    rangeMidpoint(tickets);
+  const defaultOther = Math.max(200, Math.round(subtotalMidpoint * 0.1));
+  const other =
+    input.other === undefined
+      ? { min: defaultOther, max: defaultOther }
+      : normalizeBudgetRange(input.other, "其他预算");
+  const totalMin = transport.min + lodging.min + food.min + tickets.min + other.min;
+  const totalMax = transport.max + lodging.max + food.max + tickets.max + other.max;
+  const estimatedTotal = rangeMidpoint({ min: totalMin, max: totalMax });
 
   if (!("totalBudget" in input) || !("travelers" in input)) {
-    return { ...input, other, total: estimatedTotal };
+    return {
+      transport: rangeMidpoint(transport),
+      lodging: rangeMidpoint(lodging),
+      food: rangeMidpoint(food),
+      tickets: rangeMidpoint(tickets),
+      other: rangeMidpoint(other),
+      total: estimatedTotal,
+    };
   }
 
   const travelerCount = input.travelers.adults + input.travelers.children;
@@ -212,14 +272,18 @@ export function estimateBudget(input: BudgetInput | CostEstimateInput): TripBudg
   return {
     totalBudget: input.totalBudget,
     estimatedTotal,
-    remaining: Math.max(0, input.totalBudget - estimatedTotal),
-    overBudget: Math.max(0, estimatedTotal - input.totalBudget),
+    totalMin,
+    totalMax,
+    // 超支风险以区间上限判断，避免中值低估实际超支。
+    remaining: Math.max(0, input.totalBudget - totalMax),
+    overBudget: Math.max(0, totalMax - input.totalBudget),
     perPersonBudget: perPerson(input.totalBudget),
     perPersonEstimated: perPerson(estimatedTotal),
-    transport: category(input.transport, estimatedTotal),
-    lodging: category(input.lodging, estimatedTotal),
-    food: category(input.food, estimatedTotal),
-    tickets: category(input.tickets, estimatedTotal),
+    rooms: calculateRooms(input.travelers.adults),
+    transport: category(transport, estimatedTotal),
+    lodging: category(lodging, estimatedTotal),
+    food: category(food, estimatedTotal),
+    tickets: category(tickets, estimatedTotal),
     other: category(other, estimatedTotal),
   };
 }

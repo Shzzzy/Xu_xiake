@@ -1,8 +1,10 @@
-import { estimateBudget } from "./travel-plan.ts";
+import { calculateRooms, estimateBudget } from "./travel-plan.ts";
 import type {
   AttractionAudit,
   AttractionScale,
+  BudgetRange,
   CostEstimateInput,
+  RoadTripBudgetDetails,
   Travelers,
   TripBudget,
   TripClosing,
@@ -16,6 +18,54 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const MODERN_CLOSING =
   "山河万里，行者常新；愿每一次出发，都成为丈量祖国大好河山的珍贵记忆。每一个认真行走的人，都是当代徐霞客。";
 
+export type DeepSeekErrorCode =
+  | "missing_api_key"
+  | "timeout"
+  | "network"
+  | "http_error"
+  | "invalid_json"
+  | "invalid_content"
+  | "schema_error";
+
+export type DeepSeekService = "audit" | "budget" | "daily-summary" | "closing";
+
+export class DeepSeekTravelError extends Error {
+  readonly code: DeepSeekErrorCode;
+  readonly service: DeepSeekService;
+  readonly status?: number;
+
+  constructor(
+    code: DeepSeekErrorCode,
+    service: DeepSeekService,
+    message: string,
+    options: { status?: number; cause?: unknown } = {},
+  ) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "DeepSeekTravelError";
+    this.code = code;
+    this.service = service;
+    this.status = options.status;
+  }
+}
+
+export type VerifiedQuote = {
+  id: string;
+  quote: string;
+  source: string;
+};
+
+export const verifiedQuotes = [
+  {
+    id: "xuxiake-youtiantai-opening",
+    quote: "癸丑之三月晦，自宁海出西门。云散日朗，人意山光，俱有喜态。",
+    source: "《徐霞客游记·游天台山日记》",
+  },
+] as const satisfies readonly VerifiedQuote[];
+
+const verifiedQuoteById = new Map<string, VerifiedQuote>(
+  verifiedQuotes.map((entry) => [entry.id, entry] as const),
+);
+
 export type DeepSeekTravelDeps = {
   /** 仅在服务端传入或由 DEEPSEEK_API_KEY 提供。 */
   apiKey?: string;
@@ -28,6 +78,8 @@ export type DeepSeekTravelDeps = {
   maxTokens?: number;
   temperature?: number;
 };
+
+export type VehicleEnergy = "fuel" | "electric" | "hybrid" | null;
 
 export type DeepSeekMessage = {
   role: "system" | "user";
@@ -75,7 +127,9 @@ export type BudgetEstimateInput = {
   pace?: Pace;
   transportPreference?: string;
   interests?: string[];
-  vehicleEnergy?: string;
+  vehicleEnergy?: VehicleEnergy;
+  selfDrive?: boolean;
+  transportMode?: string;
   lodgingLevel?: "economy" | "comfort" | "premium" | string;
   baseline?: Partial<CostEstimateInput>;
   transport?: number;
@@ -197,13 +251,41 @@ function parseJsonObject(content: string): JsonRecord {
   return readRecord(value);
 }
 
+function asDeepSeekError(
+  error: unknown,
+  service: DeepSeekService,
+  fallbackCode: DeepSeekErrorCode,
+  message: string,
+): DeepSeekTravelError {
+  if (error instanceof DeepSeekTravelError) return error;
+  return new DeepSeekTravelError(fallbackCode, service, message, { cause: error });
+}
+
+function requestFailureCode(error: unknown): DeepSeekErrorCode {
+  if (
+    error instanceof DOMException &&
+    (error.name === "TimeoutError" || error.name === "AbortError")
+  ) {
+    return "timeout";
+  }
+  if (error instanceof Error && error.name === "TimeoutError") return "timeout";
+  return "network";
+}
+
 async function requestDeepSeekJson(
+  service: DeepSeekService,
   context: string,
   messages: DeepSeekMessage[],
   deps: DeepSeekTravelDeps,
   defaultMaxTokens: number,
 ): Promise<JsonRecord> {
-  const config = resolveDeepSeekConfig(deps);
+  let config: ReturnType<typeof resolveDeepSeekConfig>;
+  try {
+    config = resolveDeepSeekConfig(deps);
+  } catch (error) {
+    throw asDeepSeekError(error, service, "missing_api_key", `DeepSeek ${context}缺少配置`);
+  }
+
   const body: Record<string, unknown> = {
     model: config.model,
     messages,
@@ -211,28 +293,50 @@ async function requestDeepSeekJson(
     max_tokens: config.maxTokens ?? defaultMaxTokens,
     temperature: config.temperature ?? 0.2,
   };
-  const response = await config.fetchImpl(`${config.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(config.timeoutMs),
-  });
+
+  let response: Response;
+  try {
+    response = await config.fetchImpl(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(config.timeoutMs),
+    });
+  } catch (error) {
+    const code = requestFailureCode(error);
+    throw new DeepSeekTravelError(
+      code,
+      service,
+      code === "timeout" ? `DeepSeek ${context}超时` : `DeepSeek ${context}网络请求失败`,
+      { cause: error },
+    );
+  }
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(
+    let message = "";
+    try {
+      message = await response.text();
+    } catch {
+      // HTTP 状态仍足以提供可识别错误，正文读取失败不覆盖状态信息。
+    }
+    throw new DeepSeekTravelError(
+      "http_error",
+      service,
       `DeepSeek ${context}失败（${response.status}）${message ? `：${message.slice(0, 180)}` : ""}`,
+      { status: response.status },
     );
   }
 
   let payload: unknown;
   try {
     payload = await response.json();
-  } catch {
-    throw new Error(`DeepSeek ${context}未返回有效 JSON`);
+  } catch (error) {
+    throw new DeepSeekTravelError("invalid_json", service, `DeepSeek ${context}未返回有效 JSON`, {
+      cause: error,
+    });
   }
 
   const choices = isRecord(payload) && Array.isArray(payload.choices) ? payload.choices : [];
@@ -241,9 +345,19 @@ async function requestDeepSeekJson(
     isRecord(firstChoice) && isRecord(firstChoice.message) ? firstChoice.message : null;
   const content = message?.content;
   if (typeof content !== "string" || !content.trim()) {
-    throw new Error(`DeepSeek ${context}未返回内容`);
+    throw new DeepSeekTravelError("invalid_content", service, `DeepSeek ${context}未返回内容`);
   }
-  return parseJsonObject(content);
+
+  try {
+    return parseJsonObject(content);
+  } catch (error) {
+    throw new DeepSeekTravelError(
+      "invalid_json",
+      service,
+      `DeepSeek ${context}未返回有效 JSON 对象`,
+      { cause: error },
+    );
+  }
 }
 
 function jsonMessages(input: {
@@ -271,11 +385,31 @@ function jsonMessages(input: {
 function normalizeAttractionEntries(input: AttractionAuditInput): AttractionAuditEntry[] {
   const raw = input.attractions ?? input.places ?? [];
   if (!Array.isArray(raw)) throw new Error("attractions 必须是数组");
+  const names = new Set<string>();
   return raw.map((entry) => {
-    if (typeof entry === "string") return readString(entry, "景点名称");
-    const record = readRecord(entry);
-    return { ...record, name: readString(record.name, "景点名称") } as AttractionAuditEntry;
+    const normalized =
+      typeof entry === "string"
+        ? entry
+        : ({
+            ...readRecord(entry),
+            name: readString(readRecord(entry).name, "景点名称"),
+          } as AttractionAuditEntry);
+    const name = typeof normalized === "string" ? normalized : normalized.name;
+    if (names.has(name)) throw new Error(`景点名称必须唯一：${name}`);
+    names.add(name);
+    return normalized;
   });
+}
+
+function assertScaleDuration(scale: AttractionScale, durationHours: number): void {
+  const matches =
+    (scale === "small" && durationHours >= 1 && durationHours <= 2) ||
+    (scale === "medium" && durationHours >= 3 && durationHours <= 5) ||
+    (scale === "large" && durationHours >= 6 && durationHours <= 10) ||
+    (scale === "multi-day" && durationHours >= 48);
+  if (!matches) {
+    throw new Error(`景点规模 ${scale} 与建议停留时长 ${durationHours} 不一致`);
+  }
 }
 
 function parseAttractionAudit(value: unknown): AttractionAudit {
@@ -284,10 +418,13 @@ function parseAttractionAudit(value: unknown): AttractionAudit {
   if (!isAttractionScale(scale)) {
     throw new Error("景点规模必须是 small、medium、large 或 multi-day");
   }
+  const durationHours = readNumber(record.durationHours, "建议停留时长", 0);
+  if (durationHours <= 0) throw new Error("建议停留时长必须大于 0");
+  assertScaleDuration(scale, durationHours);
 
   return {
     scale,
-    durationHours: readNumber(record.durationHours, "建议停留时长", Number.EPSILON),
+    durationHours,
     physical: readScore(record.physical, "体力强度"),
     childFit: readScore(record.childFit, "亲子适宜度"),
     weatherSensitivity: readScore(record.weatherSensitivity, "天气敏感度"),
@@ -297,138 +434,171 @@ function parseAttractionAudit(value: unknown): AttractionAudit {
   };
 }
 
-function matchAuditsToNames(
-  rawAudits: unknown[],
-  expectedNames: readonly string[],
-): AttractionAudit[] {
-  const parsed = rawAudits.map((rawAudit) => {
-    const record = readRecord(rawAudit);
-    const modelName = readOptionalString(record.name);
-    return {
-      name: modelName,
-      audit: parseAttractionAudit(rawAudit),
-    };
-  });
-
-  if (expectedNames.length === 0) return parsed.map((entry) => entry.audit);
-
-  const allNamed = parsed.every((entry) => Boolean(entry.name));
-  if (allNamed) {
-    const queues = new Map<string, AttractionAudit[]>();
-    for (const entry of parsed) {
-      const key = entry.name as string;
-      queues.set(key, [...(queues.get(key) ?? []), entry.audit]);
-    }
-    return expectedNames.map((name) => {
-      const queue = queues.get(name);
-      const audit = queue?.shift();
-      if (!audit) throw new Error(`DeepSeek 景点审核结果缺少「${name}」`);
-      return audit;
-    });
-  }
-
-  if (parsed.length !== expectedNames.length) {
-    throw new Error("DeepSeek 景点审核结果数量与输入不一致");
-  }
-  return parsed.map((entry) => entry.audit);
-}
-
 export function parseAttractionAudits(
   value: unknown,
   expectedNames: readonly string[] = [],
 ): AttractionAudit[] {
   const record = readRecord(value);
-  const rawAudits = record.audits ?? record.attractions;
+  const rawAudits = record.audits;
   if (!Array.isArray(rawAudits)) throw new Error("DeepSeek 景点审核结果缺少 audits 数组");
-  return matchAuditsToNames(rawAudits, expectedNames);
+
+  const parsed = rawAudits.map((rawAudit) => {
+    const auditRecord = readRecord(rawAudit);
+    return {
+      name: readString(auditRecord.name, "景点名称"),
+      audit: parseAttractionAudit(rawAudit),
+    };
+  });
+
+  const responseNames = new Set<string>();
+  for (const entry of parsed) {
+    if (responseNames.has(entry.name)) {
+      throw new Error(`景点名称必须唯一：${entry.name}`);
+    }
+    responseNames.add(entry.name);
+  }
+
+  if (expectedNames.length === 0) return parsed.map((entry) => entry.audit);
+
+  const expected = new Set<string>();
+  for (const name of expectedNames) {
+    if (expected.has(name)) throw new Error(`景点名称必须唯一：${name}`);
+    expected.add(name);
+  }
+  if (parsed.length !== expectedNames.length) {
+    throw new Error("DeepSeek 景点审核结果数量与输入不一致，不允许额外或缺失记录");
+  }
+  const byName = new Map(parsed.map((entry) => [entry.name, entry.audit] as const));
+  return expectedNames.map((name) => {
+    const audit = byName.get(name);
+    if (!audit) throw new Error(`DeepSeek 景点审核结果缺少「${name}」`);
+    return audit;
+  });
 }
 
 export async function auditAttractionsWithDeepSeek(
   input: AttractionAuditInput,
   deps: DeepSeekTravelDeps = {},
 ): Promise<AttractionAudit[]> {
-  const attractions = normalizeAttractionEntries(input);
-  if (attractions.length === 0) return [];
+  try {
+    const attractions = normalizeAttractionEntries(input);
+    if (attractions.length === 0) return [];
 
-  const result = await requestDeepSeekJson(
-    "景点审核",
-    jsonMessages({
-      system:
-        "你是严谨的中国旅行景点审核员。按每个地点的实际游览特征判断规模、建议停留时长、体力强度、亲子适宜度、天气敏感度、时间成本和拥挤程度。五项评分使用 0 到 100 的数字。不得把估算写成实时数据。",
-      task: "批量审核景点并保持输入顺序",
-      schema: {
-        audits: [
-          {
-            name: "必须与输入景点名称完全一致",
-            scale: "small | medium | large | multi-day",
-            durationHours: "建议停留小时数，数字",
-            physical: "0 到 100",
-            childFit: "0 到 100",
-            weatherSensitivity: "0 到 100",
-            timeCost: "0 到 100",
-            crowding: "0 到 100",
-            bestTime: "推荐游玩时段",
-          },
-        ],
-      },
-      payload: {
-        destination: input.destination,
-        region: input.region,
-        startDate: input.startDate,
-        days: input.days,
-        travelers: input.travelers,
-        pace: input.pace,
-        interests: input.interests,
-        notes: input.notes,
-        attractions,
-      },
-    }),
-    deps,
-    8_000,
-  );
+    const result = await requestDeepSeekJson(
+      "audit",
+      "景点审核",
+      jsonMessages({
+        system:
+          "你是严谨的中国旅行景点审核员。按每个地点的实际游览特征判断规模、建议停留时长、体力强度、亲子适宜度、天气敏感度、时间成本和拥挤程度。五项评分使用 0 到 100 的数字。不得把估算写成实时数据。",
+        task: "批量审核景点并保持输入顺序",
+        schema: {
+          audits: [
+            {
+              name: "必填且必须与输入景点名称完全一致，不能重复或额外增加",
+              scale: "small | medium | large | multi-day",
+              durationHours:
+                "建议停留小时数；small 为 1-2，medium 为 3-5，large 为 6-10，multi-day 不少于 48",
+              physical: "0 到 100",
+              childFit: "0 到 100",
+              weatherSensitivity: "0 到 100",
+              timeCost: "0 到 100",
+              crowding: "0 到 100",
+              bestTime: "推荐游玩时段",
+            },
+          ],
+        },
+        payload: {
+          destination: input.destination,
+          region: input.region,
+          startDate: input.startDate,
+          days: input.days,
+          travelers: input.travelers,
+          pace: input.pace,
+          interests: input.interests,
+          notes: input.notes,
+          attractions,
+        },
+      }),
+      deps,
+      8_000,
+    );
 
-  return parseAttractionAudits(
-    result,
-    attractions.map((entry) => (typeof entry === "string" ? entry : entry.name)),
-  );
+    return parseAttractionAudits(
+      result,
+      attractions.map((entry) => (typeof entry === "string" ? entry : entry.name)),
+    );
+  } catch (error) {
+    throw asDeepSeekError(error, "audit", "schema_error", "DeepSeek 景点审核结果不符合结构");
+  }
 }
 
-function readCategoryAmount(value: unknown, label: string): number {
-  if (typeof value === "number") return readNumber(value, label, 0) as number;
-  const record = readRecord(value);
-  if (record.amount !== undefined) return readNumber(record.amount, label, 0);
+function normalizeVehicleEnergy(value: unknown): VehicleEnergy {
+  if (value === undefined || value === null) return null;
+  if (value === "fuel" || value === "electric" || value === "hybrid") return value;
+  throw new Error("vehicleEnergy 必须是 fuel、electric、hybrid 或 null");
+}
 
-  const minimum = record.min ?? record.minimum;
-  const maximum = record.max ?? record.maximum;
-  if (minimum !== undefined || maximum !== undefined) {
-    const min = readNumber(minimum, `${label}最小值`, 0);
-    const max = readNumber(maximum, `${label}最大值`, 0);
-    if (max < min) throw new Error(`${label}最大值不能小于最小值`);
-    return (min + max) / 2;
+function resolveBudgetMode(input: BudgetEstimateInput): {
+  selfDrive: boolean;
+  vehicleEnergy: VehicleEnergy;
+} {
+  const vehicleEnergy = normalizeVehicleEnergy(input.vehicleEnergy);
+  const explicitDrive =
+    input.selfDrive === true ||
+    input.transportMode === "drive" ||
+    input.transportPreference === "drive";
+  const explicitNonDrive =
+    input.selfDrive === false ||
+    (input.transportMode !== undefined && input.transportMode !== "drive") ||
+    (input.transportPreference !== undefined && input.transportPreference !== "drive");
+
+  if (explicitNonDrive && vehicleEnergy !== null) {
+    throw new Error("非自驾行程不得提供 vehicleEnergy");
   }
+  return {
+    selfDrive: explicitDrive || (!explicitNonDrive && vehicleEnergy !== null),
+    vehicleEnergy,
+  };
+}
 
-  throw new Error(`${label}缺少金额或估算区间`);
+function readBudgetRange(value: unknown, label: string): BudgetRange {
+  if (!isRecord(value)) throw new Error(`${label}必须使用 min 和 max 区间结构`);
+  const record = value;
+  if (!("min" in record) || !("max" in record)) {
+    throw new Error(`${label}必须使用 min 和 max 区间结构`);
+  }
+  const min = readNumber(record.min, `${label}最小值`, 0);
+  const max = readNumber(record.max, `${label}最大值`, 0);
+  if (max < min) throw new Error(`${label}最大值不能小于最小值`);
+  return { min, max };
 }
 
 function findBudgetCategories(value: unknown): JsonRecord {
   const root = readRecord(value);
-  const candidates = [root.categories, root.budget, root.estimates, root];
-  const categoryKeys = ["transport", "lodging", "food", "tickets", "other"];
+  const categories = root.categories;
+  if (!isRecord(categories)) throw new Error("DeepSeek 预算结果缺少 categories 对象");
+  return categories;
+}
 
-  for (const candidate of candidates) {
-    if (!isRecord(candidate)) continue;
-    if (categoryKeys.some((key) => candidate[key] !== undefined)) return candidate;
-    const nested = candidate.categories;
-    if (isRecord(nested)) return nested;
+function parseRoadTripDetails(value: unknown): RoadTripBudgetDetails {
+  const root = readRecord(value);
+  const details = root.roadTrip;
+  if (!isRecord(details)) {
+    throw new Error("自驾预算必须包含 roadTrip 的能源费、高速费、节假日免费调整和停车费");
   }
-
-  throw new Error("DeepSeek 预算结果缺少分类金额");
+  return {
+    energy: readBudgetRange(details.energy, "能源费"),
+    toll: readBudgetRange(details.toll, "高速费"),
+    holidayFreeAdjustment: readBudgetRange(details.holidayFreeAdjustment, "节假日免费调整"),
+    parking: readBudgetRange(details.parking, "停车费"),
+  };
 }
 
 export function parseBudgetEstimate(
   value: unknown,
   totalBudget: number,
   travelers: Travelers,
+  options: { selfDrive?: boolean } = {},
 ): TripBudget {
   if (!Number.isFinite(totalBudget) || totalBudget < 0) {
     throw new Error("totalBudget 必须是非负数字");
@@ -443,144 +613,141 @@ export function parseBudgetEstimate(
   }
 
   const categories = findBudgetCategories(value);
-  const transport = readCategoryAmount(categories.transport, "交通预算");
-  const lodging = readCategoryAmount(categories.lodging, "住宿预算");
-  const food = readCategoryAmount(categories.food, "餐饮预算");
-  const tickets = readCategoryAmount(categories.tickets, "门票预算");
-  const other = readCategoryAmount(categories.other, "其他预算");
-
-  return estimateBudget({
+  const budget = estimateBudget({
     totalBudget,
     travelers,
-    transport,
-    lodging,
-    food,
-    tickets,
-    other,
+    transport: readBudgetRange(categories.transport, "交通预算"),
+    lodging: readBudgetRange(categories.lodging, "住宿预算"),
+    food: readBudgetRange(categories.food, "餐饮预算"),
+    tickets: readBudgetRange(categories.tickets, "门票预算"),
+    other: readBudgetRange(categories.other, "其他预算"),
   });
+
+  if (!options.selfDrive) return budget;
+  return { ...budget, roadTrip: parseRoadTripDetails(value) };
 }
 
 export async function estimateBudgetWithDeepSeek(
   input: BudgetEstimateInput,
   deps: DeepSeekTravelDeps = {},
 ): Promise<TripBudget> {
-  const result = await requestDeepSeekJson(
-    "预算估算",
-    jsonMessages({
-      system:
-        "你是中国旅行预算估算员。只给出全团费用估算区间和分类金额，不查询实时票价。儿童默认与成人同住，交通、住宿、餐饮、门票和其他必须分别给出 min、max 人民币金额。所有费用均为估算。",
-      task: "估算旅行预算",
-      schema: {
-        categories: {
-          transport: { min: "人民币数字", max: "人民币数字" },
-          lodging: { min: "人民币数字", max: "人民币数字" },
-          food: { min: "人民币数字", max: "人民币数字" },
-          tickets: { min: "人民币数字", max: "人民币数字" },
-          other: { min: "人民币数字", max: "人民币数字" },
+  try {
+    const mode = resolveBudgetMode(input);
+    const rooms = calculateRooms(input.travelers.adults);
+    const budgetPolicy = {
+      adults: input.travelers.adults,
+      children: input.travelers.children,
+      rooms,
+      childDiscountRule:
+        "儿童不增加房间；儿童门票和交通按景区及承运方优惠规则估算，未核实的免费或半价不得默认计入；餐饮可按儿童食量适度下调。",
+      roomRule: "adults<=2 时为 1 间；adults>2 时 rooms=ceil(adults/2)；children 不增加房间数。",
+    };
+    const roadTripSchema = mode.selfDrive
+      ? {
+          roadTrip: {
+            energy: { min: "人民币数字", max: "人民币数字" },
+            toll: { min: "人民币数字", max: "人民币数字" },
+            holidayFreeAdjustment: { min: "人民币数字", max: "人民币数字" },
+            parking: { min: "人民币数字", max: "人民币数字" },
+          },
+        }
+      : {};
+
+    const result = await requestDeepSeekJson(
+      "budget",
+      "预算估算",
+      jsonMessages({
+        system:
+          "你是中国旅行预算估算员。只返回 categories 的 min/max 人民币区间，不接受纯数字或 amount。必须遵守输入的成人数、儿童数、儿童优惠规则和房间数规则。自驾时必须额外返回 roadTrip 的能源费、高速费、节假日免费调整和停车费；非自驾不得返回 roadTrip 或这些自驾费用字段。所有费用均为估算。",
+        task: "估算旅行预算",
+        schema: {
+          categories: {
+            transport: { min: "人民币数字", max: "人民币数字" },
+            lodging: { min: "人民币数字", max: "人民币数字" },
+            food: { min: "人民币数字", max: "人民币数字" },
+            tickets: { min: "人民币数字", max: "人民币数字" },
+            other: { min: "人民币数字", max: "人民币数字" },
+          },
+          ...roadTripSchema,
         },
-      },
-      payload: input,
-    }),
-    deps,
-    3_000,
-  );
+        payload: {
+          ...input,
+          vehicleEnergy: mode.vehicleEnergy,
+          selfDrive: mode.selfDrive,
+          budgetPolicy,
+        },
+      }),
+      deps,
+      3_000,
+    );
 
-  return parseBudgetEstimate(result, input.totalBudget, input.travelers);
+    return parseBudgetEstimate(result, input.totalBudget, input.travelers, {
+      selfDrive: mode.selfDrive,
+    });
+  } catch (error) {
+    throw asDeepSeekError(error, "budget", "schema_error", "DeepSeek 预算结果不符合结构");
+  }
 }
 
-function readSummaryItems(value: unknown, label: string): string[] {
+function readStringArray(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`${label}必须是非空数组`);
+    throw new Error(`${label}必须是非空字符串数组`);
   }
-
-  return value.map((item, index) => {
-    if (typeof item === "string") return readString(item, `${label}[${index}]`);
-    const record = readRecord(item);
-    const direct = readOptionalString(record.text ?? record.content ?? record.description);
-    if (direct) return direct;
-    const title = readOptionalString(record.title);
-    const detail = readOptionalString(record.detail);
-    if (title && detail) return `${title}：${detail}`;
-    throw new Error(`${label}[${index}]必须是文字或带 text/content/title 的对象`);
-  });
-}
-
-function unwrapPayload(value: unknown, keys: string[]): JsonRecord {
-  const root = readRecord(value);
-  for (const key of keys) {
-    if (isRecord(root[key])) return root[key] as JsonRecord;
-  }
-  return root;
+  return value.map((item, index) => readString(item, `${label}[${index}]`));
 }
 
 export function parseDaySummary(value: unknown): DaySummary {
-  const record = unwrapPayload(value, ["daySummary", "summary", "day"]);
-  const purpose = readString(record.purpose ?? record.todayPurpose ?? record.objective, "今日目的");
-  const highlights = readSummaryItems(
-    record.highlights ?? record.keyPoints ?? record.coreHighlights,
-    "核心重点",
-  );
-  const cautions = readSummaryItems(record.cautions ?? record.notices, "注意事项");
-  return { purpose, highlights, cautions };
+  const record = readRecord(value);
+  return {
+    purpose: readString(record.purpose, "purpose"),
+    highlights: readStringArray(record.highlights, "highlights"),
+    cautions: readStringArray(record.cautions, "cautions"),
+  };
 }
 
 export async function buildDaySummaryWithDeepSeek(
   input: DaySummaryInput,
   deps: DeepSeekTravelDeps = {},
 ): Promise<DaySummary> {
-  const result = await requestDeepSeekJson(
-    "每日总结",
-    jsonMessages({
-      system:
-        "你是中文旅行路书编辑。今日目的写一段完整总结；核心重点按 1、2、3 写成字符串数组；注意事项写 2 到 5 条并优先说明安全、天气、拥堵和体力问题。不得编造实时开放信息。",
-      task: "生成每日总结",
-      schema: {
-        purpose: "今日目的完整段落",
-        highlights: ["核心重点，包含景点介绍、游览重点和历史背景"],
-        cautions: ["按重要性排序的注意事项"],
-      },
-      payload: input,
-    }),
-    deps,
-    4_000,
-  );
+  try {
+    const result = await requestDeepSeekJson(
+      "daily-summary",
+      "每日总结",
+      jsonMessages({
+        system:
+          "你是中文旅行路书编辑。只返回 purpose、highlights、cautions 三个字段。今日目的写一段完整总结；核心重点按 1、2、3 写成字符串数组；注意事项写 2 到 5 条并优先说明安全、天气、拥堵和体力问题。不得编造实时开放信息。",
+        task: "生成每日总结",
+        schema: {
+          purpose: "今日目的完整段落",
+          highlights: ["核心重点字符串，包含景点介绍、游览重点和历史背景"],
+          cautions: ["按重要性排序的注意事项字符串"],
+        },
+        payload: input,
+      }),
+      deps,
+      4_000,
+    );
 
-  return parseDaySummary(result);
+    return parseDaySummary(result);
+  } catch (error) {
+    throw asDeepSeekError(error, "daily-summary", "schema_error", "DeepSeek 每日总结不符合结构");
+  }
 }
-
-function isVerifiableSource(source: string): boolean {
-  const normalized = source.trim();
-  if (normalized.length < 2) return false;
-  return !/^(未知|无|暂无|不适用|待核验|AI|模型|网络来源)$/i.test(normalized);
-}
-
-function composeClosingMessage(record: JsonRecord): string | undefined {
-  const direct = readOptionalString(record.message);
-  const fragments = [record.summary, record.evaluation, record.encouragement]
-    .map((value) => readOptionalString(value))
-    .filter((value): value is string => Boolean(value));
-  const combined = [direct, ...fragments].filter((value): value is string => Boolean(value));
-  return combined.length > 0 ? combined.join(" ") : undefined;
-}
-
 export function parseTripClosing(value: unknown): TripClosing {
   const record = readRecord(value);
-  const quote = readOptionalString(record.quote) ?? null;
-  const source = readOptionalString(record.source) ?? null;
-  const message = composeClosingMessage(record);
-  if (!message) throw new Error("结束语缺少 message");
-
-  if (quote && (!source || !isVerifiableSource(source))) {
-    throw new Error("历史引用必须提供可核验来源");
+  if ("quote" in record || "source" in record) {
+    throw new Error("结束语只能返回 quoteId，不得返回模型自编 quote 或 source");
   }
-
-  if (!quote) return { quote: null, source: null, message };
-  return { quote, source, message };
+  const message = readString(record.message, "message");
+  const quoteId = readOptionalString(record.quoteId);
+  const verified = quoteId ? verifiedQuoteById.get(quoteId) : undefined;
+  if (!verified) return { quote: null, source: null, message };
+  return { quote: verified.quote, source: verified.source, message };
 }
 
 function modernClosingMessage(value: unknown, input: TripClosingInput): string {
   const record = isRecord(value) ? value : {};
-  const modelMessage = composeClosingMessage(record);
+  const modelMessage = readOptionalString(record.message);
   const destination = input.destination?.trim();
   const routeSummary = destination
     ? `这段${input.days ? `${input.days}天` : ""}旅程从${input.origin?.trim() || "出发地"}走向${destination}，在行走中感受山河辽阔与人文温度。`
@@ -593,24 +760,31 @@ export async function buildTripClosingWithDeepSeek(
   input: TripClosingInput,
   deps: DeepSeekTravelDeps = {},
 ): Promise<TripClosing> {
-  const result = await requestDeepSeekJson(
-    "旅行结束语",
-    jsonMessages({
-      system:
-        "你是中文旅行路书编辑。结束语必须包含路线总结、旅行评价、继续出发的鼓励和寄语。历史引用只有在 quote 非空且 source 是真实可核验的篇名或来源时才能填写；没有可靠来源时 quote 和 source 必须为 null，并改用现代语言寄语。",
-      task: "生成旅行回望与结束语",
-      schema: {
-        quote: "可核验原文，无法核验时为 null",
-        source: "篇名或可核验来源，quote 为 null 时为 null",
-        message: "路线总结、旅行评价、鼓励和现代寄语",
-      },
-      payload: input,
-    }),
-    deps,
-    3_000,
-  );
-
+  let result: JsonRecord = {};
   try {
+    result = await requestDeepSeekJson(
+      "closing",
+      "旅行结束语",
+      jsonMessages({
+        system:
+          "你是中文旅行路书编辑。只返回 quoteId 和 message。quoteId 只能从输入 allowedQuotes 中选择 id；没有合适引用时必须返回 null。禁止返回 quote 原文、source 或自行编造引用。message 必须包含路线总结、旅行评价、继续出发的鼓励和现代寄语。",
+        task: "生成旅行回望与结束语",
+        schema: {
+          quoteId: "allowedQuotes 中的 id 或 null",
+          message: "路线总结、旅行评价、鼓励和现代寄语",
+        },
+        payload: {
+          ...input,
+          allowedQuotes: verifiedQuotes.map((entry) => ({
+            id: entry.id,
+            quote: entry.quote,
+            source: entry.source,
+          })),
+        },
+      }),
+      deps,
+      3_000,
+    );
     return parseTripClosing(result);
   } catch {
     return { quote: null, source: null, message: modernClosingMessage(result, input) };
