@@ -26,6 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const APP_ENV_REL_PATH = ".grok/app-env.json";
+export const DOTENV_REL_PATH = ".env";
 
 const VITE_PREFIX = "VITE_";
 
@@ -114,13 +115,21 @@ function localCommand(command) {
   return existsSync(localBin) ? localBin : command;
 }
 
+function loadDotEnv(root) {
+  const path = join(root, DOTENV_REL_PATH);
+  if (!existsSync(path)) return;
+  process.loadEnvFile(path);
+}
+
 function main(argv) {
   const [command, ...args] = argv;
   if (!command) {
     console.error("usage: node scripts/with-app-env.mjs <command> [args…]");
     process.exit(2);
   }
-  const env = mergeAppEnv(readAppEnv(projectRoot()), process.env);
+  const root = projectRoot();
+  loadDotEnv(root);
+  const env = mergeAppEnv(readAppEnv(root), process.env);
   const child = spawn(localCommand(command), args, {
     stdio: "inherit",
     env,

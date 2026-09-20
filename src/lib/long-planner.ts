@@ -26,6 +26,7 @@ export type LongPlanInput = {
   region: string;
   days: number;
   seedPlaces: string[];
+  route?: RoutePlan;
 };
 
 const longPlanSchema = z.object({
@@ -172,17 +173,23 @@ export function buildLongPlannerMessages(input: LongPlannerPromptInput) {
 
 export function buildFallbackLongPlan(input: LongPlanInput): LongPlan {
   const ranges = createLongPhaseRanges(input.days);
-  const places = input.seedPlaces.filter(Boolean);
+  const routeStops = input.route
+    ? [...input.route.waypoints, input.route.destination].filter(Boolean)
+    : [];
+  const places = [...new Set([...routeStops, ...input.seedPlaces.filter(Boolean)])];
   const phases = ranges.map((range, index) => {
     const start = places.length > 0 ? Math.floor((index * places.length) / ranges.length) : 0;
-    const selected = places.slice(start, Math.max(start + 2, start + 1)).slice(0, 3);
-    const region = selected[0] ? `${selected[0]}及周边` : input.region;
+    const selected = places.slice(start, Math.min(places.length, start + 3));
+    const region = selected.length > 0 ? selected.slice(0, 2).join("、") : input.region;
+    const routeText = input.route
+      ? input.route.legs.map((leg) => `${leg.from}→${leg.to}`).join("；")
+      : "城市间以高铁、包车或航班衔接";
     return {
       ...range,
       title: `${input.destinationName} · 第 ${index + 1} 阶段`,
       region,
       highlights: selected.length > 0 ? selected : [`${input.destinationName}核心区域`, "在地体验"],
-      transport: "城市间以高铁、包车或航班衔接，具体班次以实际查询为准。",
+      transport: `${routeText}；具体班次以实际查询为准。`,
       notes: "长线行程建议预留机动日，出发前复核天气、交通和景区开放信息。",
     };
   });

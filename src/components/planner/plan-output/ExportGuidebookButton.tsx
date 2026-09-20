@@ -1,98 +1,88 @@
-import { useState } from "react";
-import { useServerFn } from "@tanstack/react-start";
-import { Download, LoaderCircle } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { AlertCircle, Download, LoaderCircle, RefreshCw } from "lucide-react";
 import type { TripPlan } from "@/lib/travel-plan";
-import { exportGuidebook } from "@/lib/travel-plan.functions";
+import { Button } from "@/components/ui/button";
+import { isGuidebookReady } from "@/lib/guidebook-generation";
+import { useGuidebookExport } from "./use-guidebook-export";
 
 type ExportGuidebookButtonProps = {
   plan: TripPlan;
 };
 
-function downloadUrl(url: string, filename: string) {
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-}
-
-function base64ToPdf(base64: string): Blob {
-  const binary = window.atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return new Blob([bytes], { type: "application/pdf" });
-}
-
-function openPrintableHtml(html: string, htmlFilename: string) {
-  const printWindow = window.open("", "_blank");
-  if (printWindow) {
-    printWindow.opener = null;
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.addEventListener(
-      "load",
-      () => {
-        printWindow.focus();
-        printWindow.print();
-      },
-      { once: true },
-    );
-    return;
-  }
-
-  const url = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
-  downloadUrl(url, htmlFilename);
-  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-  toast.info("浏览器拦截了打印页，已改为下载可打印 HTML。");
-}
-
+/**
+ * 路书导出按钮。
+ *
+ * PDF 在结果页出现后自动预生成，按钮旁的进度条反映准备状态；只有文件已经
+ * 就绪时才允许下载，避免用户拿到空白或残缺的 PDF。
+ */
 export function ExportGuidebookButton({ plan }: ExportGuidebookButtonProps) {
-  const exportGuidebookFn = useServerFn(exportGuidebook);
-  const [exporting, setExporting] = useState(false);
-
-  const handleExport = async () => {
-    setExporting(true);
-    try {
-      const result = await exportGuidebookFn({ data: { plan } });
-
-      if (result.status === "ok") {
-        const url = URL.createObjectURL(base64ToPdf(result.pdfBase64));
-        downloadUrl(url, result.filename);
-        window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-        toast.success("路书 PDF 已开始下载");
-        return;
-      }
-
-      toast.info(result.message);
-      const routeName = plan.meta.title.trim() || plan.meta.destination.trim() || "旅行路书";
-      openPrintableHtml(result.html, `${routeName}_guidebook.html`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "路书导出失败，请稍后重试。");
-    } finally {
-      setExporting(false);
-    }
-  };
+  const { state, preparedPdf, regenerate, download } = useGuidebookExport(plan);
+  const ready = isGuidebookReady(state) && Boolean(preparedPdf);
 
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      disabled={exporting}
-      onClick={() => void handleExport()}
-    >
-      {exporting ? (
-        <LoaderCircle className="size-4 animate-spin" />
+    <div className="flex min-w-[240px] flex-col items-stretch gap-2">
+      {ready ? (
+        <Button type="button" size="sm" onClick={download}>
+          <Download className="size-4" />
+          下载路书 PDF
+        </Button>
       ) : (
-        <Download className="size-4" />
+        <Button type="button" variant="outline" size="sm" disabled>
+          {state.stage === "failed" ? (
+            <AlertCircle className="size-4" />
+          ) : (
+            <LoaderCircle className="size-4 animate-spin" />
+          )}
+          {state.stage === "failed" ? "路书生成失败" : "正在生成路书"}
+        </Button>
       )}
-      {exporting ? "正在生成" : "导出路书"}
-    </Button>
+
+      <div className="rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-left">
+        <div className="flex items-center justify-between gap-3 text-[11px] leading-5 text-white/80">
+          <span className="truncate">{state.message ?? getStageLabel(state.stage)}</span>
+          <span className="font-mono">{state.progress}%</span>
+        </div>
+        <div
+          className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/20"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={state.progress}
+          aria-label="路书生成进度"
+        >
+          <div
+            className="h-full rounded-full bg-white transition-[width] duration-500"
+            style={{ width: `${state.progress}%` }}
+          />
+        </div>
+        {state.stage === "failed" ? (
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span className="text-[11px] leading-5 text-white/70">
+              可重试生成，或先查看行程页。
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={regenerate}>
+              <RefreshCw className="size-3.5" />
+              重试
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
+}
+
+function getStageLabel(stage: string): string {
+  switch (stage) {
+    case "preparing":
+      return "正在整理地图与每日资料";
+    case "rendering":
+      return "正在排版每日行程页面";
+    case "finalizing":
+      return "正在生成 PDF 文件";
+    case "ready":
+      return "路书已就绪";
+    case "failed":
+      return "路书生成失败";
+    default:
+      return "等待生成路书";
+  }
 }

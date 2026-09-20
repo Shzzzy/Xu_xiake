@@ -439,11 +439,19 @@ export async function exportGuidebookForTest(
   plan: TripPlan,
   dependencies: GuidebookExportDependencies,
 ): Promise<GuidebookExportResult> {
+  const startedAt = Date.now();
   const preparedPlan = await prepareGuidebookPlan(plan, dependencies);
+  const preparedAt = Date.now();
   const html = renderGuidebookHtml(preparedPlan);
 
   try {
     const pdf = await dependencies.renderPdf(html);
+    if (process.env.GUIDEBOOK_EXPORT_TIMING === "1") {
+      const finishedAt = Date.now();
+      console.info(
+        `[guidebook] image=${preparedAt - startedAt}ms html=${finishedAt - preparedAt}ms bytes=${pdf.byteLength}`,
+      );
+    }
     return {
       status: "ok",
       pdfBase64: Buffer.from(pdf).toString("base64"),
