@@ -115,6 +115,27 @@ export const tripPlanSchema = z.object({
     returnMode: z.enum(["fast", "scenic"]).nullable(),
   }),
   days: z.array(tripDaySchema),
+  // 骨架校验违规需穿透到路书预览/PDF，保证结果页提示条与路书执行提醒同源。
+  violations: z
+    .array(
+      z.object({
+        code: z.enum([
+          "TIME_WINDOW",
+          "DAY_COVERAGE",
+          "MISSING_SLOT",
+          "OVER_BUDGET",
+          "OVER_CAPACITY",
+          "PACE_EXCEEDED",
+          "UNKNOWN_PLACE",
+          "TRANSPORT_CONFLICT",
+        ]),
+        day: z.number().int().positive().optional(),
+        nodeIndex: z.number().int().nonnegative().optional(),
+        message: z.string(),
+        detail: z.object({ expected: z.string(), actual: z.string() }),
+      }),
+    )
+    .optional(),
   closing: z.object({
     quote: z.string().nullable(),
     source: z.string().nullable(),

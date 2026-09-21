@@ -1,7 +1,7 @@
 import { z } from "zod";
-import type { Pace, WeatherDay } from "./planner";
-import type { RoutePlan, TransportMode, TravelStyle } from "./route-planner";
-import { violationSummary, type PlanViolation } from "./plan-validator";
+import type { Pace, WeatherDay } from "./planner.ts";
+import type { RoutePlan, TransportMode, TravelStyle } from "./route-planner.ts";
+import { violationSummary, type PlanViolation } from "./plan-validator.ts";
 
 export type PlannerSkeletonNodeType =
   "transport" | "transfer" | "attraction" | "meal" | "rest" | "hotel" | "night-activity";

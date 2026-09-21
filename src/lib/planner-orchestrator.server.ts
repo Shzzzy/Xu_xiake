@@ -5,17 +5,17 @@ import {
   type PlannerSkeleton,
   type PlannerSkeletonDay,
   type SkeletonInstructionInput,
-} from "./planner-skeleton";
-import { validateSkeleton, type PlanViolation } from "./plan-validator";
+} from "./planner-skeleton.ts";
+import { validateSkeleton, type PlanViolation } from "./plan-validator.ts";
 import {
   buildDayCopyInstruction,
   parsePlannerDayCopy,
   type PlannerDayCopy,
-} from "./planner-day-copy";
+} from "./planner-day-copy.ts";
 import { buildTripClosingWithDeepSeek, type TripClosingInput } from "./travel-plan.server.ts";
 import type { TripClosing } from "./travel-plan.ts";
-import type { Pace, WeatherDay } from "./planner";
-import type { RoutePlan, TransportMode, TravelStyle } from "./route-planner";
+import type { Pace, WeatherDay } from "./planner.ts";
+import type { RoutePlan, TransportMode, TravelStyle } from "./route-planner.ts";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-chat";

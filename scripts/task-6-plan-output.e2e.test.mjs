@@ -71,7 +71,12 @@ async function waitForServer(url, child, output) {
 async function startDevServer(port) {
   const child = spawn(npmCommand(), ["run", "dev", "--", "--port", String(port), "--strictPort"], {
     cwd: ROOT,
-    env: { ...process.env, BROWSER_SMOKE_TIMEOUT_MS: String(START_TIMEOUT_MS) },
+    env: {
+      ...process.env,
+      BROWSER_SMOKE_TIMEOUT_MS: String(START_TIMEOUT_MS),
+      // 强制走真实管家排程链路，而不是依赖外部碰巧设置的环境变量。
+      BUTLER_PLANNER: "1",
+    },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     shell: process.platform === "win32",
@@ -157,7 +162,17 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
     await page.getByRole("button", { name: "生成旅行规划" }).click();
 
     // 结果页现在就是路书：页面逐页流式到达，全部就绪后才允许导出 PDF。
-    await page.getByText("逐页生成你的路书").waitFor({ state: "visible", timeout: 60_000 });
+    // 真实链路必须配置 DEEPSEEK/TAVILY；缺配置时不允许把回退行程当成通过。
+    const configMissing = page.getByText(/缺少配置/);
+    try {
+      await page.getByText("逐页生成你的路书").waitFor({ state: "visible", timeout: 60_000 });
+    } catch (error) {
+      if ((await configMissing.count()) > 0) {
+        const message = await configMissing.first().innerText();
+        throw new Error(`真实管家链路缺少配置：${message}`);
+      }
+      throw error;
+    }
     await page
       .getByText(/路书已就绪 · 共 \d+ 页/)
       .waitFor({ state: "visible", timeout: 180_000 });
@@ -172,6 +187,45 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
     await guidebookFrame.getByText("全团总预算").first().waitFor({ state: "visible", timeout: 30_000 });
     // 结尾走并行生成的 AI 回望（服务端拼路线总结/评价/寄语），不再是旧的兜底文案。
     await guidebookFrame.getByText(/路线总结/).first().waitFor({ state: "visible", timeout: 30_000 });
+
+    // 摘要与逐日页必须同源：从路书总览页「核心亮点」读取景点名，
+    // 摘要至少包含其中一个，且每个亮点都出现在每日导航/时间轴页里。
+    const overviewPage = guidebookFrame.locator('section.page[data-page="overview"]');
+    await overviewPage.getByText("核心亮点").waitFor({ state: "visible", timeout: 30_000 });
+    const highlightNames = (await overviewPage.locator("ul.highlight-list li span").allInnerTexts())
+      .map((name) => name.replace(/\s+/g, ""))
+      .filter(Boolean);
+    assert.ok(highlightNames.length > 0, "路书总览页应包含核心亮点列表");
+
+    const summary = (await page.locator("section.result-hero p").first().innerText()).replace(
+      /\s+/g,
+      "",
+    );
+    const summaryHighlights = highlightNames.filter((name) => summary.includes(name));
+    assert.ok(
+      summaryHighlights.length > 0,
+      `摘要至少应包含一个核心亮点，亮点：${highlightNames.join("、")}，摘要：${summary}`,
+    );
+
+    const dayPages = guidebookFrame.locator(
+      "section.page.day-map-page, section.page.day-timeline-page",
+    );
+    const dayTexts = (await dayPages.allInnerTexts()).map((text) => text.replace(/\s+/g, ""));
+    for (const name of highlightNames) {
+      assert.ok(
+        dayTexts.some((text) => text.includes(name)),
+        `核心亮点「${name}」应出现在每日页时间轴/内容中`,
+      );
+    }
+
+    // 若结果页出现「未满足你设定的条件」提示条，路书里也必须渲染对应执行提醒。
+    const constraintBanner = page.getByText(/未满足你设定的条件/);
+    if ((await constraintBanner.count()) > 0) {
+      assert.ok(
+        (await guidebookFrame.getByText(/未满足条件/).count()) > 0,
+        "提示条与路书执行提醒必须一致",
+      );
+    }
 
     const exportButton = page.getByRole("button", { name: "生成路书 PDF" });
     await exportButton.waitFor({ state: "visible", timeout: 30_000 });

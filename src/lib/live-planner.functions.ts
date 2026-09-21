@@ -1,4 +1,4 @@
-import { createServerFn } from "@tanstack/react-start";
+import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
 import { z } from "zod";
 import {
   buildPlannerMessages,
@@ -8,25 +8,42 @@ import {
   type DiscoverySourceGroup,
   type DiscoveredStop,
   type SearchResult,
-} from "./live-planner";
-import { searchTavily } from "./tavily.server";
-import { buildLongPlannerMessages, parseLongPlanJson, type LongPlan } from "./long-planner";
-import { buildTripClosingWithDeepSeek } from "./travel-plan.server.ts";
+} from "./live-planner.ts";
+import { buildLongPlannerMessages, parseLongPlanJson, type LongPlan } from "./long-planner.ts";
 import type { TripClosing } from "./travel-plan.ts";
-import type { Pace, WeatherDay } from "./planner";
-import type { RoutePlan } from "./route-planner";
-import {
-  discoverRoutePlaces,
-  routeNodesNeedingDiscovery,
-  type RouteDiscoveryNotice,
-} from "./place-discovery.server";
+import type { Pace, WeatherDay } from "./planner.ts";
+import type { RoutePlan } from "./route-planner.ts";
+import type { RouteDiscoveryNotice } from "./place-discovery.server.ts";
 import type { PlacePersistenceRepository } from "./place-discovery.ts";
-import { planWithButler, type ButlerPlanInput } from "./planner-orchestrator.server.ts";
+import type { ButlerPlanInput } from "./planner-orchestrator.server.ts";
 import type { PlannerSkeleton } from "./planner-skeleton.ts";
 import type { PlannerDayCopy } from "./planner-day-copy.ts";
 import type { PlanViolation } from "./plan-validator.ts";
 
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+
+/** 服务端专属模块统一通过 server-only 闭包按需加载，避免 client 构建被 import-protection 拦截。 */
+const loadTavily = createServerOnlyFn(async () => {
+  const { searchTavily } = await import("./tavily.server.ts");
+  return searchTavily;
+});
+
+const loadPlaceDiscovery = createServerOnlyFn(async () => {
+  const { discoverRoutePlaces, routeNodesNeedingDiscovery } = await import(
+    "./place-discovery.server.ts"
+  );
+  return { discoverRoutePlaces, routeNodesNeedingDiscovery };
+});
+
+const loadTripClosing = createServerOnlyFn(async () => {
+  const { buildTripClosingWithDeepSeek } = await import("./travel-plan.server.ts");
+  return buildTripClosingWithDeepSeek;
+});
+
+const loadButler = createServerOnlyFn(async () => {
+  const { planWithButler } = await import("./planner-orchestrator.server.ts");
+  return planWithButler;
+});
 
 export type DiscoveryNotice = RouteDiscoveryNotice;
 
@@ -167,7 +184,8 @@ function readLiveEnv(
   return process.env[key];
 }
 
-function failedDiscoveryNotices(route: RoutePlan): DiscoveryNotice[] {
+async function failedDiscoveryNotices(route: RoutePlan): Promise<DiscoveryNotice[]> {
+  const { routeNodesNeedingDiscovery } = await loadPlaceDiscovery();
   return routeNodesNeedingDiscovery(route, new Set(), Number.POSITIVE_INFINITY).map(
     (inputName) => ({
       inputName,
@@ -316,6 +334,7 @@ export const generateLongItinerary = createServerFn({ method: "POST" })
     let discoveries: DiscoveryNotice[] = [];
     let discoveredStops: DiscoveredStop[] = [];
     try {
+      const { discoverRoutePlaces } = await loadPlaceDiscovery();
       const discovery = await discoverRoutePlaces({
         route: data.route,
         deepseekKey,
@@ -328,7 +347,7 @@ export const generateLongItinerary = createServerFn({ method: "POST" })
         candidatePlaces: [],
       });
     } catch {
-      discoveries = failedDiscoveryNotices(data.route);
+      discoveries = await failedDiscoveryNotices(data.route);
     }
 
     const plan = await planLongTripWithDeepSeek({
@@ -365,6 +384,7 @@ async function runLegacyPlan(
   const fetchImpl = deps.fetchImpl ?? fetch;
 
   // 结尾只依赖路线与节奏，不等每日正文，所以和主行程同时发出，不占关键路径。
+  const buildTripClosingWithDeepSeek = await loadTripClosing();
   const closingPromise = buildTripClosingWithDeepSeek(
     {
       origin: input.route.origin,
@@ -446,6 +466,7 @@ async function runButlerPlan(
     candidates,
   };
 
+  const planWithButler = await loadButler();
   const result = await planWithButler(butlerInput, {
     apiKey: context.deepseekKey,
     baseUrl: context.baseUrl,
@@ -502,6 +523,7 @@ export async function runLivePlannerWith(
   let discoverySourceGroups: DiscoverySourceGroup[] = [];
   let discoveredStops: DiscoveredStop[] = [];
   try {
+    const { discoverRoutePlaces } = await loadPlaceDiscovery();
     const discovery = await discoverRoutePlaces({
       route: input.route,
       deepseekKey,
@@ -516,7 +538,7 @@ export async function runLivePlannerWith(
       candidatePlaces: discovery.candidatePlaces,
     });
   } catch {
-    discoveries = failedDiscoveryNotices(input.route);
+    discoveries = await failedDiscoveryNotices(input.route);
   }
 
   const queries = [
@@ -525,6 +547,7 @@ export async function runLivePlannerWith(
     `${input.destination.region} 一日游 景点`,
   ];
   const tavilyUrl = readLiveEnv(deps, "TAVILY_SEARCH_URL")?.trim();
+  const searchTavily = await loadTavily();
   const searchBatches = await Promise.all(
     queries.map((query) => searchTavily(tavilyKey, query, tavilyUrl, fetchImpl)),
   );
