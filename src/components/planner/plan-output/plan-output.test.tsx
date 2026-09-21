@@ -370,7 +370,7 @@ test("页面 checksum 必须匹配实际 HTML 的 SHA-256", async () => {
   assert.equal(await verifyGuidebookPageChecksum(html, "wrong-checksum"), false);
 });
 
-test("checksum 校验失败会抛出可见错误并停止页面处理", async () => {
+test("checksum 校验门槛失败会抛出错误供组件停止处理", async () => {
   await assert.rejects(
     () => assertGuidebookPageChecksum("<article>页面</article>", "wrong-checksum"),
     /checksum|校验失败/,
