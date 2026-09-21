@@ -2468,3 +2468,26 @@
     width: 100%;
   }
 }
+
+
+/* 路书预览只保留外层滚动条，内部 iframe 不显示原生滚动条。 */
+.guidebook-preview-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--v-accent) 44%, transparent) transparent;
+}
+
+.guidebook-preview-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 0;
+}
+
+.guidebook-preview-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.guidebook-preview-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--v-accent) 38%, transparent);
+  background-clip: padding-box;
+}

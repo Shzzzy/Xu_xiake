@@ -60,6 +60,8 @@ export function GuidebookPreview({ plan }: { plan: TripPlan }) {
       const nextScale = width > 0 ? Math.min(1, width / PAPER_WIDTH_PX) : 1;
       frame.style.width = `${PAPER_WIDTH_PX}px`;
       frame.style.transformOrigin = "top left";
+      frame.style.marginLeft = `${Math.max(0, (width - PAPER_WIDTH_PX * nextScale) / 2)}px`;
+      frame.style.overflow = "hidden";
       frame.style.transform = `scale(${nextScale})`;
       if (contentHeight > 0) {
         frame.style.height = `${contentHeight}px`;
@@ -199,11 +201,12 @@ export function GuidebookPreview({ plan }: { plan: TripPlan }) {
         />
       </div>
 
-      <div ref={shellRef} className="relative w-full overflow-y-auto" style={{ height: "min(78vh, 900px)", overflowAnchor: "none" }}>
+      <div ref={shellRef} className="guidebook-preview-scroll relative w-full overflow-y-auto" style={{ height: "min(78vh, 900px)", overflowAnchor: "none" }}>
         <iframe
           ref={frameRef}
           title="路书预览"
           sandbox="allow-same-origin"
+          scrolling="no"
           className="border-0 bg-transparent shadow-none"
           style={{ width: PAPER_WIDTH_PX, height: 0 }}
         />

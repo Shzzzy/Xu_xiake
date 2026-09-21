@@ -705,7 +705,7 @@ function fitMapZoom(points: readonly AmapCoordinate[]): number {
   const latitudeSpan = Math.max(...latitudes) - Math.min(...latitudes);
   const span = Math.max(longitudeSpan, latitudeSpan);
   if (!Number.isFinite(span) || span <= 0) return 10;
-  return Math.max(3, Math.min(11, Math.floor(Math.log2(360 / span))));
+  return Math.max(3, Math.min(10, Math.floor(Math.log2(360 / span)) - 1));
 }
 function buildStaticMapUrlSafely(
   input: Parameters<typeof buildStaticMapUrl>[0],
@@ -939,7 +939,7 @@ async function enrichDays(
                 longitude,
                 latitude,
               })),
-              zoom: 12,
+              zoom: fitMapZoom(points),
             },
             report,
           )

@@ -106,6 +106,9 @@ export function buildAmapDestinationCandidates(pois: AmapPoi[]): PlannerCandidat
   const seen = new Set<string>();
 
   for (const poi of pois) {
+    const poiType = poi.type.trim();
+    if (/住宿服务|餐饮服务|购物服务|生活服务|公司企业/u.test(poiType)) continue;
+
     const name = poi.name.trim();
     const key = normalizeName(name);
     if (!name || seen.has(key)) continue;
@@ -131,28 +134,35 @@ export async function searchAmapDestinationCandidates(input: {
   region?: string;
 }): Promise<PlannerCandidate[]> {
   if (!input.client) return [];
-  const city = input.destination.trim() || input.region?.trim();
-  if (!city) return [];
+  const destination = input.destination.trim();
+  if (!destination) return [];
+  const city = destination || input.region?.trim() || "";
 
-  const batches = await Promise.all(
-    AMAP_POI_QUERIES.map(async (keywords) => {
-      try {
-        const scoped = await input.client?.searchPoi({ keywords, city, pageSize: 10 });
-        if (scoped && scoped.length > 0) return scoped;
-      } catch {
-        // 城市名不是合法城市时继续做无城市范围搜索。
-      }
-      try {
-        // “江南水乡”“桂林与阳朔”这类目的地不是城市名，不能强制传 city。
-        return await input.client?.searchPoi({ keywords, pageSize: 10 });
-      } catch {
-        // 单个关键词失败不应阻断其余高德候选；最终由调用方决定是否使用本地 seed。
-        return [];
-      }
-    }),
-  );
+  const search = async (keywords: string, scopedCity?: string) => {
+    try {
+      return await input.client?.searchPoi({
+        keywords,
+        ...(scopedCity ? { city: scopedCity } : {}),
+        pageSize: 10,
+      });
+    } catch {
+      return [];
+    }
+  };
 
-  return buildAmapDestinationCandidates(batches.flatMap((batch) => batch ?? []));
+  const batches = await Promise.all([
+    search(destination, city),
+    search(destination),
+    ...AMAP_POI_QUERIES.map((keywords) => search(keywords, city)),
+    ...AMAP_POI_QUERIES.map((keywords) => search(destination + " " + keywords)),
+  ]);
+  const contextTokens = [destination, input.region?.trim() ?? ""].filter(Boolean);
+  const relevant = batches.flatMap((batch) => batch ?? []).filter((poi) => {
+    const text = poi.name + " " + poi.address + " " + poi.type;
+    return contextTokens.some((token) => text.includes(token));
+  });
+
+  return buildAmapDestinationCandidates(relevant);
 }
 
 function travelerCount(travelers: { adults: number; children: number }): number {
