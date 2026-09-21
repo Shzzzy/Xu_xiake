@@ -84,7 +84,7 @@ import {
   useInspirationCatalogRefresh,
 } from "./InspirationCatalogProvider";
 import { TravelDatePicker } from "./TravelDatePicker";
-import { TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
+import { applySuggestedBudget, TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
 import { WeatherStrip } from "./WeatherStrip";
 
 /**
@@ -634,7 +634,8 @@ function KnownPlanScreen({
 }: {
   variant: DesignVariant;
   brief: TripBrief;
-  onBrief: (brief: TripBrief) => void;
+  // 允许函数式更新，AI 推荐回写时基于最新 brief 合并，避免覆盖请求期间的编辑。
+  onBrief: (update: TripBrief | ((prev: TripBrief) => TripBrief)) => void;
   onBack: () => void;
   onSubmit: () => void;
 }) {
@@ -738,8 +739,11 @@ function KnownPlanScreen({
         },
       });
       if (result.status === "ok") {
-        onBrief({ ...brief, totalBudget: result.advice.total });
+        onBrief((prev) => applySuggestedBudget(prev, result.advice.total));
         toast.success(`建议预算 ¥${result.advice.total}`);
+      } else if (result.status === "needs_configuration") {
+        // 配置缺失属于部署问题，不把原始提示透给终端用户。
+        toast.error("预算建议暂时不可用，请稍后再试或手动填写预算");
       } else {
         toast.error(result.message);
       }

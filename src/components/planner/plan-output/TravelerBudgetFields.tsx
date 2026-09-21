@@ -7,6 +7,11 @@ const vehicleEnergyOptions: { id: VehicleEnergy; label: string }[] = [
   { id: "hybrid", label: "混动" },
 ];
 
+// 将 AI 建议的预算合并到最新 brief 上，避免用点击时的快照覆盖用户在请求期间的新编辑。
+export function applySuggestedBudget<T extends TripBrief>(prev: T, total: number): T {
+  return { ...prev, totalBudget: total };
+}
+
 export function TravelerBudgetFields({
   value,
   onChange,

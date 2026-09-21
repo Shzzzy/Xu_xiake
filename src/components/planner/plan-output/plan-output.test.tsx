@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { BudgetCategory, TimelineNodeType, TripBrief, TripPlan } from "../../../lib/travel-plan";
-import { TravelerBudgetFields } from "./TravelerBudgetFields";
+import { applySuggestedBudget, TravelerBudgetFields } from "./TravelerBudgetFields";
 import { TripOverview } from "./TripOverview";
 
 function category(amount: number, ratio: number): BudgetCategory {
@@ -196,4 +196,34 @@ test("全团总预算旁提供 AI 推荐按钮", () => {
     />,
   );
   assert.match(html, /AI 推荐/);
+});
+
+test("AI 建议预算合并最新 brief 并保留请求期间的编辑", () => {
+  const clicked: TripBrief = {
+    adults: 2,
+    children: 0,
+    totalBudget: 8000,
+    startTime: "09:00",
+    endTime: "18:00",
+    vehicleEnergy: null,
+  };
+
+  // 模拟父组件 setBrief 的函数式更新语义；非函数式更新直接判为错误。
+  let latest = clicked;
+  const setBrief = (update: TripBrief | ((prev: TripBrief) => TripBrief)) => {
+    if (typeof update !== "function") {
+      throw new Error("AI 建议回写必须使用函数式更新，否则会覆盖请求期间的编辑");
+    }
+    latest = update(latest);
+  };
+
+  // 用户在请求期间把成人数改成 4。
+  setBrief((prev) => ({ ...prev, adults: 4 }));
+  // 建议返回后回写预算，应基于最新状态合并。
+  setBrief((prev) => applySuggestedBudget(prev, 12000));
+
+  assert.equal(latest.adults, 4);
+  assert.equal(latest.children, 0);
+  assert.equal(latest.totalBudget, 12000);
+  assert.equal(latest.startTime, "09:00");
 });
