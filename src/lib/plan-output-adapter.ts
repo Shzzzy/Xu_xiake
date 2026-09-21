@@ -1,4 +1,7 @@
 import type { Destination } from "../data/planner-destinations.ts";
+import type { PlannerDayCopy } from "./planner-day-copy.ts";
+import type { PlanViolation } from "./plan-validator.ts";
+import type { PlannerSkeleton, PlannerSkeletonNode } from "./planner-skeleton.ts";
 import {
   classifyWeather,
   type Pace,
@@ -16,6 +19,7 @@ import {
   type TripClosing,
   type TripDay,
   type TripPlan,
+  type TransportPreference,
   type TripRoute,
   type TripTimelineNode,
 } from "./travel-plan.ts";
@@ -40,6 +44,37 @@ export type PlanOutputBuilderInput = {
   /** 旅行回望文案：由并行生成的 AI 结尾提供，缺省时退回确定性文案。 */
   closing?: TripClosing;
 };
+
+export type TripPlanFromSkeletonInput = {
+  skeleton: PlannerSkeleton;
+  dayCopy?: PlannerDayCopy[];
+  origin: string;
+  destination: Destination;
+  startDate: string;
+  travelers: Travelers;
+  totalBudget: number;
+  pace: Pace;
+  interests: string[];
+  roundTrip: boolean;
+  returnMode: ReturnMode;
+  routePlan: RoutePlan;
+  weather: WeatherDay[];
+  closing?: TripClosing;
+  violations?: PlanViolation[];
+  /** 文案生成失败的日期（day 序号），用于在路书上标注「本页分析未能生成」。 */
+  failedDays?: number[];
+  transportPreference: TransportPreference;
+};
+
+const PACE_LABELS: Record<Pace, string> = {
+  relaxed: "轻松",
+  balanced: "适中",
+  deep: "充实",
+};
+
+const DEFAULT_DAY_CAUTIONS = ["所有时间与费用均为估算，请以实际交通与景区开放情况为准。"] as const;
+
+const FAILED_ANALYSIS_CAUTION = "本页分析未能生成，已改用基础行程与本地提示。";
 
 const TRANSPORT_MINUTES: Record<TransportMode, number> = {
   economy: 45,
@@ -274,6 +309,136 @@ function buildBudgetFromDays(
     tickets: exact(costs.tickets),
     other: costs.other > 0 ? exact(costs.other) : undefined,
   });
+}
+
+function addDays(isoDate: string, offset: number): string {
+  const parsed = new Date(isoDate + "T00:00:00Z");
+  if (Number.isNaN(parsed.getTime())) return isoDate;
+  parsed.setUTCDate(parsed.getUTCDate() + offset);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function toTripTimelineNode(node: PlannerSkeletonNode): TripTimelineNode {
+  const mapped: TripTimelineNode = {
+    startTime: node.startTime,
+    endTime: node.endTime,
+    timeLabel: node.startTime + "–" + node.endTime,
+    type: node.type,
+    name: node.name,
+    estimatedCost: node.estimatedCost,
+    navigation: null,
+  };
+
+  if (node.location !== undefined) mapped.location = node.location;
+  if (node.transportMode !== undefined) mapped.transportMode = node.transportMode;
+  if (node.transportMinutes !== undefined) mapped.transportMinutes = node.transportMinutes;
+  if (node.stayMinutes !== undefined) mapped.stayMinutes = node.stayMinutes;
+  if (node.tips !== undefined) mapped.tips = node.tips;
+
+  return mapped;
+}
+
+function buildFallbackDayCopy(
+  day: PlannerSkeleton["days"][number],
+  pace: Pace,
+): Pick<PlannerDayCopy, "purpose" | "highlights" | "cautions"> {
+  const attractions = day.nodes.filter(
+    (node) => node.type === "attraction" || node.type === "night-activity",
+  );
+  const names = attractions.map((node) => node.name);
+  const paceLabel = PACE_LABELS[pace] ?? PACE_LABELS.balanced;
+
+  return {
+    purpose:
+      names.length > 0
+        ? "以" +
+          names.join("、") +
+          "为核心安排当天行程，按" +
+          paceLabel +
+          "节奏在游览、用餐与休息之间留出缓冲。"
+        : "当天没有安排核心景点，按" + paceLabel + "节奏保留自由活动与休整时间。",
+    highlights:
+      attractions.length > 0
+        ? attractions.map(
+            (node) =>
+              node.name +
+              "：" +
+              (node.tips?.trim() || "按当天节奏安排游览，留意现场开放与排队情况。"),
+          )
+        : ["自由活动：按天气和体力灵活安排，保留机动时间。"],
+    cautions: [
+      "按" + paceLabel + "节奏安排当天行程，可按实际体力增减停留时间。",
+      ...DEFAULT_DAY_CAUTIONS,
+    ],
+  };
+}
+
+/**
+ * 把管家生成的骨架、每日文案与路线数据组装为统一的 TripPlan。
+ * 文案失败只降级对应日期，不改变骨架中已经冻结的时间、节点与费用。
+ */
+export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): TripPlan {
+  const copyByDay = new Map((input.dayCopy ?? []).map((copy) => [copy.day, copy]));
+  const failedDays = new Set(input.failedDays ?? []);
+
+  const days = input.skeleton.days.map((skeletonDay, index) => {
+    const analysisFailed = failedDays.has(skeletonDay.day);
+    const copy = analysisFailed ? undefined : copyByDay.get(skeletonDay.day);
+    const fallback = buildFallbackDayCopy(skeletonDay, input.pace);
+    const nodes = skeletonDay.nodes.map(toTripTimelineNode);
+    const estimatedCost = nodes.reduce((sum, node) => sum + node.estimatedCost, 0);
+    const purpose = copy?.purpose.trim() ? copy.purpose : fallback.purpose;
+    const highlights = copy && copy.highlights.length > 0 ? copy.highlights : fallback.highlights;
+    const cautions = analysisFailed
+      ? [FAILED_ANALYSIS_CAUTION, ...fallback.cautions]
+      : copy && copy.cautions.length > 0
+        ? copy.cautions
+        : fallback.cautions;
+
+    const tripDay: TripDay = {
+      date: addDays(input.startDate, index),
+      theme: skeletonDay.theme,
+      nodes,
+      estimatedCost,
+      radar: { ...skeletonDay.radar },
+      purpose,
+      highlights,
+      cautions,
+    };
+    const weather = formatWeatherLabel(input.weather[index]);
+    if (weather !== undefined) tripDay.weather = weather;
+    if (analysisFailed) tripDay.analysisFailed = true;
+    if (copy && copy.history.length > 0) tripDay.history = copy.history;
+
+    return tripDay;
+  });
+
+  const plan: TripPlan = {
+    meta: {
+      title: input.skeleton.title,
+      origin: input.origin,
+      waypoints: input.routePlan.waypoints,
+      destination: input.destination.name,
+      startDate: input.startDate,
+      days: input.skeleton.days.length,
+      travelers: input.travelers,
+      perPersonBudget: Math.round(input.totalBudget / travelHeadcount(input.travelers)),
+      transportPreference: input.transportPreference,
+      pace: input.pace,
+      interests: input.interests,
+    },
+    budget: buildBudgetFromDays(days, input.totalBudget, input.travelers),
+    route: buildTripRoute(input.routePlan, input.roundTrip, input.returnMode),
+    days,
+    closing: input.closing ?? {
+      quote: null,
+      source: null,
+      message: "行程节点已按时间与预算展开，出发前请再核对天气、开放时间和交通班次。",
+    },
+  };
+  if (input.violations !== undefined) plan.violations = input.violations;
+
+  return plan;
 }
 
 export function buildTripPlanOutput(input: PlanOutputBuilderInput): TripPlan {

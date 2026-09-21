@@ -3,7 +3,10 @@ import test from "node:test";
 import { destinations } from "../data/planner-destinations.ts";
 import { buildRouteFallbackDays } from "./planner.ts";
 import { buildRoutePlan } from "./route-planner.ts";
-import { buildTripPlanOutput } from "./plan-output-adapter.ts";
+import { buildTripPlanFromSkeleton, buildTripPlanOutput } from "./plan-output-adapter.ts";
+import type { PlannerSkeleton } from "./planner-skeleton.ts";
+import type { PlannerDayCopy } from "./planner-day-copy.ts";
+import type { PlanViolation } from "./plan-validator.ts";
 
 function fixtureOutput() {
   const destination = destinations.find((item) => item.id === "huangshan") ?? destinations[0];
@@ -48,6 +51,152 @@ function fixtureOutput() {
   });
 }
 
+const skeletonDestination = destinations.find((item) => item.id === "huangshan") ?? destinations[0];
+const skeletonRoutePlan = buildRoutePlan({
+  origin: "上海",
+  destination: skeletonDestination.name,
+  waypoints: ["杭州"],
+  roundTrip: true,
+  returnMode: "fast",
+  defaultStyle: "direct",
+  legPreferences: {},
+});
+
+const skeleton: PlannerSkeleton = {
+  title: "黄山2日徽州山水古村行程",
+  summary: "用两天时间串联黄山与徽州古村。",
+  days: [
+    {
+      day: 1,
+      theme: "黄山主景区",
+      nodes: [
+        {
+          type: "attraction",
+          startTime: "09:00",
+          endTime: "12:00",
+          name: "黄山风景区",
+          location: "黄山",
+          stayMinutes: 180,
+          estimatedCost: 320,
+          tips: "上午上山，预留排队与索道时间。",
+        },
+      ],
+      radar: {
+        physical: 80,
+        childFit: 50,
+        weatherSensitivity: 75,
+        timeCost: 70,
+        crowding: 82,
+      },
+    },
+    {
+      day: 2,
+      theme: "徽州古村",
+      nodes: [
+        {
+          type: "attraction",
+          startTime: "09:30",
+          endTime: "12:30",
+          name: "宏村",
+          location: "黟县",
+          stayMinutes: 180,
+          estimatedCost: 180,
+          tips: "清晨入村，避开旅行团高峰。",
+        },
+      ],
+      radar: {
+        physical: 45,
+        childFit: 75,
+        weatherSensitivity: 55,
+        timeCost: 50,
+        crowding: 68,
+      },
+    },
+  ],
+};
+
+const skeletonInputFixture = {
+  skeleton,
+  origin: "上海",
+  destination: skeletonDestination,
+  startDate: "2026-09-20",
+  travelers: { adults: 2, children: 0 },
+  totalBudget: 5000,
+  pace: "balanced" as const,
+  interests: ["自然山水", "古村"],
+  roundTrip: true,
+  returnMode: "fast" as const,
+  routePlan: skeletonRoutePlan,
+  weather: [
+    { date: "2026-09-20", code: 1, tempMax: 27, tempMin: 19 },
+    { date: "2026-09-21", code: 3, tempMax: 26, tempMin: 18 },
+  ],
+  transportPreference: "balanced" as const,
+};
+
+const dayCopyFixture: PlannerDayCopy[] = [
+  {
+    day: 1,
+    purpose: "把主景区放在体力最好的上午。",
+    highlights: [
+      "黄山风景区：上午云海视野更稳定。",
+      "节奏留白：午后按体力休整。",
+      "轻装上山：减少台阶负担。",
+    ],
+    cautions: ["索道可能排队，请预留时间。", "山顶温差大，注意保暖。"],
+    history: [],
+  },
+];
+
+test("骨架转 TripPlan 保留模型给的时间与费用", () => {
+  const plan = buildTripPlanFromSkeleton(skeletonInputFixture);
+  const firstNode = plan.days[0]?.nodes[0];
+
+  assert.equal(firstNode?.startTime, "09:00");
+  assert.equal(firstNode?.timeLabel, "09:00–12:00");
+  assert.equal(firstNode?.navigation, null);
+  assert.equal(plan.days[0]?.estimatedCost, 320);
+  assert.equal(plan.days[0]?.date, "2026-09-20");
+  assert.equal(plan.days[1]?.date, "2026-09-21");
+  assert.equal(plan.meta.title, "黄山2日徽州山水古村行程");
+  assert.deepEqual(plan.days[0]?.radar, skeleton.days[0]?.radar);
+});
+
+test("骨架转 TripPlan 用文案覆盖每日分析", () => {
+  const plan = buildTripPlanFromSkeleton({ ...skeletonInputFixture, dayCopy: dayCopyFixture });
+  assert.equal(plan.days[0]?.purpose, "把主景区放在体力最好的上午。");
+  assert.equal(plan.days[0]?.highlights.length, 3);
+  assert.equal(plan.days[0]?.cautions.length, 2);
+});
+
+test("缺少文案时退回本地默认文案", () => {
+  const plan = buildTripPlanFromSkeleton(skeletonInputFixture);
+  assert.ok((plan.days[0]?.purpose ?? "").length > 0);
+  assert.ok((plan.days[0]?.cautions.length ?? 0) >= 2);
+});
+
+test("失败日与违规信息保留可识别标记并原样透传", () => {
+  const violations: PlanViolation[] = [
+    {
+      code: "PACE_EXCEEDED",
+      day: 1,
+      message: "第 1 天景点数量超过节奏限制",
+      detail: { expected: "≤3 个", actual: "4 个" },
+    },
+  ];
+  const plan = buildTripPlanFromSkeleton({
+    ...skeletonInputFixture,
+    dayCopy: [{ day: 1, purpose: "", highlights: [], cautions: [], history: [] }],
+    failedDays: [1],
+    violations,
+  });
+
+  assert.equal(plan.days[0]?.analysisFailed, true);
+  assert.equal(plan.days[1]?.analysisFailed, undefined);
+  assert.ok((plan.days[0]?.purpose ?? "").length > 0);
+  assert.equal(plan.violations, violations);
+});
+
 test("converts every route leg into a formal transfer timeline node", () => {
   const plan = fixtureOutput();
   const transfers = plan.days.flatMap((day) =>
@@ -78,8 +227,8 @@ test("reconciles budget categories, daily totals and timeline node costs", () =>
     plan.budget.tickets.amount +
     plan.budget.other.amount;
 
-  assert.equal(dailyTotal, nodeTotal);                                  // 节点合计不变
-  assert.equal(categoryTotal, dailyTotal + plan.budget.other.amount);   // 五类合计 = 节点 + 杂事开销
+  assert.equal(dailyTotal, nodeTotal); // 节点合计不变
+  assert.equal(categoryTotal, dailyTotal + plan.budget.other.amount); // 五类合计 = 节点 + 杂事开销
   assert.equal(plan.budget.estimatedTotal, categoryTotal);
   assert.equal(plan.budget.totalMin, categoryTotal);
   assert.equal(plan.budget.totalMax, categoryTotal);

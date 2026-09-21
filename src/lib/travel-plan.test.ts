@@ -4,10 +4,13 @@ import { estimateBudget, normalizeRadarScores, validateTripBrief } from "./trave
 import { createUnknownPlanDraft, updateUnknownPlanDraft } from "./unknown-plan-draft.ts";
 import type { Pace } from "./planner.ts";
 import type { TransportMode } from "./route-planner.ts";
+import type { PlanViolation } from "./plan-validator.ts";
 import type {
   RouteSegment,
   TransportPreference,
+  TripDay,
   TripMeta,
+  TripPlan,
   TripTimelineNode,
 } from "./travel-plan.ts";
 
@@ -124,6 +127,12 @@ type _TransportPreferenceReusesSharedType = Expect<
 type _RouteModeReusesSharedType = Expect<Equal<RouteSegment["mode"], TransportMode>>;
 type _NodeTransportModeReusesSharedType = Expect<
   Equal<TripTimelineNode["transportMode"], TransportMode | undefined>
+>;
+type _TripViolationsUseSharedType = Expect<
+  Equal<TripPlan["violations"], PlanViolation[] | undefined>
+>;
+type _TripDayAnalysisFailureIsExplicit = Expect<
+  Equal<TripDay["analysisFailed"], boolean | undefined>
 >;
 
 test("adds a ten percent other budget with a minimum of 200", () => {

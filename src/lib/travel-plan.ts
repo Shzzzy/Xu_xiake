@@ -1,5 +1,6 @@
 import type { Pace } from "./planner";
 import type { TransportMode } from "./route-planner";
+import type { PlanViolation } from "./plan-validator";
 
 export type TransportPreference = Extract<TransportMode, "economy" | "balanced" | "speed">;
 export type Travelers = { adults: number; children: number };
@@ -106,6 +107,8 @@ export type TripDay = {
   highlights: string[];
   cautions: string[];
   history?: TripHistoryNote[];
+  /** 当日 AI 文案分析失败；UI 可据此显示「本页分析未能生成」。 */
+  analysisFailed?: boolean;
 };
 
 export type RouteSegment = {
@@ -156,6 +159,8 @@ export type TripPlan = {
   route: TripRoute;
   days: TripDay[];
   closing: TripClosing;
+  /** 骨架校验违规原样保留，供结果页提示与后续修订使用。 */
+  violations?: PlanViolation[];
 };
 
 export type BudgetInput = {
