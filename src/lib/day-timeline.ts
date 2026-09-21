@@ -81,7 +81,7 @@ export function buildDayTimeline(input: TimelineBuildInput): PlannerSkeletonNode
     // 换乘属于交通总时长的一部分，单独列出但不会重复扣减容量。
     const transferMinutes = Math.min(TRANSFER_MINUTES, transportMinutes);
     const rideMinutes = transportMinutes - transferMinutes;
-    pushFixedSegment({ type: "transport", name: "交通出行" }, rideMinutes);
+    pushFixedSegment({ type: "transport", name: "交通出行", transportMinutes: rideMinutes }, rideMinutes);
     pushFixedSegment(
       {
         type: "transfer",
@@ -99,22 +99,20 @@ export function buildDayTimeline(input: TimelineBuildInput): PlannerSkeletonNode
 
   pushFixedSegment({ type: "rest", name: "必要休息" }, input.restMinutes);
 
-  if (remainingBeforeHotel >= MIN_ATTRACTION_MINUTES) {
-    for (const attraction of input.attractions) {
-      const requestedStay = normalizeMinutes(attraction.stayMinutes);
-      if (requestedStay <= 0) continue;
+  for (const attraction of input.attractions) {
+    // 只有剩余容量本身不足 75 分钟时才停止；景点时长较短仍可安排。
+    if (remainingBeforeHotel < MIN_ATTRACTION_MINUTES) break;
 
-      const stayMinutes = Math.min(requestedStay, remainingBeforeHotel);
-      if (stayMinutes < MIN_ATTRACTION_MINUTES) break;
+    const stayMinutes = normalizeMinutes(attraction.stayMinutes);
+    if (stayMinutes <= 0 || stayMinutes > remainingBeforeHotel) continue;
 
-      segments.push({
-        type: "attraction",
-        name: attraction.name,
-        minutes: stayMinutes,
-        stayMinutes,
-      });
-      remainingBeforeHotel -= stayMinutes;
-    }
+    segments.push({
+      type: "attraction",
+      name: attraction.name,
+      minutes: stayMinutes,
+      stayMinutes,
+    });
+    remainingBeforeHotel -= stayMinutes;
   }
 
   if (remainingBeforeHotel > 0) {

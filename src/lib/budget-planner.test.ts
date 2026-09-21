@@ -121,3 +121,134 @@ test("其他费用按前四项精确百分之十计算", () => {
   assert.equal(budget.other, 400.1);
   assert.equal(budget.estimatedTotal, 4_401.1);
 });
+
+test("交通优先使用传入价格引用的来源和置信度", () => {
+  const verifiedTransport: PriceReference = {
+    kind: "transport",
+    label: "航班真实报价",
+    amount: 1_000,
+    currency: "CNY",
+    source: "tavily:flight-price",
+    confidence: "verified",
+  };
+  const referenceTransport: PriceReference = {
+    kind: "transport",
+    label: "航班参考报价",
+    amount: 900,
+    currency: "CNY",
+    confidence: "reference",
+  };
+
+  const budget = calculateBudget({
+    travelers: { adults: 1, children: 0 },
+    days: 1,
+    transport: [
+      { ...outboundFlight, minimumPerPersonCost: 1, priceReference: verifiedTransport },
+      { ...returnFlight, minimumPerPersonCost: 1, priceReference: referenceTransport },
+    ],
+    ticketPrices: [],
+    lodgingPerNight: 0,
+    foodPerPersonPerDay: 0,
+  });
+
+  assert.equal(budget.transport, 1_900);
+  assert.equal(budget.provenance.transport[0]?.source, "tavily:flight-price");
+  assert.equal(budget.provenance.transport[0]?.confidence, "verified");
+  assert.equal(budget.provenance.transport[1]?.source, undefined);
+  assert.equal(budget.provenance.transport[1]?.confidence, "reference");
+  assert.match(budget.provenance.transport[1]?.label ?? "", /参考价/);
+});
+
+test("住宿和餐饮保留传入价格引用的来源与置信度", () => {
+  const lodgingPrice: PriceReference = {
+    kind: "lodging",
+    label: "酒店真实房价",
+    amount: 500,
+    currency: "CNY",
+    source: "tavily:hotel",
+    confidence: "verified",
+  };
+  const foodPrice: PriceReference = {
+    kind: "food",
+    label: "当地餐标参考",
+    amount: 150,
+    currency: "CNY",
+    source: "tavily:food",
+    confidence: "reference",
+  };
+
+  const budget = calculateBudget({
+    travelers: { adults: 1, children: 0 },
+    days: 2,
+    transport: [],
+    ticketPrices: [],
+    lodgingPerNight: lodgingPrice,
+    foodPerPersonPerDay: foodPrice,
+  });
+
+  assert.equal(budget.lodging, 500);
+  assert.equal(budget.food, 300);
+  assert.equal(budget.provenance.lodging.source, "tavily:hotel");
+  assert.equal(budget.provenance.lodging.confidence, "verified");
+  assert.equal(budget.provenance.food.source, "tavily:food");
+  assert.equal(budget.provenance.food.confidence, "reference");
+  assert.match(budget.provenance.food.label, /参考价/);
+});
+
+test("显式门票类别优先于名称关键词", () => {
+  const explicitAdult: PriceReference = {
+    kind: "ticket",
+    label: "名称像儿童票但显式为成人",
+    category: "adult",
+    amount: 200,
+    currency: "CNY",
+    source: "ticket-api",
+    confidence: "verified",
+  };
+  const explicitChild: PriceReference = {
+    kind: "ticket",
+    label: "名称像成人票但显式为儿童",
+    category: "child",
+    amount: 100,
+    currency: "CNY",
+    source: "ticket-api",
+    confidence: "verified",
+  };
+
+  const budget = calculateBudget({
+    travelers: { adults: 2, children: 1 },
+    days: 1,
+    transport: [],
+    ticketPrices: [explicitAdult, explicitChild],
+    lodgingPerNight: 0,
+    foodPerPersonPerDay: 0,
+  });
+
+  assert.equal(budget.tickets, 500);
+  assert.equal(budget.provenance.tickets[0]?.quantity, 2);
+  assert.equal(budget.provenance.tickets[1]?.quantity, 1);
+});
+
+test("统一票价按全部同行人数计算", () => {
+  const uniformTicket: PriceReference = {
+    kind: "ticket",
+    label: "统一票价联票",
+    category: "uniform",
+    amount: 80,
+    currency: "CNY",
+    source: "ticket-api",
+    confidence: "verified",
+  };
+
+  const budget = calculateBudget({
+    travelers: { adults: 2, children: 1 },
+    days: 1,
+    transport: [],
+    ticketPrices: [uniformTicket],
+    lodgingPerNight: 0,
+    foodPerPersonPerDay: 0,
+  });
+
+  assert.equal(budget.tickets, 240);
+  assert.equal(budget.provenance.tickets[0]?.quantity, 3);
+});

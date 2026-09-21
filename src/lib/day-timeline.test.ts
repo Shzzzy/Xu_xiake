@@ -89,9 +89,68 @@ test("交通用餐休息酒店先占容量且节点不重叠", () => {
     attractions: [attraction, { name: "屯溪老街", stayMinutes: 90 }],
   });
 
-  assert.ok(nodes.some((node) => node.type === "transport"));
+  const transportNode = nodes.find((node) => node.type === "transport");
+  assert.equal(transportNode?.transportMinutes, 70);
   assert.ok(nodes.some((node) => node.type === "transfer"));
   assert.equal(nodes.filter((node) => node.type === "meal").length, 2);
   assert.ok(nodes.some((node) => node.type === "hotel"));
   assertTimelineWindow(nodes, "08:00", "20:00");
+});
+
+test("剩余恰好 75 分钟可以安排 75 分钟景点", () => {
+  const nodes = buildDayTimeline({
+    day,
+    startTime: "09:00",
+    endTime: "18:00",
+    transportMinutes: 285,
+    meals: [60, 60],
+    restMinutes: 30,
+    attractions: [{ name: "恰好七十五分钟景点", stayMinutes: 75 }],
+  });
+
+  const attractionNode = nodes.find((node) => node.type === "attraction");
+  assert.equal(attractionNode?.name, "恰好七十五分钟景点");
+  assert.equal(attractionNode?.stayMinutes, 75);
+  assertTimelineWindow(nodes, "09:00", "18:00");
+});
+
+test("短景点在前不会阻断后续可容纳景点", () => {
+  const nodes = buildDayTimeline({
+    day,
+    startTime: "08:00",
+    endTime: "20:00",
+    transportMinutes: 60,
+    meals: [60, 60],
+    restMinutes: 30,
+    attractions: [
+      { name: "短景点", stayMinutes: 45 },
+      { name: "中景点", stayMinutes: 300 },
+      { name: "后续小景点", stayMinutes: 90 },
+    ],
+  });
+
+  assert.deepEqual(
+    nodes.filter((node) => node.type === "attraction").map((node) => node.name),
+    ["短景点", "中景点", "后续小景点"],
+  );
+  assertTimelineWindow(nodes, "08:00", "20:00");
+});
+
+test("长景点放不下时跳过并继续尝试后续小景点", () => {
+  const nodes = buildDayTimeline({
+    day,
+    startTime: "09:00",
+    endTime: "18:00",
+    transportMinutes: 300,
+    meals: [30],
+    restMinutes: 30,
+    attractions: [
+      { name: "放不下的长景点", stayMinutes: 200 },
+      { name: "可容纳的小景点", stayMinutes: 90 },
+    ],
+  });
+
+  assert.equal(nodes.some((node) => node.name === "放不下的长景点"), false);
+  assert.ok(nodes.some((node) => node.type === "attraction" && node.name === "可容纳的小景点"));
+  assertTimelineWindow(nodes, "09:00", "18:00");
 });
