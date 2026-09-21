@@ -252,3 +252,36 @@ test("统一票价按全部同行人数计算", () => {
   assert.equal(budget.tickets, 240);
   assert.equal(budget.provenance.tickets[0]?.quantity, 3);
 });
+
+test("交通价格引用按 legId 匹配，不依赖数组顺序", () => {
+  const references: PriceReference[] = [
+    {
+      kind: "transport",
+      legId: "return",
+      label: "返程参考价",
+      amount: 300,
+      currency: "CNY",
+      confidence: "reference",
+    },
+    {
+      kind: "transport",
+      legId: "outbound",
+      label: "去程参考价",
+      amount: 200,
+      currency: "CNY",
+      confidence: "reference",
+    },
+  ];
+  const budget = calculateBudget({
+    travelers: { adults: 1, children: 0 },
+    days: 1,
+    transport: [outboundFlight, returnFlight],
+    transportPriceReferences: references,
+    ticketPrices: [],
+    lodgingPerNight: 0,
+    foodPerPersonPerDay: 0,
+  });
+
+  assert.equal(budget.provenance.transport.find((item) => item.legId === "outbound")?.amount, 200);
+  assert.equal(budget.provenance.transport.find((item) => item.legId === "return")?.amount, 300);
+});

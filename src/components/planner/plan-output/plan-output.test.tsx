@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { BudgetCategory, TimelineNodeType, TripBrief, TripPlan } from "../../../lib/travel-plan";
+import type {
+  BudgetCategory,
+  TimelineNodeType,
+  TripBrief,
+  TripPlan,
+} from "../../../lib/travel-plan";
 import { buildPlannedDaysFromSkeleton } from "../../../lib/plan-output-adapter";
 import {
   GUIDEBOOK_PREVIEW_FRAME_CLASS,
@@ -16,6 +21,7 @@ import { TravelerBudgetFields } from "./TravelerBudgetFields";
 import { verifyGuidebookPageChecksum } from "@/lib/guidebook-page-protocol";
 import { requestAndApplyBudget } from "./budget-advice-apply";
 import { TripOverview } from "./TripOverview";
+import { GuidebookStage } from "./GuidebookStage";
 
 function category(amount: number, ratio: number): BudgetCategory {
   return { min: amount, max: amount, amount, ratio };
@@ -223,8 +229,20 @@ const budgetAdvicePayload = {
   roundTrip: true,
   returnMode: "fast" as const,
   routeLegs: [
-    { from: "上海", to: "杭州", transport: "balanced", kind: "outbound" as const, style: "direct" as const },
-    { from: "杭州", to: "上海", transport: "balanced", kind: "return" as const, style: "direct" as const },
+    {
+      from: "上海",
+      to: "杭州",
+      transport: "balanced",
+      kind: "outbound" as const,
+      style: "direct" as const,
+    },
+    {
+      from: "杭州",
+      to: "上海",
+      transport: "balanced",
+      kind: "return" as const,
+      style: "direct" as const,
+    },
   ],
   pace: "balanced",
   interests: ["自然山水"],
@@ -295,10 +313,37 @@ test("butler 骨架映射为与骨架同源的每日行程，只保留景点节�
           day: 1,
           theme: "西湖晨光",
           nodes: [
-            { type: "transport", startTime: "08:30", endTime: "11:00", name: "上海前往杭州", estimatedCost: 260 },
-            { type: "attraction", startTime: "12:10", endTime: "15:00", name: "西湖白堤", location: "杭州西湖", stayMinutes: 170, estimatedCost: 0, tips: "沿湖慢行" },
-            { type: "night-activity", startTime: "20:10", endTime: "21:00", name: "西湖夜游", estimatedCost: 120 },
-            { type: "rest", startTime: "21:10", endTime: "22:00", name: "回酒店休息", estimatedCost: 0 },
+            {
+              type: "transport",
+              startTime: "08:30",
+              endTime: "11:00",
+              name: "上海前往杭州",
+              estimatedCost: 260,
+            },
+            {
+              type: "attraction",
+              startTime: "12:10",
+              endTime: "15:00",
+              name: "西湖白堤",
+              location: "杭州西湖",
+              stayMinutes: 170,
+              estimatedCost: 0,
+              tips: "沿湖慢行",
+            },
+            {
+              type: "night-activity",
+              startTime: "20:10",
+              endTime: "21:00",
+              name: "西湖夜游",
+              estimatedCost: 120,
+            },
+            {
+              type: "rest",
+              startTime: "21:10",
+              endTime: "22:00",
+              name: "回酒店休息",
+              estimatedCost: 0,
+            },
           ],
           radar: { physical: 48, childFit: 70, weatherSensitivity: 45, timeCost: 50, crowding: 62 },
         },
@@ -311,7 +356,10 @@ test("butler 骨架映射为与骨架同源的每日行程，只保留景点节�
   assert.equal(plannedDays.length, 1);
   assert.equal(plannedDays[0].day, 1);
   assert.equal(plannedDays[0].note, "西湖晨光");
-  assert.deepEqual(plannedDays[0].places.map((place) => place.name), ["西湖白堤", "西湖夜游"]);
+  assert.deepEqual(
+    plannedDays[0].places.map((place) => place.name),
+    ["西湖白堤", "西湖夜游"],
+  );
   assert.equal(plannedDays[0].places[0].source, "https://example.test/xihu");
   assert.equal(plannedDays[0].places[0].duration, 170);
   assert.equal(plannedDays[0].weather?.code, 1);
@@ -375,4 +423,26 @@ test("checksum 校验门槛失败会抛出错误供组件停止处理", async ()
     () => assertGuidebookPageChecksum("<article>页面</article>", "wrong-checksum"),
     /checksum|校验失败/,
   );
+});
+
+test("fallback 不挂载路书预览，仅显示错误提示", () => {
+  const html = renderToStaticMarkup(
+    <GuidebookStage state="fallback" message="selection 阶段候选越界">
+      <div>逐页生成你的路书 生成路书 PDF</div>
+    </GuidebookStage>,
+  );
+
+  assert.doesNotMatch(html, /逐页生成你的路书/);
+  assert.doesNotMatch(html, /生成路书 PDF/);
+  assert.match(html, /selection 阶段候选越界/);
+});
+
+test("ready 状态才挂载路书预览", () => {
+  const html = renderToStaticMarkup(
+    <GuidebookStage state="ready" message="">
+      <div>逐页生成你的路书</div>
+    </GuidebookStage>,
+  );
+
+  assert.match(html, /逐页生成你的路书/);
 });

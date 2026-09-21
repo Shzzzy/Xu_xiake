@@ -8,6 +8,7 @@ import { prepareGuidebookDayNarrative } from "./guidebook-narrative.server.ts";
 import type { PlannerSkeleton } from "./planner-skeleton.ts";
 import type { PlannerDayCopy } from "./planner-day-copy.ts";
 import type { PlanViolation } from "./plan-validator.ts";
+import type { TripPlan } from "./travel-plan.ts";
 
 function fixtureOutput() {
   const destination = destinations.find((item) => item.id === "huangshan") ?? destinations[0];
@@ -342,4 +343,117 @@ test("确定性预算与交通腿覆盖节点费用并保留路线元数据", ()
   assert.equal(plan.budget.estimatedTotal, 26_180);
   assert.ok(plan.route.outboundSegments.every((segment) => segment.distanceKm === 1_964));
   assert.ok(plan.route.returnSegments.every((segment) => segment.durationMinutes === 344));
+});
+
+test("确定性预算分摊到每日节点后日合计严格等于预算总额", () => {
+  const skeletonWithAllCategories = {
+    title: "一日预算分摊测试",
+    summary: "验证交通、住宿、餐饮、门票与其他费用都进入节点。",
+    days: [
+      {
+        day: 1,
+        theme: "预算分摊日",
+        nodes: [
+          {
+            type: "transport" as const,
+            startTime: "08:00",
+            endTime: "09:00",
+            name: "上海前往杭州",
+            transportMinutes: 60,
+            estimatedCost: 0,
+          },
+          {
+            type: "meal" as const,
+            startTime: "09:00",
+            endTime: "10:00",
+            name: "午餐",
+            estimatedCost: 0,
+          },
+          {
+            type: "attraction" as const,
+            startTime: "10:00",
+            endTime: "12:00",
+            name: "西湖白堤",
+            stayMinutes: 120,
+            estimatedCost: 0,
+          },
+          {
+            type: "hotel" as const,
+            startTime: "20:00",
+            endTime: "20:30",
+            name: "酒店入住",
+            estimatedCost: 0,
+          },
+          {
+            type: "rest" as const,
+            startTime: "21:00",
+            endTime: "21:30",
+            name: "休整",
+            estimatedCost: 0,
+          },
+        ],
+        radar: { physical: 50, childFit: 60, weatherSensitivity: 50, timeCost: 50, crowding: 50 },
+      },
+    ],
+  };
+  const budgetPlan = {
+    transport: 1_000,
+    lodging: 500,
+    food: 300,
+    tickets: 200,
+    other: 100,
+    estimatedTotal: 2_100,
+    priceReferences: [],
+    provenance: {
+      transport: [],
+      tickets: [],
+      lodging: {
+        kind: "lodging" as const,
+        label: "住宿",
+        amount: 500,
+        currency: "CNY" as const,
+        confidence: "fallback" as const,
+        quantity: 1,
+        total: 500,
+      },
+      food: {
+        kind: "food" as const,
+        label: "餐饮",
+        amount: 300,
+        currency: "CNY" as const,
+        confidence: "fallback" as const,
+        quantity: 1,
+        total: 300,
+      },
+      other: {
+        kind: "other" as const,
+        label: "其他",
+        amount: 100,
+        currency: "CNY" as const,
+        confidence: "fallback" as const,
+        quantity: 1,
+        total: 100,
+      },
+    },
+  };
+
+  const plan = buildTripPlanFromSkeleton({
+    ...skeletonInputFixture,
+    skeleton: skeletonWithAllCategories,
+    budgetPlan,
+  });
+  const sum = (type: TripPlan["days"][number]["nodes"][number]["type"]) =>
+    plan.days
+      .flatMap((day) => day.nodes)
+      .filter((node) => node.type === type)
+      .reduce((total, node) => total + node.estimatedCost, 0);
+
+  assert.equal(
+    plan.days.reduce((total, day) => total + day.estimatedCost, 0),
+    2_100,
+  );
+  assert.equal(sum("transport"), 1_000);
+  assert.equal(sum("meal"), 300);
+  assert.equal(sum("attraction"), 200);
+  assert.equal(sum("hotel") + sum("rest"), 600);
 });

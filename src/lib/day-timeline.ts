@@ -69,10 +69,17 @@ export function buildDayTimeline(input: TimelineBuildInput): PlannerSkeletonNode
   const segments: TimelineSegment[] = [];
   let remainingBeforeHotel = windowMinutes - hotelMinutes;
 
-  const pushFixedSegment = (segment: Omit<TimelineSegment, "minutes">, requestedMinutes: number) => {
+  const pushFixedSegment = (
+    segment: Omit<TimelineSegment, "minutes">,
+    requestedMinutes: number,
+  ) => {
     const minutes = Math.min(normalizeMinutes(requestedMinutes), remainingBeforeHotel);
     if (minutes <= 0) return;
-    segments.push({ ...segment, minutes });
+    segments.push({
+      ...segment,
+      minutes,
+      ...(segment.transportMinutes === undefined ? {} : { transportMinutes: minutes }),
+    });
     remainingBeforeHotel -= minutes;
   };
 
@@ -81,7 +88,10 @@ export function buildDayTimeline(input: TimelineBuildInput): PlannerSkeletonNode
     // 换乘属于交通总时长的一部分，单独列出但不会重复扣减容量。
     const transferMinutes = Math.min(TRANSFER_MINUTES, transportMinutes);
     const rideMinutes = transportMinutes - transferMinutes;
-    pushFixedSegment({ type: "transport", name: "交通出行", transportMinutes: rideMinutes }, rideMinutes);
+    pushFixedSegment(
+      { type: "transport", name: "交通出行", transportMinutes: rideMinutes },
+      rideMinutes,
+    );
     pushFixedSegment(
       {
         type: "transfer",
@@ -92,12 +102,34 @@ export function buildDayTimeline(input: TimelineBuildInput): PlannerSkeletonNode
     );
   }
 
-  input.meals.forEach((mealMinutes, index) => {
-    const name = index === 0 ? "午餐" : index === 1 ? "晚餐" : `第 ${index + 1} 餐`;
-    pushFixedSegment({ type: "meal", name }, mealMinutes);
-  });
+  const requestedFixedMinutes =
+    input.meals.reduce((total, mealMinutes) => total + normalizeMinutes(mealMinutes), 0) +
+    normalizeMinutes(input.restMinutes);
+  const minimumAttractionMinutes = input.attractions.length > 0 ? MIN_ATTRACTION_MINUTES : 0;
+  const fixedItemsFitWithMinimumAttraction =
+    remainingBeforeHotel >= requestedFixedMinutes + minimumAttractionMinutes;
 
-  pushFixedSegment({ type: "rest", name: "必要休息" }, input.restMinutes);
+  if (fixedItemsFitWithMinimumAttraction) {
+    input.meals.forEach((mealMinutes, index) => {
+      const name = index === 0 ? "午餐" : index === 1 ? "晚餐" : `第 ${index + 1} 餐`;
+      pushFixedSegment({ type: "meal", name }, mealMinutes);
+    });
+
+    pushFixedSegment({ type: "rest", name: "必要休息" }, input.restMinutes);
+  } else {
+    // 短窗口优先保住一个可执行景点：先按“每增加一餐后仍留出最小景点”规则放餐，
+    // 晚餐与前置休息可跳过，剩余容量最后统一作为自由休整。
+    const reserveAfterMeal = Math.max(
+      minimumAttractionMinutes,
+      normalizeMinutes(input.restMinutes),
+    );
+    input.meals.forEach((mealMinutes, index) => {
+      const normalizedMeal = normalizeMinutes(mealMinutes);
+      if (remainingBeforeHotel - normalizedMeal < reserveAfterMeal) return;
+      const name = index === 0 ? "午餐" : index === 1 ? "晚餐" : `第 ${index + 1} 餐`;
+      pushFixedSegment({ type: "meal", name }, normalizedMeal);
+    });
+  }
 
   for (const attraction of input.attractions) {
     // 只有剩余容量本身不足 75 分钟时才停止；景点时长较短仍可安排。
@@ -124,7 +156,6 @@ export function buildDayTimeline(input: TimelineBuildInput): PlannerSkeletonNode
     });
     remainingBeforeHotel = 0;
   }
-
   if (hotelMinutes > 0) {
     const dayNumber = Number.isFinite(input.day.day) && input.day.day > 0 ? input.day.day : 1;
     segments.push({

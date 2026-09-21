@@ -23,6 +23,7 @@ export type BudgetPriceReference = {
   currency: "CNY";
   source?: string;
   confidence: PriceConfidence;
+  legId?: string;
   quantity: number;
   total: number;
 };
@@ -122,11 +123,7 @@ function resolveTicketCategory(reference: PriceReference): TicketPriceCategory {
   return "uniform";
 }
 
-function ticketQuantity(
-  category: TicketPriceCategory,
-  adults: number,
-  children: number,
-): number {
+function ticketQuantity(category: TicketPriceCategory, adults: number, children: number): number {
   if (category === "adult") return adults;
   if (category === "child") return children;
   return adults + children;
@@ -165,6 +162,7 @@ export function calculateBudget(input: BudgetPlanInput): BudgetPlan {
       amount,
       currency: "CNY",
       confidence: priceReference?.confidence ?? "fallback",
+      legId: leg.id,
       quantity: travelerCount,
       total: amount * travelerCount,
     });

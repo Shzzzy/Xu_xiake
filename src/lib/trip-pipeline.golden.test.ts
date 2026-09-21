@@ -6,6 +6,8 @@ import { runLivePlannerWith } from "./live-planner.functions.ts";
 import { planWithButler, type ButlerPlanInput } from "./planner-orchestrator.server.ts";
 import type { PlanningStage } from "./planning-run.ts";
 import type { TransportPlanLeg } from "./transport-planner.server.ts";
+import { destinations } from "../data/planner-destinations.ts";
+import { buildTripPlanFromSkeleton } from "./plan-output-adapter.ts";
 
 const sichuanPois: AmapPoi[] = [
   {
@@ -174,7 +176,8 @@ function selectionJson(ids: string[]): unknown {
 }
 
 test("Golden：北京到四川、5 人、5 天往返走确定性飞行与预算", async () => {
-  const result = await runLivePlannerWith(buildGoldenInput(), {
+  const input = buildGoldenInput();
+  const result = await runLivePlannerWith(input, {
     env: {
       BUTLER_PLANNER: "1",
       DEEPSEEK_API_KEY: "k",
@@ -229,6 +232,53 @@ test("Golden：北京到四川、5 人、5 天往返走确定性飞行与预算"
       `第 ${day.day} 天是非移动日，必须安排真实候选景点`,
     );
   }
+
+  const firstTransport = result.skeleton.days[0]?.nodes.find((node) => node.type === "transport");
+  assert.match(firstTransport?.name ?? "", /飞机/);
+  assert.equal(result.budget.transport, 10_810);
+  assert.equal(result.budget.lodging, 6_000);
+  assert.equal(result.budget.food, 5_500);
+  assert.equal(result.budget.tickets, 1_200);
+  assert.equal(result.budget.other, 2_351);
+  assert.equal(result.budget.estimatedTotal, 25_861);
+
+  const destination = {
+    ...(destinations.find((item) => item.id === "huangshan") ?? destinations[0]),
+    id: "sichuan",
+    name: "四川",
+    region: "四川省",
+  };
+  const plan = buildTripPlanFromSkeleton({
+    skeleton: result.skeleton,
+    dayCopy: result.dayCopy,
+    candidates: result.candidates,
+    failedDays: result.failedDays,
+    budgetPlan: result.budget,
+    transportLegs: result.transportLegs,
+    violations: result.violations,
+    origin: input.origin,
+    destination,
+    startDate: input.startDate,
+    travelers: input.travelers,
+    totalBudget: input.totalBudget,
+    pace: input.pace,
+    interests: input.interests,
+    roundTrip: input.route.roundTrip,
+    returnMode: input.route.returnMode ?? "fast",
+    routePlan: result.route,
+    weather: input.weather,
+    closing: result.closing,
+    transportPreference: "balanced",
+  });
+  assert.equal(
+    plan.days.reduce((total, day) => total + day.estimatedCost, 0),
+    plan.budget.estimatedTotal,
+  );
+  assert.equal(plan.budget.transport.amount, 10_810);
+  assert.equal(plan.budget.lodging.amount, 6_000);
+  assert.equal(plan.budget.food.amount, 5_500);
+  assert.equal(plan.budget.tickets.amount, 1_200);
+  assert.equal(plan.budget.other.amount, 2_351);
 });
 
 function buildMinimalButlerInput(): ButlerPlanInput {
@@ -328,4 +378,165 @@ test("Golden：候选越界 selection 最多修复一次且不启动后续阶段
   assert.equal(result.stage, "selection");
   assert.deepEqual(stages, ["route", "pois", "selection"]);
   assert.deepEqual(narrativeCalls, []);
+});
+
+function buildSimpleButlerFetch(selection: unknown): typeof fetch {
+  return (async (_input, init) => {
+    const content = requestText(init);
+    if (content.includes("景点选择")) return responseWithJson(selection);
+    if (content.includes("每日文案")) {
+      const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
+      return responseWithJson({
+        day,
+        purpose: `第 ${day} 天按已冻结时间轴游览。`,
+        highlights: ["当地体验：按当天节点安排", "步行游览：按现场指引", "机动休息：保留体力"],
+        cautions: ["关注天气变化", "按现场开放时间调整"],
+        history: [],
+      });
+    }
+    if (content.includes("生成旅行回望与结束语")) {
+      return responseWithJson({ quoteId: null, message: "这是一段值得回味的旅程。" });
+    }
+    throw new Error(`Golden 测试收到未知 DeepSeek 请求：${content.slice(0, 80)}`);
+  }) as typeof fetch;
+}
+
+function buildMultiLegButlerInput(): ButlerPlanInput {
+  const transportLegs: TransportPlanLeg[] = [
+    {
+      id: "outbound:0",
+      kind: "outbound",
+      from: "北京",
+      to: "西安",
+      distanceKm: 900,
+      mode: "flight",
+      doorToDoorMinutes: 260,
+      minimumPerPersonCost: 600,
+    },
+    {
+      id: "outbound:1",
+      kind: "outbound",
+      from: "西安",
+      to: "成都",
+      distanceKm: 700,
+      mode: "flight",
+      doorToDoorMinutes: 240,
+      minimumPerPersonCost: 500,
+    },
+  ];
+  return {
+    origin: "北京",
+    destination: "成都",
+    region: "四川省",
+    startDate: "2026-10-01",
+    days: 1,
+    startTime: "08:00",
+    endTime: "22:00",
+    pace: "balanced",
+    totalBudget: 40000,
+    travelers: { adults: 5, children: 0 },
+    interests: ["自然山水"],
+    transport: "flight",
+    route: {
+      origin: "北京",
+      destination: "成都",
+      waypoints: ["西安"],
+      roundTrip: false,
+      returnMode: null,
+      legs: [
+        {
+          id: "outbound:0",
+          from: "北京",
+          to: "西安",
+          transport: "flight",
+          style: "direct",
+          kind: "outbound",
+        },
+        {
+          id: "outbound:1",
+          from: "西安",
+          to: "成都",
+          transport: "flight",
+          style: "direct",
+          kind: "outbound",
+        },
+      ],
+    },
+    weather: [{ date: "2026-10-01", code: 1, tempMax: 24, tempMin: 14 }],
+    candidates: [
+      {
+        id: "sc-kuanzhai",
+        name: "宽窄巷子",
+        summary: "成都历史街区",
+        source: "https://www.amap.com/place/sc-kuanzhai",
+        address: "四川省成都市青羊区",
+        type: "风景名胜",
+        location: [104.055, 30.669],
+        publicUrl: "https://www.amap.com/place/sc-kuanzhai",
+        areaKey: "成都市-青羊区",
+      },
+    ],
+    transportLegs,
+  };
+}
+
+function buildShortWindowButlerInput(): ButlerPlanInput {
+  const input = buildMinimalButlerInput();
+  return {
+    ...input,
+    days: 2,
+    startTime: "08:00",
+    endTime: "09:30",
+    totalBudget: 40000,
+    weather: [
+      { date: "2026-10-01", code: 1, tempMax: 24, tempMin: 14 },
+      { date: "2026-10-02", code: 1, tempMax: 24, tempMin: 14 },
+    ],
+    route: {
+      ...input.route,
+      roundTrip: false,
+      legs: [input.route.legs[0]!],
+    },
+    transportLegs: [input.transportLegs[0]!],
+  };
+}
+
+test("Golden：同日多条交通 leg 都进入时间轴与预算引用", async () => {
+  const result = await planWithButler(buildMultiLegButlerInput(), {
+    apiKey: "k",
+    fetchImpl: buildSimpleButlerFetch([]),
+  });
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  const transportNodes =
+    result.skeleton.days[0]?.nodes.filter((node) => node.type === "transport") ?? [];
+  assert.equal(transportNodes.length, 2);
+  assert.ok(transportNodes.some((node) => node.name.includes("北京 → 西安")));
+  assert.ok(transportNodes.some((node) => node.name.includes("西安 → 成都")));
+  assert.ok(
+    result.budget.priceReferences.every(
+      (reference) => reference.kind !== "transport" || reference.legId,
+    ),
+  );
+});
+
+test("Golden：短窗口非移动日可降级休整且不阻断整单", async () => {
+  const result = await planWithButler(buildShortWindowButlerInput(), {
+    apiKey: "k",
+    fetchImpl: buildSimpleButlerFetch([]),
+  });
+
+  if (result.status === "failed") {
+    assert.fail(`短窗口计划不应失败：${result.stage} / ${result.reason}`);
+  }
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  const secondDay = result.skeleton.days.find((day) => day.day === 2);
+  assert.ok(secondDay);
+  assert.equal(
+    secondDay.nodes.some((node) => node.type === "attraction"),
+    false,
+  );
+  assert.ok(secondDay.nodes.some((node) => node.type === "rest"));
 });

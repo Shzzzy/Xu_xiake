@@ -623,7 +623,7 @@ export async function runLivePlannerWith(
     model: readLiveEnv(deps, "DEEPSEEK_MODEL")?.trim(),
   };
 
-  if (readLiveEnv(deps, "BUTLER_PLANNER") === "1") {
+  if (readLiveEnv(deps, "BUTLER_PLANNER") !== "0") {
     return runButlerPlan(input, deps, context);
   }
 

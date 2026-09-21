@@ -359,6 +359,8 @@ function buildClosingInput(input: ButlerPlanInput): TripClosingInput {
 }
 
 const SELECTION_MAX_TOKENS = 1800;
+const MIN_ATTRACTION_CAPACITY_MINUTES = 75;
+const HOTEL_CAPACITY_MINUTES = 30;
 const DEFAULT_LODGING_PER_NIGHT = 500;
 const DEFAULT_FOOD_PER_PERSON_PER_DAY = 220;
 const DEFAULT_TICKET_AMOUNT = 80;
@@ -500,6 +502,88 @@ function buildSelectionInstruction(
   ].join("\n");
 }
 
+function formatClockMinutes(totalMinutes: number): string {
+  const bounded = Math.max(0, Math.min(23 * 60 + 59, Math.round(totalMinutes)));
+  return `${String(Math.floor(bounded / 60)).padStart(2, "0")}:${String(bounded % 60).padStart(2, "0")}`;
+}
+
+function attractionCapacityMinutes(
+  input: ButlerPlanInput,
+  transportByDay: Map<number, TransportPlanLeg[]>,
+  day: number,
+): number {
+  const start = parseClockMinutes(input.startTime);
+  const end = parseClockMinutes(input.endTime);
+  if (start === null || end === null || end <= start) return 0;
+  const windowMinutes = end - start;
+  const hotelMinutes = Math.min(HOTEL_CAPACITY_MINUTES, windowMinutes);
+  const transportMinutes = (transportByDay.get(day) ?? []).reduce(
+    (total, leg) => total + leg.doorToDoorMinutes,
+    0,
+  );
+  const transportUsed = Math.min(transportMinutes, Math.max(0, windowMinutes - hotelMinutes));
+  return Math.max(0, windowMinutes - hotelMinutes - transportUsed);
+}
+
+function allocateTransportMinutes(availableMinutes: number, legs: TransportPlanLeg[]): number[] {
+  if (legs.length === 0) return [];
+  const available = Math.max(legs.length, Math.round(availableMinutes));
+  const requested = legs.map((leg) => Math.max(1, Math.round(leg.doorToDoorMinutes)));
+  const totalRequested = requested.reduce((total, minutes) => total + minutes, 0);
+  let remaining = available;
+  return requested.map((minutes, index) => {
+    const remainingLegs = legs.length - index - 1;
+    if (index === requested.length - 1) {
+      const allocated = remaining;
+      remaining = 0;
+      return allocated;
+    }
+    const proportional = Math.round((minutes / totalRequested) * available);
+    const maxAllowed = Math.max(1, remaining - remainingLegs);
+    const allocated = Math.max(1, Math.min(maxAllowed, proportional));
+    remaining -= allocated;
+    return allocated;
+  });
+}
+
+function expandTransportNodes(
+  nodes: PlannerSkeletonNode[],
+  legs: TransportPlanLeg[],
+): PlannerSkeletonNode[] {
+  if (legs.length === 0) return nodes;
+  const fixedNodes = nodes.filter((node) => node.type !== "transport" && node.type !== "transfer");
+  const transportNodes = nodes.filter(
+    (node) => node.type === "transport" || node.type === "transfer",
+  );
+  if (transportNodes.length === 0) return nodes;
+
+  const availableMinutes = transportNodes.reduce((total, node) => {
+    if (node.transportMinutes !== undefined) return total + node.transportMinutes;
+    const start = parseClockMinutes(node.startTime);
+    const end = parseClockMinutes(node.endTime);
+    return total + (start !== null && end !== null ? Math.max(0, end - start) : 0);
+  }, 0);
+  const allocations = allocateTransportMinutes(availableMinutes, legs);
+  let cursor = parseClockMinutes(transportNodes[0]?.startTime ?? "00:00") ?? 0;
+  const expanded = allocations.map((minutes, index) => {
+    const leg = legs[index]!;
+    const node: PlannerSkeletonNode = {
+      type: "transport",
+      startTime: formatClockMinutes(cursor),
+      endTime: formatClockMinutes(cursor + minutes),
+      name: `${leg.from} → ${leg.to} · ${TRANSPORT_LABELS[leg.mode]}`,
+      location: `${leg.to}交通枢纽`,
+      transportMode: leg.mode,
+      transportMinutes: minutes,
+      estimatedCost: 0,
+      tips: `抵达后换乘；门到门约 ${leg.doorToDoorMinutes} 分钟，已从当天可游览容量中先行扣除。`,
+    };
+    cursor += minutes;
+    return node;
+  });
+
+  return [...expanded, ...fixedNodes];
+}
 function validateSelectionCoverage(
   input: ButlerPlanInput,
   selection: AttractionSelection[],
@@ -517,8 +601,11 @@ function validateSelectionCoverage(
 
   for (let day = 1; day <= input.days; day += 1) {
     if ((transportByDay.get(day)?.length ?? 0) > 0) continue;
-    if (!selection.some((item) => item.day === day)) {
-      throw new Error(`第 ${day} 天是非移动日，但没有选择任何候选景点`);
+    if (
+      attractionCapacityMinutes(input, transportByDay, day) >= MIN_ATTRACTION_CAPACITY_MINUTES &&
+      !selection.some((item) => item.day === day)
+    ) {
+      throw new Error(`第 ${day} 天容量足够但没有选择候选景点`);
     }
   }
 }
@@ -538,6 +625,7 @@ function validateDeterministicSkeleton(
   skeleton: PlannerSkeleton,
   input: ButlerPlanInput,
   transportByDay: Map<number, TransportPlanLeg[]>,
+  selection: AttractionSelection[],
 ): void {
   const start = parseClockMinutes(input.startTime);
   const end = parseClockMinutes(input.endTime);
@@ -569,8 +657,17 @@ function validateDeterministicSkeleton(
       }
     }
     const isMovementDay = (transportByDay.get(day.day)?.length ?? 0) > 0;
-    if (!isMovementDay && attractions.length === 0) {
-      throw new Error(`第 ${day.day} 天是非移动日，必须包含真实候选景点`);
+    const capacity = attractionCapacityMinutes(input, transportByDay, day.day);
+    const selectedForDay = selection.some(
+      (item) => item.day === day.day && item.candidateId.length > 0,
+    );
+    if (
+      !isMovementDay &&
+      attractions.length === 0 &&
+      selectedForDay &&
+      capacity >= MIN_ATTRACTION_CAPACITY_MINUTES
+    ) {
+      throw new Error(`第 ${day.day} 天容量足够但没有安排已选景点`);
     }
     if (isMovementDay && !day.nodes.some((node) => node.type === "transport")) {
       throw new Error(`第 ${day.day} 天缺少确定性交通节点`);
@@ -627,23 +724,10 @@ function buildSkeletonFromSelection(
       attractions,
     });
 
-    if (transportLegs.length > 0) {
-      const pendingLeg = transportLegs[0];
-      for (const node of nodes) {
-        if (node.type !== "transport" || !pendingLeg) break;
-        node.name = `${pendingLeg.from} → ${pendingLeg.to} · ${TRANSPORT_LABELS[pendingLeg.mode]}`;
-        node.location = `${pendingLeg.to}交通枢纽`;
-        node.transportMode = pendingLeg.mode;
-        node.transportMinutes = transportMinutes;
-        node.estimatedCost = pendingLeg.minimumPerPersonCost * headcount(input.travelers);
-        node.tips = `门到门约 ${pendingLeg.doorToDoorMinutes} 分钟，已从当天可游览容量中先行扣除。`;
-      }
-    }
-
     return {
       day,
       theme,
-      nodes,
+      nodes: expandTransportNodes(nodes, transportLegs),
       radar: buildDayRadar(input.pace),
     };
   });
@@ -657,7 +741,7 @@ function buildSkeletonFromSelection(
       .join("、") || "按确定性交通与每日容量安排行程";
 
   const skeleton: PlannerSkeleton = { title, summary, days };
-  validateDeterministicSkeleton(skeleton, input, state.transportByDay);
+  validateDeterministicSkeleton(skeleton, input, state.transportByDay, state.selection);
   return skeleton;
 }
 
@@ -672,6 +756,7 @@ function buildDeterministicBudgetPriceReferences(input: ButlerPlanInput): Budget
       amount: Math.max(leg.minimumPerPersonCost, reference?.minimumUnitPrice ?? 0),
       currency: "CNY",
       confidence: reference?.sources.length ? "reference" : "fallback",
+      legId: leg.id,
     };
     if (source) price.source = source;
     return price;

@@ -58,7 +58,10 @@ test("通勤时间从可用游玩时间扣除", () => {
     attractions: [attraction],
   });
 
-  assert.equal(nodes.some((node) => node.type === "attraction"), false);
+  assert.equal(
+    nodes.some((node) => node.type === "attraction"),
+    false,
+  );
   assert.ok(nodes.some((node) => node.type === "rest" && node.name.includes("自由活动")));
   assertTimelineWindow(nodes, "09:00", "18:00");
 });
@@ -150,7 +153,46 @@ test("长景点放不下时跳过并继续尝试后续小景点", () => {
     ],
   });
 
-  assert.equal(nodes.some((node) => node.name === "放不下的长景点"), false);
+  assert.equal(
+    nodes.some((node) => node.name === "放不下的长景点"),
+    false,
+  );
   assert.ok(nodes.some((node) => node.type === "attraction" && node.name === "可容纳的小景点"));
   assertTimelineWindow(nodes, "09:00", "18:00");
+});
+
+test("短窗口优先保留可容纳景点并跳过晚餐与前置休息", () => {
+  const nodes = buildDayTimeline({
+    day,
+    startTime: "08:00",
+    endTime: "11:30",
+    transportMinutes: 0,
+    meals: [60, 60],
+    restMinutes: 30,
+    attractions: [{ name: "短窗口景点", stayMinutes: 75 }],
+  });
+
+  assert.ok(nodes.some((node) => node.type === "attraction" && node.name === "短窗口景点"));
+  assert.equal(nodes.filter((node) => node.type === "meal").length, 1);
+  assert.equal(nodes.filter((node) => node.type === "rest").length, 1);
+  assertTimelineWindow(nodes, "08:00", "11:30");
+});
+
+test("窗口低于最小景点容量时允许降级为休整而不是抛错", () => {
+  const nodes = buildDayTimeline({
+    day,
+    startTime: "08:00",
+    endTime: "09:30",
+    transportMinutes: 0,
+    meals: [60, 60],
+    restMinutes: 30,
+    attractions: [{ name: "无法容纳景点", stayMinutes: 75 }],
+  });
+
+  assert.equal(
+    nodes.some((node) => node.type === "attraction"),
+    false,
+  );
+  assert.ok(nodes.some((node) => node.type === "rest"));
+  assertTimelineWindow(nodes, "08:00", "09:30");
 });

@@ -96,6 +96,8 @@ import { WeatherStrip } from "./WeatherStrip";
 /**
  * 路书预览只在结果页用到，懒加载避免首页提前下载预览与导出代码。
  */
+import { GuidebookStage } from "./plan-output/GuidebookStage";
+
 const GuidebookPreview = lazy(async () => {
   const module = await import("./plan-output/GuidebookPreview");
   return { default: module.GuidebookPreview };
@@ -2299,24 +2301,17 @@ function ItineraryScreen({
 
       {detailedTrip ? (
         <div className="space-y-4">
-          {plannerState === "fallback" ? (
-            <div
-              role={plannerMessage ? "alert" : "status"}
-              className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-soft)] px-4 py-3 text-xs leading-6 text-[var(--v-muted)]"
+          <GuidebookStage state={plannerState} message={plannerMessage}>
+            <Suspense
+              fallback={
+                <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-6 text-sm text-[var(--v-muted)]">
+                  正在加载路书预览…
+                </div>
+              }
             >
-              {plannerMessage ||
-                "当前展示开发期精选数据；实时搜索与 DeepSeek 可用后会自动更新路书内容。"}
-            </div>
-          ) : null}
-          <Suspense
-            fallback={
-              <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-6 text-sm text-[var(--v-muted)]">
-                正在加载路书预览…
-              </div>
-            }
-          >
-            <GuidebookPreview plan={executionPlan} runId={previewRunId} />
-          </Suspense>
+              <GuidebookPreview plan={executionPlan} runId={previewRunId} />
+            </Suspense>
+          </GuidebookStage>
         </div>
       ) : null}
 

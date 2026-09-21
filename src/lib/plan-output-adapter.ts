@@ -409,6 +409,55 @@ function buildFallbackDayCopy(
   };
 }
 
+function normalizeDeterministicBudget(plan: BudgetPlan): BudgetPlan {
+  const transport = Math.round(plan.transport);
+  const lodging = Math.round(plan.lodging);
+  const food = Math.round(plan.food);
+  const tickets = Math.round(plan.tickets);
+  const other = Math.round(plan.other);
+  return {
+    ...plan,
+    transport,
+    lodging,
+    food,
+    tickets,
+    other,
+    estimatedTotal: transport + lodging + food + tickets + other,
+  };
+}
+
+function distributeBudgetToNodes(total: number, nodes: TripTimelineNode[]): void {
+  if (nodes.length === 0) return;
+  const amount = Math.max(0, Math.round(total));
+  const base = Math.floor(amount / nodes.length);
+  const remainder = amount - base * nodes.length;
+  nodes.forEach((node, index) => {
+    node.estimatedCost += base + (index === nodes.length - 1 ? remainder : 0);
+  });
+}
+
+function allocateDeterministicBudgetToDays(days: TripDay[], plan: BudgetPlan): TripDay[] {
+  const allocated = days.map((day) => ({
+    ...day,
+    nodes: day.nodes.map((node) => ({ ...node, estimatedCost: 0 })),
+  }));
+  const allNodes = allocated.flatMap((day) => day.nodes);
+  const pick = (types: TripTimelineNode["type"][]) => {
+    const matched = allNodes.filter((node) => types.includes(node.type));
+    return matched.length > 0 ? matched : allNodes.slice(-1);
+  };
+
+  distributeBudgetToNodes(plan.transport, pick(["transport", "transfer"]));
+  distributeBudgetToNodes(plan.lodging, pick(["hotel"]));
+  distributeBudgetToNodes(plan.food, pick(["meal"]));
+  distributeBudgetToNodes(plan.tickets, pick(["attraction", "night-activity"]));
+  distributeBudgetToNodes(plan.other, pick(["rest", "hotel"]));
+
+  return allocated.map((day) => ({
+    ...day,
+    estimatedCost: day.nodes.reduce((total, node) => total + node.estimatedCost, 0),
+  }));
+}
 /**
  * 把管家生成的骨架、每日文案与路线数据组装为统一的 TripPlan。
  * 文案失败只降级对应日期，不改变骨架中已经冻结的时间、节点与费用。
@@ -417,6 +466,9 @@ export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): Tri
   const copyByDay = new Map((input.dayCopy ?? []).map((copy) => [copy.day, copy]));
   const failedDays = new Set(input.failedDays ?? []);
 
+  const deterministicBudget = input.budgetPlan
+    ? normalizeDeterministicBudget(input.budgetPlan)
+    : null;
   const days = input.skeleton.days.map((skeletonDay, index) => {
     const analysisFailed = failedDays.has(skeletonDay.day);
     const copy = analysisFailed ? undefined : copyByDay.get(skeletonDay.day);
@@ -449,6 +501,10 @@ export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): Tri
     return tripDay;
   });
 
+  const allocatedDays = deterministicBudget
+    ? allocateDeterministicBudgetToDays(days, deterministicBudget)
+    : days;
+
   const plan: TripPlan = {
     meta: {
       title: input.skeleton.title,
@@ -472,8 +528,8 @@ export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): Tri
       // 管家 dayCopy 是每日文案权威源，下游 preview/PDF 的 legacy enrichment 必须跳过。
       narrativeSource: "butler",
     },
-    budget: input.budgetPlan
-      ? buildBudgetFromDeterministicPlan(input.budgetPlan, input.totalBudget, input.travelers)
+    budget: deterministicBudget
+      ? buildBudgetFromDeterministicPlan(deterministicBudget, input.totalBudget, input.travelers)
       : buildBudgetFromDays(days, input.totalBudget, input.travelers),
     route: buildTripRoute(
       input.routePlan,
@@ -481,7 +537,7 @@ export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): Tri
       input.returnMode,
       input.transportLegs ?? [],
     ),
-    days,
+    days: allocatedDays,
     closing: input.closing ?? {
       quote: null,
       source: null,

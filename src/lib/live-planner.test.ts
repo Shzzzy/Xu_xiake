@@ -593,6 +593,21 @@ test("管家阶段失败时 fail closed 而不退回 legacy", async () => {
   );
 });
 
+test("未设置 BUTLER_PLANNER 时默认走确定性管线", async () => {
+  const result = await runLivePlannerWith(buildLiveInput(), {
+    env: {
+      DEEPSEEK_API_KEY: "k",
+      TAVILY_API_KEY: "k",
+      AMAP_E2E_FIXTURE: "1",
+    },
+    fetchImpl: fakeButlerFetch(),
+    repository: createMemoryPlaceRepository(),
+  });
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  assert.equal(result.mode, "butler");
+});
 test("高德目的地候选非空时会进入管家 sources", async () => {
   const tavilyQueries: string[] = [];
   const baseFetch = fakeButlerFetch();
