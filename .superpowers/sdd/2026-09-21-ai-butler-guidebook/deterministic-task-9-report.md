@@ -91,3 +91,13 @@
 2. 多 leg 同时落在同一天时，时间轴只对第一条 transport leg 做详细命名，其余 leg 的时长仍计入总交通容量；后续可按 leg 渲染多个交通节点。
 3. 旧 legacy 编排辅助函数仍保留在 `planner-orchestrator.server.ts` 中但不再被生产入口调用；删除需单独确认。
 4. 历史别名行政映射仍采用显式白名单；新增类似“徽州→黄山”的历史区域时需要补映射测试。
+
+## 复审修复（6e70ebc）
+
+- `fix: close deterministic pipeline review gaps`
+- 预算五类金额按整数分摊到每日节点，同日多 leg 分别生成 transport 节点；每日合计严格等于预算总额。
+- `BUTLER_PLANNER` 默认走确定性管线，只有显式 `0` 才走 legacy。
+- `fallback` 状态不挂载路书预览和 PDF 导出，只显示错误/配置提示。
+- 短窗口优先安排可容纳景点；容量确实不足时允许当天降级为休整，不阻断整单。
+- 增加北京→四川预算、legId、短窗口、默认开关和 fallback UI 行为测试。
+- 最终验证：`npm run typecheck`、`npm test`、`npm run build:dev`、`git diff --check` 全部通过。
