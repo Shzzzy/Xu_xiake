@@ -183,3 +183,42 @@ test("非法时钟时间 24:00 / 12:60 / 99:99 会被判定为时间窗违规", 
     );
   }
 });
+
+test("节点结束时间不晚于开始时间会报 TIME_WINDOW", () => {
+  const violations = validateSkeleton({
+    skeleton: skeletonWith({ startTime: "14:00", endTime: "09:00" }),
+    brief: balancedBrief({}),
+    candidates: ["黄山风景区"],
+  });
+  const time = violations.find((item) => item.code === "TIME_WINDOW" && item.nodeIndex === 0);
+  assert.ok(time);
+  assert.match(time.detail.expected, /晚于开始时间/);
+  assert.match(time.detail.actual, /14:00.*09:00/);
+});
+
+test("候选名追加常见后缀或省略后缀都算合法景点", () => {
+  const suffixed = validateSkeleton({
+    skeleton: skeletonWith({ name: "宏村古村落" }),
+    brief: balancedBrief({}),
+    candidates: ["宏村"],
+  });
+  assert.equal(suffixed.some((item) => item.code === "UNKNOWN_PLACE"), false);
+
+  const shortened = validateSkeleton({
+    skeleton: skeletonWith({ name: "黄山" }),
+    brief: balancedBrief({}),
+    candidates: ["黄山风景区"],
+  });
+  assert.equal(shortened.some((item) => item.code === "UNKNOWN_PLACE"), false);
+});
+
+test("候选名加编造后缀仍判为未知地点", () => {
+  const violations = validateSkeleton({
+    skeleton: skeletonWith({ name: "宏村旁边凭空古城" }),
+    brief: balancedBrief({}),
+    candidates: ["宏村"],
+  });
+  const unknown = violations.find((item) => item.code === "UNKNOWN_PLACE");
+  assert.ok(unknown);
+  assert.equal(unknown.nodeIndex, 0);
+});

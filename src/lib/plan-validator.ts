@@ -79,9 +79,43 @@ function minutesOf(value: string): number | null {
   return hours * 60 + minutes;
 }
 
-// 去除全部空白，用于候选景点的子串匹配。
+// 候选景点的合法后缀白名单：只允许节点名与候选名完全相等，
+// 或其中一方仅在另一方基础上追加这些常见后缀（例如「宏村」→「宏村古村落」）。
+// 除此之外的加长名（如「宏村旁边凭空古城」）一律视为编造景点。
+const KNOWN_PLACE_SUFFIXES = [
+  "风景区", "景区", "旅游区", "保护区", "自然保护区",
+  "古镇", "古村落", "古村", "古城", "古街", "老街", "步行街",
+  "公园", "森林公园", "湿地公园", "植物园", "动物园",
+  "博物馆", "纪念馆", "文化馆", "艺术馆", "美术馆",
+  "广场", "温泉", "索道", "观景台", "大峡谷", "峡谷", "瀑布",
+  "雪山", "冰川", "草原", "沙漠", "石窟", "遗址", "村落", "度假区", "度假村", "山庄",
+];
+
+// 去除全部空白，用于候选景点的名称归一化。
 function normalizeName(value: string): string {
   return value.replace(/\s+/g, "");
+}
+
+// 判断节点名是否来自候选景点：要求完全相等，或只差一个白名单后缀。
+function isKnownPlace(normalizedName: string, normalizedCandidates: string[]): boolean {
+  if (normalizedName.length === 0) return false;
+  return normalizedCandidates.some((candidate) => {
+    if (candidate.length === 0) return false;
+    if (candidate === normalizedName) return true;
+    if (
+      normalizedName.startsWith(candidate) &&
+      KNOWN_PLACE_SUFFIXES.includes(normalizedName.slice(candidate.length))
+    ) {
+      return true;
+    }
+    if (
+      candidate.startsWith(normalizedName) &&
+      KNOWN_PLACE_SUFFIXES.includes(candidate.slice(normalizedName.length))
+    ) {
+      return true;
+    }
+    return false;
+  });
 }
 
 const slotLabels = { meal: "用餐", hotel: "住宿", rest: "休息" } as const;
@@ -118,6 +152,15 @@ export function validateSkeleton(input: PlanValidationInput): PlanViolation[] {
           nodeIndex,
           message: `结束时间 ${node.endTime} 不是有效时间`,
           detail: { expected: "HH:MM（00:00–23:59）", actual: node.endTime },
+        });
+      }
+      if (start !== null && end !== null && end <= start) {
+        violations.push({
+          code: "TIME_WINDOW",
+          day: day.day,
+          nodeIndex,
+          message: `开始时间 ${node.startTime} 不早于结束时间 ${node.endTime}`,
+          detail: { expected: "结束时间晚于开始时间", actual: `${node.startTime}–${node.endTime}` },
         });
       }
       if (start !== null && windowStart !== null && start < windowStart) {
@@ -234,16 +277,13 @@ export function validateSkeleton(input: PlanValidationInput): PlanViolation[] {
     }
   }
 
-  // 7. UNKNOWN_PLACE：景点类节点必须能在候选清单中按去空格后的子串匹配。
+  // 7. UNKNOWN_PLACE：节点名必须与候选名完全相等，或仅差一个白名单后缀。
   const normalizedCandidates = candidates.map(normalizeName);
   for (const day of skeleton.days) {
     day.nodes.forEach((node, nodeIndex) => {
       if (node.type !== "attraction" && node.type !== "night-activity") return;
       const normalized = normalizeName(node.name);
-      const known = normalizedCandidates.some(
-        (candidate) =>
-          candidate.length > 0 && normalized.length > 0 && (candidate.includes(normalized) || normalized.includes(candidate)),
-      );
+      const known = isKnownPlace(normalized, normalizedCandidates);
       if (!known) {
         violations.push({
           code: "UNKNOWN_PLACE",
