@@ -4,6 +4,8 @@ import type { TripPlan } from "./travel-plan.ts";
 import {
   clearNarrativeCache,
   enrichTripPlanNarrative,
+  prepareGuidebookDayNarrative,
+  prepareGuidebookNarrativePlan,
   validateDayNarrative,
 } from "./guidebook-narrative.server.ts";
 
@@ -204,4 +206,60 @@ test("当天景点与通用词不会被自由文本规则误杀", () => {
   assert.doesNotThrow(() =>
     validateDayNarrative(allowed, 0, { knownAttractions: ["黄山风景区", "故宫"] }),
   );
+});
+
+test("真实单日准备入口读取计划候选并降级自由文本提到的未安排景点", async () => {
+  const source = plan.days[0];
+  assert.ok(source);
+  const planWithCandidates: TripPlan = {
+    ...plan,
+    meta: {
+      ...plan.meta,
+      narrativeSource: "butler",
+      allowedAttractions: ["黄山风景区", "故宫"],
+    },
+    days: [
+      {
+        ...source,
+        purpose: "顺路去故宫看看",
+        highlights: ["午餐后继续行程"],
+        cautions: ["天气变化注意保暖"],
+      },
+    ],
+  };
+
+  const prepared = await prepareGuidebookDayNarrative(planWithCandidates, 0);
+  const preparedPlan = await prepareGuidebookNarrativePlan(planWithCandidates);
+
+  assert.match(prepared.purpose, /第 1 天：/);
+  assert.equal(prepared.analysisFailed, true);
+  assert.doesNotMatch(JSON.stringify(prepared), /故宫/);
+  assert.match(preparedPlan.days[0]?.purpose ?? "", /第 1 天：/);
+  assert.doesNotMatch(JSON.stringify(preparedPlan.days[0]), /故宫/);
+});
+
+test("真实单日准备入口保留当天景点和通用词", async () => {
+  const source = plan.days[0];
+  assert.ok(source);
+  const planWithCandidates: TripPlan = {
+    ...plan,
+    meta: {
+      ...plan.meta,
+      narrativeSource: "butler",
+      allowedAttractions: ["黄山风景区", "宏村", "故宫"],
+    },
+    days: [
+      {
+        ...source,
+        purpose: "上午游览黄山风景区，午餐后休息，关注天气。",
+        highlights: ["黄山风景区：按当天排程游览", "午餐：在山脚用餐", "天气：关注阵雨"],
+        cautions: ["休息：午后保留机动时间"],
+      },
+    ],
+  };
+
+  const prepared = await prepareGuidebookDayNarrative(planWithCandidates, 0);
+  assert.equal(prepared.analysisFailed, undefined);
+  assert.match(prepared.purpose, /黄山风景区/);
+  assert.match(JSON.stringify(prepared), /午餐/);
 });

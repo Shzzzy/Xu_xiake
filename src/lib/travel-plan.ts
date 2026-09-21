@@ -148,6 +148,8 @@ export type TripMeta = {
   transportPreference: TransportPreference;
   pace: Pace;
   interests: string[];
+  /** 本 run 允许出现在文案中的候选景点；缺失时兼容旧数据。 */
+  allowedAttractions?: string[];
   /** 仅管家链路写入；缺失表示 legacy 计划，enrichment 行为保持不变。 */
   narrativeSource?: TripNarrativeSource;
 };

@@ -88,6 +88,8 @@ export const tripPlanSchema = z.object({
     transportPreference: z.enum(["economy", "balanced", "speed"]),
     pace: z.enum(["relaxed", "balanced", "deep"]),
     interests: z.array(z.string()),
+    // 候选景点随计划进入预览/PDF，旧数据缺失时仍可解析。
+    allowedAttractions: z.array(z.string()).optional(),
     // 管家 dayCopy 的权威来源标记；preview/PDF 两侧据此跳过 legacy enrichment。
     narrativeSource: z.enum(["butler", "legacy"]).optional(),
   }),

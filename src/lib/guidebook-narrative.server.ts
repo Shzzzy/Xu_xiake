@@ -248,7 +248,11 @@ export async function prepareGuidebookDayNarrative(
       .filter((node) => node.type === "attraction" || node.type === "night-activity")
       .map((node) => node.name),
   );
-  const knownAttractions = [...(options.knownAttractions ?? []), ...scheduledAttractions];
+  const knownAttractions = [
+    ...(options.knownAttractions ?? []),
+    ...(plan.meta.allowedAttractions ?? []),
+    ...scheduledAttractions,
+  ];
 
   let candidate = day;
   try {
@@ -260,7 +264,7 @@ export async function prepareGuidebookDayNarrative(
     } else if (!isButlerNarrativePlan(plan)) {
       candidate = await enrichTripPlanNarrativeForDay(plan, index, options.deps);
     }
-    validateDayNarrative(candidate, index);
+    validateDayNarrative(candidate, index, { knownAttractions });
   } catch {
     candidate = buildFallbackDayNarrative(day, index);
     validateDayNarrative(candidate, index, { allowAnalysisFailure: true, knownAttractions });
