@@ -35,12 +35,24 @@ export type TransportPlanningInput = {
   fetchImpl?: typeof fetch;
 };
 
-export type TransportPlanningResult = {
+export type TransportPlanningReady = {
+  status: "ready";
   route: RoutePlan;
   legs: TransportPlanLeg[];
   references: TransportPriceReference[];
   minimumTotal: number;
 };
+
+export type TransportPlanningDegraded = {
+  status: "degraded";
+  reason: string;
+  route: RoutePlan;
+  legs: [];
+  references: [];
+  minimumTotal: 0;
+};
+
+export type TransportPlanningResult = TransportPlanningReady | TransportPlanningDegraded;
 
 const GENERIC_TRANSPORT_MODES = new Set<TransportMode>(["economy", "balanced", "speed"]);
 const LONG_DISTANCE_FLIGHT_KM = 800;
@@ -240,22 +252,32 @@ function resolveTransportMode(
   });
 }
 
-function minimumUnitPrice(mode: TransportMode, legDistanceKm: number): number {
-  return calculateTransportLeg({
-    mode: mode as TransportPlanLeg["mode"],
-    distanceKm: legDistanceKm,
-    travelers: 1,
-  }).minimumPerPersonCost;
+type DriveRouteResult =
+  | { status: "ready"; distanceKm: number; durationMinutes: number }
+  | { status: "degraded"; reason: string };
+
+type ResolvedLegResult =
+  | { status: "ready"; routeLeg: RouteLeg; planLeg: TransportPlanLeg }
+  | { status: "degraded"; reason: string };
+
+function createDegradedTransportPlan(route: RoutePlan, reason: string): TransportPlanningDegraded {
+  return {
+    status: "degraded",
+    reason,
+    route,
+    legs: [],
+    references: [],
+    minimumTotal: 0,
+  };
 }
 
 async function resolveDriveRoute(input: {
   client: AmapClient | null;
   from: AmapGeocode | undefined;
   to: AmapGeocode | undefined;
-  fallbackDistanceKm: number;
-}): Promise<{ distanceKm: number; durationMinutes?: number }> {
+}): Promise<DriveRouteResult> {
   if (!input.client || !input.from || !input.to) {
-    return { distanceKm: input.fallbackDistanceKm };
+    return { status: "degraded", reason: "缺少高德 AMap client 或驾车路线端点坐标" };
   }
 
   try {
@@ -264,15 +286,20 @@ async function resolveDriveRoute(input: {
       destination: input.to.location,
       mode: "car",
     });
-    const distanceKm =
-      route.distanceMeters > 0 ? route.distanceMeters / 1000 : input.fallbackDistanceKm;
+    if (!(route.distanceMeters > 0)) {
+      return { status: "degraded", reason: "高德驾车路线缺少有效距离" };
+    }
+    if (!(route.durationSeconds > 0)) {
+      return { status: "degraded", reason: "高德驾车路线缺少有效时长" };
+    }
     return {
-      distanceKm,
-      ...(route.durationSeconds > 0 ? { durationMinutes: route.durationSeconds / 60 } : {}),
+      status: "ready",
+      distanceKm: route.distanceMeters / 1000,
+      durationMinutes: route.durationSeconds / 60,
     };
-  } catch {
-    // 高德限流或道路不可达时保留直线距离，交给确定性时长公式兜底。
-    return { distanceKm: input.fallbackDistanceKm };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "未知错误";
+    return { status: "degraded", reason: "高德驾车路线查询失败：" + detail };
   }
 }
 
@@ -304,45 +331,68 @@ async function searchTransportPriceSources(
 async function buildPriceReference(
   leg: RouteLeg,
   input: TransportPlanningInput,
-  legDistanceKm: number,
+  planLeg: TransportPlanLeg,
   headcount: number,
 ): Promise<TransportPriceReference> {
-  const unitPrice = minimumUnitPrice(leg.transport, legDistanceKm);
   return {
     legId: leg.id,
     from: leg.from,
     to: leg.to,
     mode: leg.transport,
-    distanceKm: Math.round(legDistanceKm * 10) / 10,
-    minimumUnitPrice: unitPrice,
-    minimumPartyTotal: unitPrice * headcount,
+    distanceKm: planLeg.distanceKm,
+    minimumUnitPrice: planLeg.minimumPerPersonCost,
+    minimumPartyTotal: planLeg.minimumPerPersonCost * headcount,
     travelerCount: headcount,
     basis: "本地最低参考价按距离、交通方式与人数计算，Tavily 摘要只用于综合区间。",
-    sources: await searchTransportPriceSources(leg, input, legDistanceKm),
+    sources: await searchTransportPriceSources(leg, input, planLeg.distanceKm),
   };
 }
 
 export async function prepareRouteTransportPlan(
   input: TransportPlanningInput,
 ): Promise<TransportPlanningResult> {
+  if (!input.client) {
+    return createDegradedTransportPlan(input.route, "缺少高德 AMap client，无法计算确定性交通计划");
+  }
+
+  const nodeNames = [...new Set(input.route.legs.flatMap((leg) => [leg.from, leg.to]))];
   const geocoded = await geocodeRouteNodes(input.client, input.route);
+  const missingNodes = nodeNames.filter((name) => !geocoded.has(name));
+  if (missingNodes.length > 0) {
+    return createDegradedTransportPlan(
+      input.route,
+      "高德地理编码失败：无法定位 " + missingNodes.join("、"),
+    );
+  }
+
   const headcount = travelerCount(input.travelers);
-  const resolvedLegs = await Promise.all(
-    input.route.legs.map(async (leg) => {
+  const legResults = await Promise.all(
+    input.route.legs.map(async (leg): Promise<ResolvedLegResult> => {
       const fromGeocode = geocoded.get(leg.from);
       const toGeocode = geocoded.get(leg.to);
-      const straightLineDistance =
-        fromGeocode && toGeocode ? distanceKm(fromGeocode.location, toGeocode.location) : 0;
-      const driveRoute =
-        leg.transport === "drive"
-          ? await resolveDriveRoute({
-              client: input.client,
-              from: fromGeocode,
-              to: toGeocode,
-              fallbackDistanceKm: straightLineDistance,
-            })
-          : { distanceKm: straightLineDistance };
-      const legDistanceKm = Math.round(driveRoute.distanceKm * 10) / 10;
+      if (!fromGeocode || !toGeocode) {
+        return { status: "degraded", reason: "高德地理编码缺少 " + leg.from + " 或 " + leg.to };
+      }
+
+      const straightLineDistance = distanceKm(fromGeocode.location, toGeocode.location);
+      let legDistanceKm = Math.round(straightLineDistance * 10) / 10;
+      let routeDurationMinutes: number | undefined;
+
+      if (leg.transport === "drive") {
+        const driveRoute = await resolveDriveRoute({
+          client: input.client,
+          from: fromGeocode,
+          to: toGeocode,
+        });
+        if (driveRoute.status === "degraded") return driveRoute;
+        legDistanceKm = Math.round(driveRoute.distanceKm * 10) / 10;
+        routeDurationMinutes = driveRoute.durationMinutes;
+      }
+
+      if (!(legDistanceKm > 0)) {
+        return { status: "degraded", reason: "无法计算 " + leg.from + " 到 " + leg.to + " 的有效距离" };
+      }
+
       const mode = resolveTransportMode(
         leg.transport,
         legDistanceKm,
@@ -353,10 +403,11 @@ export async function prepareRouteTransportPlan(
         mode,
         distanceKm: legDistanceKm,
         travelers: headcount,
-        routeDurationMinutes: driveRoute.durationMinutes,
+        routeDurationMinutes,
       });
 
       return {
+        status: "ready",
         routeLeg: { ...leg, transport: mode },
         planLeg: {
           id: leg.id,
@@ -366,9 +417,18 @@ export async function prepareRouteTransportPlan(
           distanceKm: legDistanceKm,
           mode,
           ...calculation,
-        } satisfies TransportPlanLeg,
+        },
       };
     }),
+  );
+  const rejectedLeg = legResults.find((result) => result.status === "degraded");
+  if (rejectedLeg?.status === "degraded") {
+    return createDegradedTransportPlan(input.route, rejectedLeg.reason);
+  }
+
+  const resolvedLegs = legResults.filter(
+    (result): result is Extract<ResolvedLegResult, { status: "ready" }> =>
+      result.status === "ready",
   );
   const routeLegs = resolvedLegs.map(({ routeLeg }) => routeLeg);
   const route: RoutePlan = { ...input.route, legs: routeLegs };
@@ -377,11 +437,12 @@ export async function prepareRouteTransportPlan(
     resolvedLegs
       .filter(({ planLeg }) => planLeg.mode !== "drive")
       .map(({ routeLeg, planLeg }) =>
-        buildPriceReference(routeLeg, input, planLeg.distanceKm, headcount),
+        buildPriceReference(routeLeg, input, planLeg, headcount),
       ),
   );
 
   return {
+    status: "ready",
     route,
     legs,
     references,

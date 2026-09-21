@@ -466,7 +466,12 @@ function failingButlerFetch(): FetchImpl {
 
 test("开关关闭时走原链路且 mode 为 legacy", async () => {
   const result = await runLivePlannerWith(buildLiveInput(), {
-    env: { BUTLER_PLANNER: "0", DEEPSEEK_API_KEY: "k", TAVILY_API_KEY: "k" },
+    env: {
+      BUTLER_PLANNER: "0",
+      DEEPSEEK_API_KEY: "k",
+      TAVILY_API_KEY: "k",
+      AMAP_E2E_FIXTURE: "1",
+    },
     fetchImpl: fakeLegacyFetch(),
     repository: createMemoryPlaceRepository(),
   });
@@ -479,7 +484,12 @@ test("开关关闭时走原链路且 mode 为 legacy", async () => {
 
 test("开关打开时走管家链路并带回违规清单", async () => {
   const result = await runLivePlannerWith(buildLiveInput(), {
-    env: { BUTLER_PLANNER: "1", DEEPSEEK_API_KEY: "k", TAVILY_API_KEY: "k" },
+    env: {
+      BUTLER_PLANNER: "1",
+      DEEPSEEK_API_KEY: "k",
+      TAVILY_API_KEY: "k",
+      AMAP_E2E_FIXTURE: "1",
+    },
     fetchImpl: fakeButlerFetch(),
     repository: createMemoryPlaceRepository(),
   });
@@ -495,7 +505,12 @@ test("开关打开时走管家链路并带回违规清单", async () => {
 
 test("管家骨架失败时退回 legacy 链路而不抛错", async () => {
   const result = await runLivePlannerWith(buildLiveInput(), {
-    env: { BUTLER_PLANNER: "1", DEEPSEEK_API_KEY: "k", TAVILY_API_KEY: "k" },
+    env: {
+      BUTLER_PLANNER: "1",
+      DEEPSEEK_API_KEY: "k",
+      TAVILY_API_KEY: "k",
+      AMAP_E2E_FIXTURE: "1",
+    },
     fetchImpl: failingButlerFetch(),
     repository: createMemoryPlaceRepository(),
   });
@@ -581,7 +596,12 @@ test("高德目的地候选非空时会进入管家 sources", async () => {
       },
     }),
     {
-      env: { BUTLER_PLANNER: "1", DEEPSEEK_API_KEY: "k", TAVILY_API_KEY: "k" },
+      env: {
+      BUTLER_PLANNER: "1",
+      DEEPSEEK_API_KEY: "k",
+      TAVILY_API_KEY: "k",
+      AMAP_E2E_FIXTURE: "1",
+    },
       fetchImpl,
       repository: createMemoryPlaceRepository(),
       amapClient,
@@ -595,4 +615,22 @@ test("高德目的地候选非空时会进入管家 sources", async () => {
   assert.deepEqual(result.route.legs.map((leg) => leg.transport), ["flight", "flight"]);
   assert.ok(tavilyQueries.length >= 2);
   assert.ok(tavilyQueries.every((query) => query.includes("票价")));
+});
+
+test("交通阶段 degraded 时 live planner fail closed", async () => {
+  await assert.rejects(
+    runLivePlannerWith(buildLiveInput(), {
+      env: {
+        BUTLER_PLANNER: "1",
+        DEEPSEEK_API_KEY: "k",
+        TAVILY_API_KEY: "k",
+        AMAP_WEB_SERVICE_KEY: "",
+        AMAP_API_KEY: "",
+        AMAP_KEY: "",
+      },
+      fetchImpl: fakeButlerFetch(),
+      repository: createMemoryPlaceRepository(),
+    }),
+    /交通规划不可用/,
+  );
 });

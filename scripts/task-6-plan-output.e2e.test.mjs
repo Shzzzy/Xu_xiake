@@ -76,6 +76,7 @@ async function startDevServer(port) {
       BROWSER_SMOKE_TIMEOUT_MS: String(START_TIMEOUT_MS),
       // 强制走真实管家排程链路，而不是依赖外部碰巧设置的环境变量。
       BUTLER_PLANNER: "1",
+      AMAP_E2E_FIXTURE: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,

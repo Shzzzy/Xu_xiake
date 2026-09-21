@@ -44,6 +44,11 @@ const loadPlannerContext = createServerOnlyFn(async () => {
   return import("./planner-context.server.ts");
 });
 
+const loadAmapE2eFixture = createServerOnlyFn(async () => {
+  const { createAmapE2eFixtureClient } = await import("./amap-e2e-fixture.server.ts");
+  return createAmapE2eFixtureClient;
+});
+
 export type DiscoveryNotice = RouteDiscoveryNotice;
 
 const transportModes = [
@@ -119,6 +124,8 @@ export type LivePlannerEnv = {
   AMAP_WEB_SERVICE_KEY?: string;
   AMAP_API_KEY?: string;
   AMAP_KEY?: string;
+  /** 仅浏览器 E2E 使用的确定性高德替身开关。 */
+  AMAP_E2E_FIXTURE?: string;
 };
 
 export type LivePlannerDeps = {
@@ -543,7 +550,10 @@ export async function runLivePlannerWith(
     key: readLiveEnv(deps, "AMAP_KEY")?.trim(),
   });
   const amapClient =
-    deps.amapClient ?? plannerContext.createPlannerAmapClient(amapKey, fetchImpl);
+    deps.amapClient ??
+    (readLiveEnv(deps, "AMAP_E2E_FIXTURE") === "1"
+      ? (await loadAmapE2eFixture())()
+      : plannerContext.createPlannerAmapClient(amapKey, fetchImpl));
   const seedCandidates = input.seedPlaces.map((place) => ({
     name: place.name,
     summary: `${place.area}。${place.summary}。建议停留 ${place.duration} 分钟。`,
@@ -565,6 +575,10 @@ export async function runLivePlannerWith(
       fetchImpl,
     }),
   ]);
+  if (transportPlan.status !== "ready") {
+    // 交通阶段未通过时 fail closed，绝不让伪造的 0km 计划进入下游。
+    throw new Error("交通规划不可用：" + transportPlan.reason);
+  }
   const candidates = plannerContext.mergePlannerCandidates({
     primary: amapCandidates,
     fallback: seedCandidates,
