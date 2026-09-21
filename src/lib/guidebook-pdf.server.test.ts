@@ -417,10 +417,10 @@ test("同一非法计划的预览与导出使用相同 fallback 文案", async (
   });
 
   assert.equal(exportResult.status, "ok");
-  assert.match(previewHtml, /第 1 天：水乡慢游/);
+  assert.match(previewHtml, /第 1 天：按已冻结排程继续行程/);
   assert.match(previewHtml, /本页分析未能生成/);
   assert.doesNotMatch(previewHtml, /故宫/);
-  assert.match(exportedHtml, /第 1 天：水乡慢游/);
+  assert.match(exportedHtml, /第 1 天：按已冻结排程继续行程/);
   assert.match(exportedHtml, /本页分析未能生成/);
   assert.doesNotMatch(exportedHtml, /故宫/);
 });
