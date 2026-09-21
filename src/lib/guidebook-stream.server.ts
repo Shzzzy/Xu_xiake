@@ -37,6 +37,8 @@ export type GuidebookStreamOptions = GuidebookImageFetchOptions & {
   loadDayNarrative?: (day: TripDay, dayIndex: number) => Promise<TripDay>;
   /** 测试和故障注入使用：指定自然日强制走经过校验的 fallback。 */
   failNarrativeDay?: number;
+  /** 测试注入使用：验证生成器自身的 index/checksum 顺序守卫。 */
+  pageChecksumFactory?: (html: string, index: number, id: string) => string;
 };
 
 export type GuidebookPreviewState = GuidebookPageAcceptanceState;
@@ -69,6 +71,7 @@ export async function* streamGuidebookPages(
   options: GuidebookStreamOptions = {},
 ): AsyncGenerator<GuidebookStreamEvent> {
   const runId = options.runId?.trim() || "legacy";
+  const streamPageState = createPreviewState(runId);
   const emit = (event: GuidebookStreamEvent): GuidebookStreamEvent => {
     options.onEvent?.(event);
     return event;
@@ -144,14 +147,18 @@ export async function* streamGuidebookPages(
       }
     }
     const html = spec.render(prepared);
-    yield emit({
+    const pageEvent: GuidebookPageEvent = {
       type: "page",
       runId,
       index,
       id: spec.id,
       label: spec.label,
-      checksum: pageChecksum(html),
+      checksum: options.pageChecksumFactory?.(html, index, spec.id) ?? pageChecksum(html),
       html,
-    });
+    };
+    if (!acceptPage(streamPageState, pageEvent)) {
+      throw new Error(`路书页面协议校验失败：${spec.id}`);
+    }
+    yield emit(pageEvent);
   }
 }

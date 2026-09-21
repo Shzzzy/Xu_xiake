@@ -284,3 +284,14 @@ test("meta 和 error 协议都携带 runId", () => {
     message: "失败",
   });
 });
+
+test("生成器真实路径按共享协议自检并拒绝重复 checksum", async () => {
+  await assert.rejects(async () => {
+    for await (const _event of streamGuidebookPages(plan, {
+      runId: "run-1",
+      pageChecksumFactory: () => "duplicate-checksum",
+    })) {
+      // 消费生成器以触发自检。
+    }
+  }, /页面协议/);
+});
