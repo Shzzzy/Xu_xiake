@@ -296,3 +296,24 @@ test("history 未安排景点和危险文本触发 fallback 且不泄漏", async
   assert.equal(prepared.history?.length ?? 0, 0);
   assert.doesNotMatch(JSON.stringify(prepared), /故宫|script|javascript:/);
 });
+
+test("prepareGuidebookDayNarrative 把 AbortSignal 传到 DeepSeek 并取消请求", async () => {
+  const controller = new AbortController();
+  let requestSignal: AbortSignal | null | undefined;
+  const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    requestSignal = init?.signal;
+    return Response.json({
+      purpose: "AI 目的",
+      highlights: ["AI 重点"],
+      cautions: ["AI 注意"],
+    });
+  }) as typeof fetch;
+
+  await prepareGuidebookDayNarrative(plan, 0, {
+    deps: { apiKey: "test-key", fetchImpl },
+    signal: controller.signal,
+  });
+  controller.abort();
+
+  assert.equal(requestSignal?.aborted, true);
+});

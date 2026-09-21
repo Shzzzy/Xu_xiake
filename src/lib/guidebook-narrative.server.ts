@@ -244,6 +244,7 @@ export function freezeExistingDayNarrative(day: TripDay, index: number): TripDay
 
 export type GuidebookNarrativePreparationOptions = {
   deps?: DeepSeekTravelDeps;
+  signal?: AbortSignal;
   loadDayNarrative?: (day: TripDay, dayIndex: number) => Promise<TripDay>;
   failNarrativeDay?: number;
   knownAttractions?: readonly string[];
@@ -279,7 +280,10 @@ export async function prepareGuidebookDayNarrative(
     if (options.loadDayNarrative) {
       candidate = await options.loadDayNarrative(day, index);
     } else if (!isButlerNarrativePlan(plan)) {
-      candidate = await enrichTripPlanNarrativeForDay(plan, index, options.deps);
+      candidate = await enrichTripPlanNarrativeForDay(plan, index, {
+        ...options.deps,
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
     }
     validateDayNarrative(candidate, index, { knownAttractions });
   } catch {

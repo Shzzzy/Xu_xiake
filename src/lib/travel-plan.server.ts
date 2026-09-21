@@ -75,6 +75,7 @@ export type DeepSeekTravelDeps = {
   model?: string;
   fetchImpl?: typeof fetch;
   fetch?: typeof fetch;
+  signal?: AbortSignal;
   timeoutMs?: number;
   maxTokens?: number;
   temperature?: number;
@@ -312,7 +313,9 @@ async function requestDeepSeekJson(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(config.timeoutMs),
+      signal: deps.signal
+        ? AbortSignal.any([deps.signal, AbortSignal.timeout(config.timeoutMs)])
+        : AbortSignal.timeout(config.timeoutMs),
     });
   } catch (error) {
     const code = requestFailureCode(error);

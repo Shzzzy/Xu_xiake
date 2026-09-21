@@ -438,9 +438,17 @@ test("legacy 文案准备超时后返回安全可打印 HTML", async () => {
       history: [{ title: "故宫", background: "危险内容", source: "javascript:alert(1)" }],
     })),
   };
+  let prepareSignal: AbortSignal | undefined;
+  let prepareAborted = false;
   const result = await exportGuidebookWithTimeout(unsafePlan, {
     timeoutMs: 5,
-    prepareNarrative: async () => new Promise<TripPlan>(() => {}),
+    prepareNarrative: async (_plan, options) => {
+      prepareSignal = options.signal;
+      options.signal.addEventListener("abort", () => {
+        prepareAborted = true;
+      });
+      return new Promise<TripPlan>(() => {});
+    },
     renderPdf: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
   });
 
@@ -448,5 +456,7 @@ test("legacy 文案准备超时后返回安全可打印 HTML", async () => {
   if (result.status !== "html") return;
   assert.match(result.message, /超时/);
   assert.match(result.html, /江南水乡两日路书/);
-  assert.doesNotMatch(result.html, /tracker\.example|故宫|javascript:|<script/i);
+  assert.equal(prepareSignal?.aborted, true);
+  assert.equal(prepareAborted, true);
+  assert.doesNotMatch(result.html, /tracker\\.example|故宫|javascript:|<script/i);
 });

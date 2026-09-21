@@ -509,7 +509,7 @@ export type GuidebookExportDependencies = GuidebookImageFetchOptions & {
 
 export type GuidebookTimeoutExportDependencies = GuidebookExportDependencies & {
   timeoutMs?: number;
-  prepareNarrative?: (plan: TripPlan) => Promise<TripPlan>;
+  prepareNarrative?: (plan: TripPlan, options: { signal: AbortSignal }) => Promise<TripPlan>;
 };
 
 function buildSafeGuidebookFallbackPlan(plan: TripPlan): TripPlan {
@@ -576,8 +576,10 @@ export async function exportGuidebookWithTimeout(
 
   try {
     const exportPromise = (async () => {
-      const prepareNarrative = dependencies.prepareNarrative ?? prepareGuidebookNarrativePlan;
-      const narrativePlan = await prepareNarrative(plan);
+      const prepareNarrative =
+        dependencies.prepareNarrative ??
+        ((narrativePlan, options) => prepareGuidebookNarrativePlan(narrativePlan, options));
+      const narrativePlan = await prepareNarrative(plan, { signal: controller.signal });
       fallbackPlan = buildSafeGuidebookFallbackPlan(narrativePlan);
       return exportGuidebookForTest(narrativePlan, {
         ...dependencies,

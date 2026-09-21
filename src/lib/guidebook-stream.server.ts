@@ -118,6 +118,7 @@ export async function* streamGuidebookPages(
         const narrativeDay = await prepareGuidebookDayNarrative(prepared, dayIndex, {
           loadDayNarrative: options.loadDayNarrative,
           failNarrativeDay: options.failNarrativeDay,
+          signal: options.signal,
         });
         prepared = {
           ...prepared,
