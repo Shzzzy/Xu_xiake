@@ -269,7 +269,7 @@ function buildBudgetFromDays(
     lodging: exact(costs.lodging),
     food: exact(costs.food),
     tickets: exact(costs.tickets),
-    other: exact(costs.other),
+    other: costs.other > 0 ? exact(costs.other) : undefined,
   });
 }
 

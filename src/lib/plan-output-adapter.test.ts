@@ -78,11 +78,11 @@ test("reconciles budget categories, daily totals and timeline node costs", () =>
     plan.budget.tickets.amount +
     plan.budget.other.amount;
 
-  assert.equal(dailyTotal, nodeTotal);
-  assert.equal(plan.budget.estimatedTotal, dailyTotal);
-  assert.equal(plan.budget.totalMin, dailyTotal);
-  assert.equal(plan.budget.totalMax, dailyTotal);
-  assert.equal(categoryTotal, dailyTotal);
+  assert.equal(dailyTotal, nodeTotal);                                  // 节点合计不变
+  assert.equal(categoryTotal, dailyTotal + plan.budget.other.amount);   // 五类合计 = 节点 + 杂事开销
+  assert.equal(plan.budget.estimatedTotal, categoryTotal);
+  assert.equal(plan.budget.totalMin, categoryTotal);
+  assert.equal(plan.budget.totalMax, categoryTotal);
 });
 
 test("maps real builder weather and destination data into TripPlan", () => {
@@ -93,4 +93,10 @@ test("maps real builder weather and destination data into TripPlan", () => {
   assert.ok(plan.days.every((day) => day.date));
   assert.ok(plan.days.some((day) => /晴|多云|有雨/.test(day.weather ?? "")));
   assert.ok(plan.days.some((day) => day.nodes.some((node) => node.type === "attraction")));
+});
+
+test("其他项在兜底路径下按前四类 10% 预留", () => {
+  const plan = fixtureOutput();
+  assert.ok(plan.budget.other.amount >= 200, "杂事开销最低 ¥200");
+  assert.ok(plan.budget.other.amount > 0, "不应再恒为 0");
 });

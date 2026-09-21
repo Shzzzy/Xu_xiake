@@ -151,6 +151,8 @@ test("renders day navigation, timeline and budget", () => {
   assert.match(html, /全团总预算/);
   assert.match(html, /日期导航/);
   assert.match(html, /预算构成饼图/);
+  assert.match(html, /其他 · 杂事开销/);
+  assert.match(html, /中途打车/);
 });
 
 test("renders every formal execution node type", () => {

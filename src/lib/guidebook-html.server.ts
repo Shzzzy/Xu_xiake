@@ -318,7 +318,7 @@ function renderBudget(plan: TripPlan): string {
     { key: "lodging", label: "住宿", color: "#c96442" },
     { key: "food", label: "餐饮", color: "#d9a441" },
     { key: "tickets", label: "门票", color: "#6b8e6a" },
-    { key: "other", label: "其他", color: "#8b7a9e" },
+    { key: "other", label: "其他 · 杂事开销", color: "#8b7a9e" },
   ];
   const categories = entries.map((entry) => ({
     ...entry,
@@ -343,7 +343,7 @@ function renderBudget(plan: TripPlan): string {
     plan.budget.overBudget > 0
       ? `超出 ${currency(plan.budget.overBudget)}`
       : `差额 ${currency(plan.budget.remaining)}`;
-  const body = `${renderSectionHeading("BUDGET ALLOCATION / 预算分配", "预算分配")}<div class="budget-hero"><div class="budget-total"><span>全团总预算</span><strong>${currency(plan.budget.totalBudget)}</strong><small>预估费用 ${currency(plan.budget.estimatedTotal)}</small></div><div class="budget-status ${plan.budget.overBudget > 0 ? "over" : ""}">${escapeHtml(difference)}</div></div><div class="budget-layout"><div class="budget-donut" style="background:conic-gradient(${gradientStops.join(",")})" role="img" aria-label="预算构成饼图"><div><span>预计</span><strong>${currency(plan.budget.estimatedTotal)}</strong></div></div><div class="budget-entries">${categories.map((entry) => `<div class="budget-entry"><span class="budget-dot" style="background:${entry.color}"></span><span class="budget-entry-label">${entry.label}</span><strong>${categoryRange(entry.category)}</strong><small>${Math.round(Math.max(0, finiteNumber(entry.category.ratio)) * 100)}%</small></div>`).join("")}</div></div><div class="budget-notes"><p><strong>人均预算</strong> ${currency(plan.budget.perPersonBudget)}</p><p><strong>人均预计</strong> ${currency(plan.budget.perPersonEstimated)}</p><p><strong>住宿房间</strong> ${plan.budget.rooms} 间</p></div><div class="tips-box"><h3><i class="ti ti-info-circle"></i> 预算说明</h3><p>费用来自行程节点的结构化估算，可能随交通班次、酒店房态、门票政策和节假日价格变化。出发前请再次核对实际支付金额。</p></div>`;
+  const body = `${renderSectionHeading("BUDGET ALLOCATION / 预算分配", "预算分配")}<div class="budget-hero"><div class="budget-total"><span>全团总预算</span><strong>${currency(plan.budget.totalBudget)}</strong><small>预估费用 ${currency(plan.budget.estimatedTotal)}</small></div><div class="budget-status ${plan.budget.overBudget > 0 ? "over" : ""}">${escapeHtml(difference)}</div></div><div class="budget-layout"><div class="budget-donut" style="background:conic-gradient(${gradientStops.join(",")})" role="img" aria-label="预算构成饼图"><div><span>预计</span><strong>${currency(plan.budget.estimatedTotal)}</strong></div></div><div class="budget-entries">${categories.map((entry) => `<div class="budget-entry"><span class="budget-dot" style="background:${entry.color}"></span><span class="budget-entry-label">${entry.label}</span><strong>${categoryRange(entry.category)}</strong><small>${Math.round(Math.max(0, finiteNumber(entry.category.ratio)) * 100)}%</small></div>`).join("")}</div></div><div class="budget-notes"><p><strong>人均预算</strong> ${currency(plan.budget.perPersonBudget)}</p><p><strong>人均预计</strong> ${currency(plan.budget.perPersonEstimated)}</p><p><strong>住宿房间</strong> ${plan.budget.rooms} 间</p></div><p class="budget-incidentals-note">杂事开销含中途打车、纪念品、零食与活动道具等零散支出，默认按前四类合计 10% 预留（最低 ¥200）。</p><div class="tips-box"><h3><i class="ti ti-info-circle"></i> 预算说明</h3><p>费用来自行程节点的结构化估算，可能随交通班次、酒店房态、门票政策和节假日价格变化。出发前请再次核对实际支付金额。</p></div>`;
   return renderPage("budget-page", "budget", "预算分配", body);
 }
 

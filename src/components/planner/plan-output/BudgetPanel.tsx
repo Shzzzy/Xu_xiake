@@ -10,7 +10,7 @@ const categoryDefinitions: {
   { key: "lodging", label: "住宿", color: "#c96442", dotClass: "bg-[#c96442]" },
   { key: "food", label: "餐饮", color: "#d9a441", dotClass: "bg-[#d9a441]" },
   { key: "tickets", label: "门票", color: "#6b8e6a", dotClass: "bg-[#6b8e6a]" },
-  { key: "other", label: "其他", color: "#8b7a9e", dotClass: "bg-[#8b7a9e]" },
+  { key: "other", label: "其他 · 杂事开销", color: "#8b7a9e", dotClass: "bg-[#8b7a9e]" },
 ];
 
 function currency(value: number) {
@@ -106,6 +106,11 @@ export function BudgetPanel({ budget }: { budget: TripBudget }) {
           })}
         </div>
       </div>
+
+      {/* 杂事开销是零散支出，单独说明一次即可 */}
+      <p className="mt-3 text-[11px] leading-5 text-[var(--v-muted)]">
+        杂事开销含中途打车、纪念品、零食与活动道具等零散支出，默认按前四类合计 10% 预留（最低 ¥200）。
+      </p>
 
       <dl className="mt-5 grid grid-cols-2 gap-3 border-t border-[var(--v-line)] pt-4 text-xs">
         <div>
