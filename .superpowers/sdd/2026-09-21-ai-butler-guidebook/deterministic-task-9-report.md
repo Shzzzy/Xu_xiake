@@ -110,3 +110,12 @@
 - 每日交通费用按 legId 和对应 party total 绑定到具体交通节点，多 leg 不再平均分。
 - 增加 260 分钟成功、真实容量不足降级、交通超窗 fail closed、不同价格多 leg 节点金额回归测试。
 - 最终验证：typecheck、npm test、build:dev、git diff --check 全部通过。
+
+## 最终复审修复（ddd34e3）
+
+- `fix: align degraded themes and preserve leg ids`
+- 时间轴完成后按实际节点重算 `day.theme`；降级日不再残留已丢弃景点。
+- adapter 会拒绝引用当天未安排景点的每日文案，改用本地安全文案。
+- `tripPlanSchema` 增加可选 `legId`，JSON 序列化 round-trip 保留交通 leg 绑定。
+- 新增真实 `planWithButler → adapter → HTML` 回归：降级日 theme、purpose 与页面标题不出现被丢弃景点。
+- 清理未使用的 `MIN_ATTRACTION_MINUTES`，260 分钟测试明确断言午餐名称。
