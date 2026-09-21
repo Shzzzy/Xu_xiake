@@ -250,7 +250,7 @@ test("每日文案校验通过后才推送该日页面，失败日降级后继�
   assert.doesNotMatch(dayTwoHtml, /未校验的旧文案/);
 });
 
-test("重复 checksum 页面被忽略", () => {
+test("服务端页面状态拒绝乱序、重复 checksum 和旧 run", () => {
   const state = createPreviewState("run-1");
   const pageEvent: GuidebookPageEvent = {
     type: "page",
@@ -262,9 +262,11 @@ test("重复 checksum 页面被忽略", () => {
     html: "<article>封面</article>",
   };
 
+  assert.equal(acceptPage(state, { ...pageEvent, index: 1, checksum: "checksum-b" }), false);
   assert.equal(acceptPage(state, pageEvent), true);
   assert.equal(acceptPage(state, pageEvent), false);
-  assert.equal(acceptPage(state, { ...pageEvent, runId: "run-old", checksum: "checksum-b" }), false);
+  assert.equal(acceptPage(state, { ...pageEvent, runId: "run-old", index: 1, checksum: "checksum-c" }), false);
+  assert.equal(acceptPage(state, { ...pageEvent, index: 1, checksum: "checksum-d" }), true);
 });
 
 test("meta 和 error 协议都携带 runId", () => {

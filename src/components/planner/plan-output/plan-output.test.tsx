@@ -314,19 +314,27 @@ test("butler 骨架映射为与骨架同源的每日行程，只保留景点节�
   assert.equal(plannedDays[0].weather?.code, 1);
 });
 
-test("旧 runId 和重复 checksum 的页面不会写入当前预览", () => {
-  const seen = new Set<string>();
+test("客户端页面判定拒绝旧 run、乱序 index 和重复 checksum", () => {
+  const state = { runId: "current", nextIndex: 0, seen: new Set<string>() };
   assert.equal(
-    shouldAcceptPage({ runId: "new", latestRunId: "current", checksum: "a", seen }),
+    shouldAcceptPage({ runId: "old", index: 0, checksum: "a", latestRunId: "current", state }),
     false,
   );
   assert.equal(
-    shouldAcceptPage({ runId: "current", latestRunId: "current", checksum: "a", seen }),
+    shouldAcceptPage({ runId: "current", index: 1, checksum: "b", latestRunId: "current", state }),
+    false,
+  );
+  assert.equal(
+    shouldAcceptPage({ runId: "current", index: 0, checksum: "a", latestRunId: "current", state }),
     true,
   );
   assert.equal(
-    shouldAcceptPage({ runId: "current", latestRunId: "current", checksum: "a", seen }),
+    shouldAcceptPage({ runId: "current", index: 0, checksum: "a", latestRunId: "current", state }),
     false,
+  );
+  assert.equal(
+    shouldAcceptPage({ runId: "current", index: 1, checksum: "b", latestRunId: "current", state }),
+    true,
   );
 });
 

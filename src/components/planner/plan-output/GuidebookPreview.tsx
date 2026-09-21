@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, LoaderCircle } from "lucide-react";
+import {
+  acceptGuidebookPage,
+  createGuidebookPageAcceptanceState,
+  type GuidebookPageAcceptanceState,
+} from "@/lib/guidebook-page-protocol";
 import type { TripPlan } from "@/lib/travel-plan";
 import { ExportGuidebookButton } from "./ExportGuidebookButton";
 
@@ -27,13 +32,16 @@ export function shouldHandleStreamEvent(input: {
 export function shouldAcceptPage(input: {
   runId: string;
   latestRunId: string;
+  index: number;
   checksum: string;
-  seen: Set<string>;
+  state: GuidebookPageAcceptanceState;
 }): boolean {
   if (input.runId !== input.latestRunId) return false;
-  if (!input.checksum || input.seen.has(input.checksum)) return false;
-  input.seen.add(input.checksum);
-  return true;
+  return acceptGuidebookPage(input.state, {
+    runId: input.runId,
+    index: input.index,
+    checksum: input.checksum,
+  });
 }
 
 /**
@@ -46,7 +54,9 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
   const shellRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const latestRunIdRef = useRef("");
-  const seenChecksumsRef = useRef<Set<string>>(new Set());
+  const pageStateRef = useRef<GuidebookPageAcceptanceState>(
+    createGuidebookPageAcceptanceState(""),
+  );
   const [total, setTotal] = useState(0);
   const [received, setReceived] = useState(0);
   const [label, setLabel] = useState<string | null>(null);
@@ -64,7 +74,7 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
       globalThis.crypto?.randomUUID?.() ||
       `guidebook-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     latestRunIdRef.current = requestRunId;
-    seenChecksumsRef.current = new Set();
+    pageStateRef.current = createGuidebookPageAcceptanceState(requestRunId);
     const controller = new AbortController();
     let bodyObserver: ResizeObserver | null = null;
     let shellObserver: ResizeObserver | null = null;
@@ -145,8 +155,9 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
         const accepted = shouldAcceptPage({
           runId: event.runId,
           latestRunId: latestRunIdRef.current,
+          index: event.index,
           checksum: event.checksum,
-          seen: seenChecksumsRef.current,
+          state: pageStateRef.current,
         });
         if (!accepted) return;
         appendPage(event.html);

@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import {
+  acceptGuidebookPage,
+  createGuidebookPageAcceptanceState,
+  type GuidebookPageAcceptanceState,
+} from "./guidebook-page-protocol.ts";
 import { prepareGuidebookDayNarrative } from "./guidebook-narrative.server.ts";
 import { enrichGuidebookPlanWithMaps } from "./guidebook-map.server.ts";
 import { guidebookPageSpecs, renderGuidebookHead } from "./guidebook-html.server.ts";
@@ -34,20 +39,14 @@ export type GuidebookStreamOptions = GuidebookImageFetchOptions & {
   failNarrativeDay?: number;
 };
 
-export type GuidebookPreviewState = {
-  runId: string;
-  seen: Set<string>;
-};
+export type GuidebookPreviewState = GuidebookPageAcceptanceState;
 
 export function createPreviewState(runId: string): GuidebookPreviewState {
-  return { runId, seen: new Set() };
+  return createGuidebookPageAcceptanceState(runId);
 }
 
 export function acceptPage(state: GuidebookPreviewState, event: GuidebookPageEvent): boolean {
-  if (event.runId !== state.runId) return false;
-  if (!event.checksum || state.seen.has(event.checksum)) return false;
-  state.seen.add(event.checksum);
-  return true;
+  return acceptGuidebookPage(state, event);
 }
 
 function pageChecksum(html: string): string {
