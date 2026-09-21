@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { BudgetCategory, TimelineNodeType, TripBrief, TripPlan } from "../../../lib/travel-plan";
@@ -11,6 +12,7 @@ import {
   shouldHandleStreamEvent,
 } from "./GuidebookPreview";
 import { TravelerBudgetFields } from "./TravelerBudgetFields";
+import { verifyGuidebookPageChecksum } from "@/lib/guidebook-page-protocol";
 import { requestAndApplyBudget } from "./budget-advice-apply";
 import { TripOverview } from "./TripOverview";
 
@@ -357,4 +359,12 @@ test("旧 run 的 meta/error 以及取消后的所有事件都不会处理", () 
     shouldHandleStreamEvent({ eventRunId: "current", latestRunId: "current", cancelled: true }),
     false,
   );
+});
+
+test("页面 checksum 必须匹配实际 HTML 的 SHA-256", async () => {
+  const html = "<article>完整页面内容</article>";
+  const checksum = createHash("sha256").update(html).digest("hex");
+
+  assert.equal(await verifyGuidebookPageChecksum(html, checksum), true);
+  assert.equal(await verifyGuidebookPageChecksum(html, "wrong-checksum"), false);
 });

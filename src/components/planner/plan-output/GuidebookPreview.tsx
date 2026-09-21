@@ -4,6 +4,7 @@ import {
   acceptGuidebookPage,
   createGuidebookPageAcceptanceState,
   type GuidebookPageAcceptanceState,
+  verifyGuidebookPageChecksum,
 } from "@/lib/guidebook-page-protocol";
 import type { TripPlan } from "@/lib/travel-plan";
 import { ExportGuidebookButton } from "./ExportGuidebookButton";
@@ -134,7 +135,7 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
       window.setTimeout(() => measure(), 260);
     };
 
-    const handleEvent = (event: StreamEvent) => {
+    const handleEvent = async (event: StreamEvent) => {
       if (
         !shouldHandleStreamEvent({
           eventRunId: event.runId,
@@ -152,6 +153,7 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
         return;
       }
       if (event.type === "page") {
+        if (!(await verifyGuidebookPageChecksum(event.html, event.checksum))) return;
         const accepted = shouldAcceptPage({
           runId: event.runId,
           latestRunId: latestRunIdRef.current,
@@ -201,10 +203,10 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
           for (const line of lines) {
             if (cancelled) return;
             if (!line.trim()) continue;
-            handleEvent(JSON.parse(line) as StreamEvent);
+            await handleEvent(JSON.parse(line) as StreamEvent);
           }
         }
-        if (!cancelled && buffer.trim()) handleEvent(JSON.parse(buffer) as StreamEvent);
+        if (!cancelled && buffer.trim()) await handleEvent(JSON.parse(buffer) as StreamEvent);
       } catch (cause) {
         if (cancelled || controller.signal.aborted) return;
         setError(cause instanceof Error ? cause.message : "路书预览生成失败");
