@@ -19,3 +19,7 @@ Thumbs.db
 # Local shell artifact
 {}
 
+# 本地技能与工具生成的文件
+.agents/
+AGENTS.project.md
+skills-lock.json
