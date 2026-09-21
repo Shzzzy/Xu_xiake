@@ -433,6 +433,8 @@ test("legacy 文案准备超时后返回安全可打印 HTML", async () => {
     days: fixturePlan.days.map((day) => ({
       ...day,
       purpose: "顺路去故宫看看",
+      highlights: ["故宫：危险旧文案"],
+      analysisFailed: true,
       mapUrl: "https://tracker.example/day.png",
       qrCodeUrl: "javascript:alert(1)",
       history: [{ title: "故宫", background: "危险内容", source: "javascript:alert(1)" }],
@@ -440,6 +442,7 @@ test("legacy 文案准备超时后返回安全可打印 HTML", async () => {
   };
   let prepareSignal: AbortSignal | undefined;
   let prepareAborted = false;
+  let renderPdfCalls = 0;
   const result = await exportGuidebookWithTimeout(unsafePlan, {
     timeoutMs: 5,
     prepareNarrative: async (_plan, options) => {
@@ -449,7 +452,10 @@ test("legacy 文案准备超时后返回安全可打印 HTML", async () => {
       });
       return new Promise<TripPlan>(() => {});
     },
-    renderPdf: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+    renderPdf: async () => {
+      renderPdfCalls += 1;
+      return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    },
   });
 
   assert.equal(result.status, "html");
@@ -458,5 +464,19 @@ test("legacy 文案准备超时后返回安全可打印 HTML", async () => {
   assert.match(result.html, /江南水乡两日路书/);
   assert.equal(prepareSignal?.aborted, true);
   assert.equal(prepareAborted, true);
+  assert.equal(renderPdfCalls, 0);
   assert.doesNotMatch(result.html, /tracker\\.example|故宫|javascript:|<script/i);
+});
+
+test("预取消信号在进入 Playwright 前终止 PDF 渲染", async () => {
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    () =>
+      renderGuidebookPdf("<!doctype html><html><body>测试</body></html>", {
+        signal: controller.signal,
+      }),
+    /中止|abort/i,
+  );
 });

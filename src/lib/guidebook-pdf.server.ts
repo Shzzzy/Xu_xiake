@@ -438,7 +438,10 @@ function chromiumExecutablePath(): string | undefined {
   ].find((candidate) => existsSync(candidate));
 }
 
-export type GuidebookPdfRenderer = (html: string) => Promise<Uint8Array>;
+export type GuidebookPdfRenderer = (
+  html: string,
+  options?: { signal?: AbortSignal },
+) => Promise<Uint8Array>;
 
 export type GuidebookExportResult =
   | {
@@ -452,24 +455,41 @@ export type GuidebookExportResult =
       message: string;
     };
 
-export async function renderGuidebookPdf(html: string): Promise<Uint8Array> {
+export async function renderGuidebookPdf(
+  html: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<Uint8Array> {
+  const throwIfAborted = () => {
+    if (options.signal?.aborted) throw new Error("PDF 渲染已中止");
+  };
+  throwIfAborted();
   const executablePath = chromiumExecutablePath();
   const browser = await chromium.launch({
     headless: true,
     ...(executablePath ? { executablePath } : {}),
   });
 
-  const context = await browser.newContext({
-    javaScriptEnabled: false,
-    serviceWorkers: "block",
-  });
+  const abortBrowser = () => {
+    void browser.close().catch(() => {});
+  };
+  options.signal?.addEventListener("abort", abortBrowser, { once: true });
+
+  let context: Awaited<ReturnType<typeof browser.newContext>> | undefined;
   try {
+    throwIfAborted();
+    context = await browser.newContext({
+      javaScriptEnabled: false,
+      serviceWorkers: "block",
+    });
+    throwIfAborted();
     const page = await context.newPage();
     await installGuidebookRequestGuard(page);
+    throwIfAborted();
     await page.setContent(html, {
       waitUntil: "networkidle",
       timeout: PDF_RENDER_TIMEOUT_MS,
     });
+    throwIfAborted();
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,
@@ -477,8 +497,9 @@ export async function renderGuidebookPdf(html: string): Promise<Uint8Array> {
     });
     return new Uint8Array(pdf);
   } finally {
-    await context.close();
-    await browser.close();
+    options.signal?.removeEventListener("abort", abortBrowser);
+    await context?.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
 }
 
@@ -503,8 +524,6 @@ function fallbackMessage(error: unknown): string {
 
 export type GuidebookExportDependencies = GuidebookImageFetchOptions & {
   renderPdf: GuidebookPdfRenderer;
-  /** 调用方已完成共享文案固化时跳过第二次准备。 */
-  narrativePrepared?: boolean;
 };
 
 export type GuidebookTimeoutExportDependencies = GuidebookExportDependencies & {
@@ -532,7 +551,21 @@ function buildSafeGuidebookFallbackPlan(plan: TripPlan): TripPlan {
       validateDayNarrative(safeDay, index, { knownAttractions });
       return safeDay;
     } catch {
-      return buildFallbackDayNarrative(safeDay, index);
+      const forced = buildFallbackDayNarrative(
+        {
+          ...safeDay,
+          purpose: "",
+          highlights: [],
+          cautions: [],
+          analysisFailed: false,
+        },
+        index,
+      );
+      validateDayNarrative(forced, index, {
+        allowAnalysisFailure: true,
+        knownAttractions,
+      });
+      return forced;
     }
   });
 
@@ -581,11 +614,10 @@ export async function exportGuidebookWithTimeout(
         ((narrativePlan, options) => prepareGuidebookNarrativePlan(narrativePlan, options));
       const narrativePlan = await prepareNarrative(plan, { signal: controller.signal });
       fallbackPlan = buildSafeGuidebookFallbackPlan(narrativePlan);
-      return exportGuidebookForTest(narrativePlan, {
+      return exportPreparedGuidebookForTest(narrativePlan, {
         ...dependencies,
         signal: controller.signal,
         timeoutMs,
-        narrativePrepared: true,
       });
     })();
     return await Promise.race([exportPromise, timeoutPromise]);
@@ -597,21 +629,26 @@ export async function exportGuidebookForTest(
   plan: TripPlan,
   dependencies: GuidebookExportDependencies,
 ): Promise<GuidebookExportResult> {
+  const narrativePlan = await prepareGuidebookNarrativePlan(plan);
+  return exportPreparedGuidebookForTest(narrativePlan, dependencies);
+}
+
+async function exportPreparedGuidebookForTest(
+  narrativePlan: TripPlan,
+  dependencies: GuidebookExportDependencies,
+): Promise<GuidebookExportResult> {
   const startedAt = Date.now();
-  const narrativePlan = dependencies.narrativePrepared
-    ? plan
-    : await prepareGuidebookNarrativePlan(plan);
   const mapPlan = await enrichGuidebookPlanWithMaps(narrativePlan, dependencies);
   const preparedPlan = await prepareGuidebookPlan(mapPlan, dependencies);
   const preparedAt = Date.now();
   const html = renderGuidebookHtml(preparedPlan);
 
   try {
-    const pdf = await dependencies.renderPdf(html);
+    const pdf = await dependencies.renderPdf(html, { signal: dependencies.signal });
     if (process.env.GUIDEBOOK_EXPORT_TIMING === "1") {
       const finishedAt = Date.now();
       console.info(
-        `[guidebook] image=${preparedAt - startedAt}ms html=${finishedAt - preparedAt}ms bytes=${pdf.byteLength}`,
+        "[guidebook] image=" + (preparedAt - startedAt) + "ms html=" + (finishedAt - preparedAt) + "ms bytes=" + pdf.byteLength,
       );
     }
     return {
