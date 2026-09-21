@@ -74,6 +74,30 @@ function createFakeAmapClient(searchPoi: AmapClient["searchPoi"] = async () => [
   };
 }
 
+function createAmapAttraction(input: {
+  id: string;
+  name?: string;
+  type?: string;
+  province?: string;
+  city: string;
+  district: string;
+  adcode: string;
+  address: string;
+  location: AmapCoordinate;
+}): AmapPoi {
+  return {
+    id: input.id,
+    name: input.name ?? "水乡古镇",
+    type: input.type ?? "风景名胜;古镇",
+    address: input.address,
+    location: input.location,
+    province: input.province ?? "浙江省",
+    city: input.city,
+    district: input.district,
+    adcode: input.adcode,
+  };
+}
+
 test("特定景区名称优先按地区精确查询且不会返回北京地标", async () => {
   const calls: { keywords: string; city?: string }[] = [];
   const silverBeach: AmapPoi = {
@@ -400,6 +424,165 @@ test("多城市目的地支持任一结构化城市或文本地点匹配", async
   ]);
 });
 
+test("安徽 · 徽州软别名不会误杀黄山市和黄山区候选", async () => {
+  const scenicArea = createAmapAttraction({
+    id: "HS-SCENIC-AREA",
+    name: "黄山风景区",
+    type: "风景名胜;风景名胜",
+    province: "安徽省",
+    city: "黄山市",
+    district: "黄山区",
+    adcode: "341003",
+    address: "安徽省黄山市黄山区汤口镇",
+    location: [118.17, 30.07],
+  });
+  const hotSpring = createAmapAttraction({
+    id: "HS-HOT-SPRING",
+    name: "黄山温泉景区",
+    type: "风景名胜;温泉",
+    province: "安徽省",
+    city: "黄山市",
+    district: "黄山区",
+    adcode: "341003",
+    address: "安徽省黄山市黄山区汤泉路",
+    location: [118.16, 30.08],
+  });
+  const client = createFakeAmapClient(async (input) =>
+    input.keywords === "黄山" ? [scenicArea, hotSpring] : [],
+  );
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "黄山",
+    region: "安徽 · 徽州",
+  });
+
+  assert.deepEqual(result.map((candidate) => candidate.id).sort(), [
+    "HS-HOT-SPRING",
+    "HS-SCENIC-AREA",
+  ]);
+});
+
+test("杭州市 · 乌镇允许可信城市和明确 locality 文本任一匹配", async () => {
+  const hangzhou = createAmapAttraction({
+    id: "HZ-WATER-TOWN",
+    city: "杭州市",
+    district: "西湖区",
+    adcode: "330106",
+    address: "浙江省杭州市西湖区",
+    location: [120.15, 30.25],
+  });
+  const wuzhen = createAmapAttraction({
+    id: "WZ-WATER-TOWN",
+    city: "嘉兴市",
+    district: "桐乡市",
+    adcode: "330483",
+    address: "浙江省嘉兴市桐乡市乌镇",
+    location: [120.49, 30.74],
+  });
+  const ningbo = createAmapAttraction({
+    id: "NB-WATER-TOWN",
+    city: "宁波市",
+    district: "海曙区",
+    adcode: "330203",
+    address: "浙江省宁波市海曙区",
+    location: [121.55, 29.87],
+  });
+  const client = createFakeAmapClient(async (input) =>
+    input.keywords === "水乡古镇" ? [hangzhou, wuzhen, ningbo] : [],
+  );
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "水乡古镇",
+    region: "杭州市 · 乌镇",
+  });
+
+  assert.deepEqual(result.map((candidate) => candidate.id).sort(), [
+    "HZ-WATER-TOWN",
+    "WZ-WATER-TOWN",
+  ]);
+});
+
+test("嘉兴 · 乌镇保留嘉兴和乌镇候选并排除无关城市", async () => {
+  const jiaxing = createAmapAttraction({
+    id: "JX-WATER-TOWN",
+    city: "嘉兴市",
+    district: "南湖区",
+    adcode: "330402",
+    address: "浙江省嘉兴市南湖区",
+    location: [120.75, 30.75],
+  });
+  const wuzhen = createAmapAttraction({
+    id: "WZ-WATER-TOWN",
+    city: "嘉兴市",
+    district: "桐乡市",
+    adcode: "330483",
+    address: "浙江省嘉兴市桐乡市乌镇",
+    location: [120.49, 30.74],
+  });
+  const ningbo = createAmapAttraction({
+    id: "NB-WATER-TOWN",
+    city: "宁波市",
+    district: "海曙区",
+    adcode: "330203",
+    address: "浙江省宁波市海曙区",
+    location: [121.55, 29.87],
+  });
+  const client = createFakeAmapClient(async (input) =>
+    input.keywords === "水乡古镇" ? [jiaxing, wuzhen, ningbo] : [],
+  );
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "水乡古镇",
+    region: "嘉兴 · 乌镇",
+  });
+
+  assert.deepEqual(result.map((candidate) => candidate.id).sort(), [
+    "JX-WATER-TOWN",
+    "WZ-WATER-TOWN",
+  ]);
+});
+
+test("长自治区名称可提取城市并过滤同自治区异地同名", async () => {
+  const calls: { keywords: string; city?: string }[] = [];
+  const urumqi = createAmapAttraction({
+    id: "URUMQI-WATER-TOWN",
+    province: "新疆维吾尔自治区",
+    city: "乌鲁木齐市",
+    district: "天山区",
+    adcode: "650102",
+    address: "新疆维吾尔自治区乌鲁木齐市天山区",
+    location: [87.62, 43.83],
+  });
+  const turpan = createAmapAttraction({
+    id: "TURPAN-WATER-TOWN",
+    province: "新疆维吾尔自治区",
+    city: "吐鲁番市",
+    district: "高昌区",
+    adcode: "650402",
+    address: "新疆维吾尔自治区吐鲁番市高昌区",
+    location: [89.19, 42.95],
+  });
+  const client = createFakeAmapClient(async (input) => {
+    calls.push({ keywords: input.keywords, city: input.city });
+    return input.keywords === "水乡古镇" ? [turpan, urumqi] : [];
+  });
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "水乡古镇",
+    region: "新疆维吾尔自治区乌鲁木齐市",
+  });
+
+  assert.equal(calls.find((call) => call.keywords === "水乡古镇")?.city, "乌鲁木齐市");
+  assert.deepEqual(
+    result.map((candidate) => candidate.id),
+    ["URUMQI-WATER-TOWN"],
+  );
+});
+
 test("区县和县级市目标按结构化行政字段过滤", async () => {
   const westLakeTemple: AmapPoi = {
     id: "HZ-XIHU-TEMPLE",
@@ -497,6 +680,43 @@ test("同名不同 areaKey 的候选在合并阶段不会互相去重", () => {
 
   assert.equal(merged.length, 2);
   assert.deepEqual(merged.map((candidate) => candidate.areaKey).sort(), ["杭州-西湖", "金华-婺城"]);
+});
+
+test("同名多 areaKey 候选只在 Tavily 补充可唯一匹配时写入", () => {
+  const merged = mergePlannerCandidates({
+    primary: [
+      {
+        name: "西湖风景名胜区",
+        summary: "杭州西湖",
+        source: "https://www.amap.com/place/hz-west-lake",
+        areaKey: "杭州-西湖",
+      },
+      {
+        name: "西湖风景名胜区",
+        summary: "金华同名地点",
+        source: "https://www.amap.com/place/jh-west-lake",
+        areaKey: "金华-婺城",
+      },
+    ],
+    fallback: [],
+    supplements: [
+      {
+        title: "西湖风景名胜区",
+        url: "https://example.com/hangzhou-west-lake",
+        content: "杭州西湖资料",
+        score: 0.9,
+      },
+      {
+        title: "西湖风景名胜区",
+        url: "https://example.com/generic",
+        content: "通用补充资料",
+        score: 0.5,
+      },
+    ],
+  });
+
+  assert.equal(merged[0]?.summary, "杭州西湖。杭州西湖资料");
+  assert.equal(merged[1]?.summary, "金华同名地点");
 });
 
 test("高德 POI 转为候选景点，来源不含 key 且优先合并", () => {

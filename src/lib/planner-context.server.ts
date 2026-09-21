@@ -150,31 +150,22 @@ function normalizeAdminName(value: string): string {
   return normalized;
 }
 
-function stripProvincePrefix(value: string): string {
-  let normalized = normalizeAdminName(value);
-  for (const province of PROVINCE_ALIASES) {
-    for (const alias of province.aliases) {
-      const aliasKey = normalizeName(alias);
-      if (aliasKey && normalized.startsWith(aliasKey) && normalized.length > aliasKey.length) {
-        normalized = normalized.slice(aliasKey.length);
-        break;
-      }
+function stripProvinceAliasPrefix(value: string): string {
+  let normalized = normalizeName(value);
+  const aliases = PROVINCE_ALIASES.flatMap((province) => province.aliases)
+    .map((alias) => normalizeName(alias))
+    .sort((left, right) => right.length - left.length);
+  for (const alias of aliases) {
+    if (alias && normalized.startsWith(alias) && normalized.length > alias.length) {
+      normalized = normalized.slice(alias.length);
+      break;
     }
   }
   return normalized;
 }
 
 function stripAdministrativePrefix(value: string): string {
-  let normalized = normalizeName(value);
-  for (const province of PROVINCE_ALIASES) {
-    for (const alias of province.aliases) {
-      const aliasKey = normalizeName(alias);
-      if (aliasKey && normalized.startsWith(aliasKey) && normalized.length > aliasKey.length) {
-        normalized = normalized.slice(aliasKey.length);
-        break;
-      }
-    }
-  }
+  let normalized = stripProvinceAliasPrefix(value);
   normalized = normalized.replace(/^.*?市/u, "");
   normalized = normalized.replace(/^.*?(?:自治州|地区|盟)/u, "");
   return normalized;
@@ -185,9 +176,15 @@ function extractAdcodes(value: string): string[] {
 }
 
 function extractExplicitCityNames(value: string): string[] {
-  return Array.from(normalizeName(value).matchAll(/[\u4e00-\u9fa5]{2,12}?市/gu), (match) =>
-    stripProvincePrefix(match[0]),
-  ).filter(Boolean);
+  const names = new Set<string>();
+  for (const segment of normalizeName(value).split(/[·,，;；/|、\s]+/u)) {
+    const withoutProvince = stripProvinceAliasPrefix(segment);
+    for (const match of withoutProvince.matchAll(/[\u4e00-\u9fa5]{2,12}?市/gu)) {
+      const city = normalizeAdminName(match[0]);
+      if (city) names.add(city);
+    }
+  }
+  return [...names];
 }
 
 function extractDirectAdminCityNames(value: string): string[] {
@@ -212,6 +209,13 @@ function extractLocalityTokens(value: string): string[] {
   for (const token of tokens) {
     if (!token || /^\d{6}$/u.test(token) || GENERIC_REGION_TOKENS.has(token)) continue;
     if (findProvinces(token).length > 0) continue;
+    if (
+      extractExplicitCityNames(token).length > 0 ||
+      extractExplicitDistrictNames(token).length > 0 ||
+      extractDirectAdminCityNames(token).length > 0
+    ) {
+      continue;
+    }
     const name = normalizeAdminName(token);
     if (name.length < 2 || name.length > 4) continue;
     names.add(name);
@@ -226,18 +230,9 @@ function extractAmapCityQuery(...values: (string | undefined)[]): string | undef
   }
 
   for (const value of values) {
-    const city = value?.match(/[\u4e00-\u9fa5]{2,10}?市/u)?.[0];
-    if (!city) continue;
-
-    let normalizedCity = normalizeName(city);
-    for (const province of PROVINCE_ALIASES) {
-      const alias = province.aliases.find((item) => normalizedCity.startsWith(item));
-      if (alias && normalizedCity.length > alias.length) {
-        normalizedCity = normalizedCity.slice(alias.length);
-        break;
-      }
-    }
-    if (normalizedCity.endsWith("市")) return normalizedCity;
+    const withoutProvince = stripProvinceAliasPrefix(value ?? "");
+    const city = withoutProvince.match(/[\u4e00-\u9fa5]{2,10}?市/u)?.[0];
+    if (city) return normalizeName(city);
   }
 
   for (const value of values) {
@@ -259,7 +254,7 @@ type AmapAdministrativeTarget = {
   provinceKeys: Set<string>;
   cityNames: Set<string>;
   districtNames: Set<string>;
-  localityHints: Set<string>;
+  softLocalityHints: Set<string>;
   adcodes: string[];
 };
 
@@ -277,12 +272,12 @@ function buildAmapAdministrativeTarget(
     ...extractExplicitDistrictNames(region),
     ...extractExplicitDistrictNames(destination),
   ]);
-  const localityHints = new Set([...cityNames, ...districtNames, ...extractLocalityTokens(region)]);
+  const softLocalityHints = new Set(extractLocalityTokens(region));
   return {
     provinceKeys: new Set([...findProvinces(region), ...findProvinces(destination)]),
     cityNames,
     districtNames,
-    localityHints,
+    softLocalityHints,
     adcodes: [...new Set([...extractAdcodes(region), ...extractAdcodes(destination)])],
   };
 }
@@ -310,7 +305,23 @@ function isTrustedAmapQuery(
     return true;
   }
   const normalizedCity = normalizeAdminName(normalizedQuery);
-  return target.cityNames.has(normalizedCity) || target.localityHints.has(normalizedCity);
+  return (
+    target.cityNames.has(normalizedCity) ||
+    target.districtNames.has(normalizedCity) ||
+    target.softLocalityHints.has(normalizedCity)
+  );
+}
+
+function resolveSoftCityHints(pois: AmapPoi[], softLocalityHints: Set<string>): Set<string> {
+  const resolved = new Set<string>();
+  for (const hint of softLocalityHints) {
+    const normalizedHint = normalizeAdminName(hint);
+    if (!normalizedHint) continue;
+    if (pois.some((poi) => normalizeAdminName(poi.city ?? "") === normalizedHint)) {
+      resolved.add(normalizedHint);
+    }
+  }
+  return resolved;
 }
 
 function textHasAnyTargetToken(text: string, tokens: Iterable<string>): boolean {
@@ -323,7 +334,7 @@ function textHasAnyTargetToken(text: string, tokens: Iterable<string>): boolean 
 function isRelevantAmapPoi(
   poi: AmapPoi,
   destination: string,
-  region: string,
+  target: AmapAdministrativeTarget,
   searchContext: { queryCity?: string } = {},
 ): boolean {
   const poiText = normalizeName(
@@ -334,7 +345,6 @@ function isRelevantAmapPoi(
   const destinationText = normalizeName(destination);
   if (!destinationText || !poiText.includes(destinationText)) return false;
 
-  const target = buildAmapAdministrativeTarget(destination, region);
   if (target.provinceKeys.size > 0) {
     const mentionedProvinces = new Set([
       ...findProvinces(poi.province ?? ""),
@@ -356,45 +366,46 @@ function isRelevantAmapPoi(
       if (!target.adcodes.some((expected) => isAdcodeCompatible(expected, poiAdcode))) {
         return false;
       }
+      return true;
     } else if (!trustedQuery) {
       // 目标只给 adcode 时，没有 POI adcode 就无从核对；无城市查询上下文则拒绝。
       return false;
     }
   }
 
-  if (target.localityHints.size > 0) {
-    const poiCity = normalizeAdminName(poi.city ?? "");
-    const poiDistrict = normalizeAdminName(poi.district ?? "");
-    const cityMatches = Boolean(poiCity && target.localityHints.has(poiCity));
-    const districtMatches = Boolean(poiDistrict && target.localityHints.has(poiDistrict));
-    const textMatchesTarget = textHasAnyTargetToken(poiText, target.localityHints);
-    const textMatchesCity = textHasAnyTargetToken(poiText, target.cityNames);
-    const textMatchesDistrict = textHasAnyTargetToken(poiText, target.districtNames);
-    const hasStructuredLocality = Boolean(poiCity || poiDistrict);
+  const poiCity = normalizeAdminName(poi.city ?? "");
+  const poiDistrict = normalizeAdminName(poi.district ?? "");
+  const cityMatches = Boolean(poiCity && target.cityNames.has(poiCity));
+  const districtMatches = Boolean(poiDistrict && target.districtNames.has(poiDistrict));
+  const softStructuredMatch = Boolean(
+    (poiCity && target.softLocalityHints.has(poiCity)) ||
+    (poiDistrict && target.softLocalityHints.has(poiDistrict)),
+  );
+  const textMatchesSoft = textHasAnyTargetToken(poiText, target.softLocalityHints);
+  if (softStructuredMatch || textMatchesSoft) return true;
 
-    if (hasStructuredLocality) {
-      if (!cityMatches && !districtMatches && !textMatchesTarget) return false;
-      if (
-        target.cityNames.size > 0 &&
-        poiCity &&
-        !target.cityNames.has(poiCity) &&
-        !textMatchesCity
-      ) {
-        return false;
-      }
-      if (
-        target.districtNames.size > 0 &&
-        poiDistrict &&
-        !target.districtNames.has(poiDistrict) &&
-        !textMatchesDistrict
-      ) {
-        return false;
-      }
-    } else if (!textMatchesTarget && !trustedQuery) {
-      // 结构化字段缺失时保守放行，避免短地址合法 POI 因文本信息不足被误杀。
-    }
+  const textMatchesTrustedCity = textHasAnyTargetToken(poiText, target.cityNames);
+  const textMatchesTrustedDistrict = textHasAnyTargetToken(poiText, target.districtNames);
+  const hasTrustedLocality = target.cityNames.size > 0 || target.districtNames.size > 0;
+  if (!hasTrustedLocality) return true;
+
+  const hasStructuredLocality = Boolean(poiCity || poiDistrict);
+  if (!hasStructuredLocality) {
+    // 结构化字段缺失时保守放行，避免短地址合法 POI 因文本信息不足被误杀。
+    return true;
   }
 
+  if (
+    target.districtNames.size > 0 &&
+    poiDistrict &&
+    !districtMatches &&
+    !textMatchesTrustedDistrict
+  ) {
+    return false;
+  }
+  if (target.cityNames.size > 0 && poiCity && !cityMatches && !textMatchesTrustedCity) {
+    return false;
+  }
   return true;
 }
 
@@ -440,6 +451,40 @@ function isSameCandidateName(left: string, right: string): boolean {
   );
 }
 
+function candidateAreaTokens(areaKey: string | undefined): string[] {
+  if (!areaKey) return [];
+  return areaKey
+    .split(/[-|/·,，;；、\s]+/u)
+    .map((token) => normalizeAdminName(token))
+    .filter(Boolean);
+}
+
+function supplementMatchesCandidateArea(
+  candidate: PlannerCandidate,
+  supplement: SearchResult,
+): boolean {
+  const tokens = candidateAreaTokens(candidate.areaKey);
+  if (tokens.length === 0) return false;
+  const haystack = normalizeName([supplement.title, supplement.url, supplement.content].join(" "));
+  return tokens.every((token) => haystack.includes(token));
+}
+
+function findSupplementTargets(
+  candidates: PlannerCandidate[],
+  supplement: SearchResult,
+): PlannerCandidate[] {
+  const nameMatches = candidates.filter((candidate) =>
+    isSameCandidateName(candidate.name, supplement.title),
+  );
+  if (nameMatches.length <= 1) return nameMatches;
+
+  const areaMatches = nameMatches.filter((candidate) =>
+    supplementMatchesCandidateArea(candidate, supplement),
+  );
+  // 同名多候选只有能按 areaKey 唯一定位时才补充，避免跨城市污染摘要。
+  return areaMatches.length === 1 ? areaMatches : [];
+}
+
 /**
  * AMap 是目的地景点的主来源；Tavily 只允许补充已有候选的摘要，不能新增或清空候选。
  */
@@ -470,9 +515,7 @@ export function mergePlannerCandidates(input: {
 
   for (const supplement of input.supplements ?? []) {
     if (!supplement.content.trim()) continue;
-    const targets = merged.filter((candidate) =>
-      isSameCandidateName(candidate.name, supplement.title),
-    );
+    const targets = findSupplementTargets(merged, supplement);
     for (const target of targets) {
       target.summary = appendSummary(target.summary, supplement.content);
     }
@@ -632,13 +675,24 @@ export async function searchAmapDestinationCandidates(input: {
     ...AMAP_POI_QUERIES.map((keywords) => search(keywords, city)),
     ...AMAP_POI_QUERIES.map((keywords) => search(destination + " " + keywords, city)),
   ]);
-  const relevant = [
+  const entries = [
     { pois: exactBatch, queryCity: city },
-    { pois: exactRetryBatch },
+    { pois: exactRetryBatch, queryCity: undefined },
     ...genericBatches.map((pois) => ({ pois, queryCity: city })),
-  ]
-    .flatMap(({ pois, queryCity }) => (pois ?? []).map((poi) => ({ poi, queryCity })))
-    .filter(({ poi, queryCity }) => isRelevantAmapPoi(poi, destination, region, { queryCity }))
+  ].flatMap(({ pois, queryCity }) => (pois ?? []).map((poi) => ({ poi, queryCity })));
+  const target = buildAmapAdministrativeTarget(destination, region);
+  const resolvedSoftCityHints = resolveSoftCityHints(
+    entries.map((entry) => entry.poi),
+    target.softLocalityHints,
+  );
+  const effectiveTarget = {
+    ...target,
+    cityNames: new Set([...target.cityNames, ...resolvedSoftCityHints]),
+  };
+  const relevant = entries
+    .filter(({ poi, queryCity }) =>
+      isRelevantAmapPoi(poi, destination, effectiveTarget, { queryCity }),
+    )
     .map(({ poi }) => poi);
 
   return buildAmapDestinationCandidates(relevant);
