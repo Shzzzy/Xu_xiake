@@ -696,6 +696,17 @@ async function enrichSegment(
     path,
   };
 }
+// 按路线经度/纬度跨度估算静态地图缩放级别，确保全程路线尽量完整落入画布。
+function fitMapZoom(points: readonly AmapCoordinate[]): number {
+  if (points.length < 2) return 10;
+  const longitudes = points.map(([longitude]) => longitude);
+  const latitudes = points.map(([, latitude]) => latitude);
+  const longitudeSpan = Math.max(...longitudes) - Math.min(...longitudes);
+  const latitudeSpan = Math.max(...latitudes) - Math.min(...latitudes);
+  const span = Math.max(longitudeSpan, latitudeSpan);
+  if (!Number.isFinite(span) || span <= 0) return 10;
+  return Math.max(3, Math.min(11, Math.floor(Math.log2(360 / span))));
+}
 function buildStaticMapUrlSafely(
   input: Parameters<typeof buildStaticMapUrl>[0],
   report: ErrorReporter,
@@ -757,7 +768,7 @@ async function enrichRoute(
               ([longitude, latitude]) => ({ longitude, latitude }),
             ),
             returnMode: plan.route.returnMode,
-            zoom: 7,
+            zoom: fitMapZoom([...mapOutbound, ...mapReturnPath]),
           },
           report,
         )
