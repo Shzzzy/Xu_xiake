@@ -1879,6 +1879,14 @@ function ItineraryScreen({
     brief.waypoints,
   ]);
   const resolvedRoutePlan = plannedRoute ?? routePlan;
+  // 目的地地点与天气数组在渲染中可能换引用；用内容签名稳定规划 effect，避免无限重跑。
+  const destinationPlacesSignature = destination.places
+    .map((place) => `${place.id}:${place.name}`)
+    .join("|");
+  const destinationPlaces = useMemo(
+    () => destination.places,
+    [destination.id, destinationPlacesSignature],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1939,7 +1947,8 @@ function ItineraryScreen({
     }
 
     if (detailedTrip) {
-      if (weatherState !== "ready" || weather.length === 0) return;
+      // 天气是增强信息，不是规划前置条件；省级/宽泛目的地地理编码失败时仍要继续生成路书。
+      if (weatherState === "loading") return;
 
       livePlannerFn({
         data: {
@@ -1953,8 +1962,8 @@ function ItineraryScreen({
           dailyHours: brief.dailyHours,
           pace: brief.pace,
           interests: brief.interests,
-          weather,
-          seedPlaces: destination.places,
+          weather: weatherState === "ready" ? weather : [],
+          seedPlaces: destinationPlaces,
           route: routePlan,
           origin: brief.origin,
           startTime: brief.startTime,
@@ -2064,13 +2073,12 @@ function ItineraryScreen({
     detailedTrip,
     destination.id,
     destination.name,
-    destination.places,
+    destinationPlaces,
     destination.region,
     livePlannerFn,
     longPlannerFn,
     refreshInspirationCatalog,
     routePlan,
-    weather,
     weatherState,
   ]);
   const plannedDays = useMemo(() => {
