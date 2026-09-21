@@ -132,7 +132,7 @@ const skeletonRequiredSchema = {
           type: "transport | transfer | attraction | meal | rest | hotel | night-activity",
           startTime: "string，HH:MM",
           endTime: "string，HH:MM",
-          name: "string，只能来自 candidates.name",
+          name: "string，景点类节点（attraction / night-activity）必须来自 candidates.name；其余节点（transport / transfer / meal / rest / hotel）自行给出合理名称，例如「午餐」「酒店入住」「返回酒店休息」",
           location: "string，可选",
           transportMode: "economy | balanced | speed | train | flight | drive | bus | ship，可选",
           transportMinutes: "number，可选，单位分钟",
@@ -156,7 +156,8 @@ export function buildSkeletonInstruction(input: SkeletonInstructionInput): strin
   const { brief } = input;
   const constraints = [
     "只输出严格 JSON，不要 Markdown、不要解释、不要多余文字",
-    "只能从 candidates 中挑选景点，不得编造候选清单之外的景点",
+    "只有景点类节点（attraction 与 night-activity）的 name 必须来自 candidates，不得编造候选清单之外的景点",
+    "其余节点（transport / transfer / meal / rest / hotel）不受候选清单限制，自行给出合理名称，例如「午餐」「酒店入住」「返回酒店休息」",
     "不得输出 URL；来源链接一律由本地补齐",
     `每天全部节点的时间必须落在用户窗口 ${brief.startTime}–${brief.endTime} 内，且当天时间升序、不重叠`,
     "每天必须包含用餐（meal）、住宿（hotel）与收尾休息（rest）节点；夜游（night-activity）可选",

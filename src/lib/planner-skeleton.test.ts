@@ -121,6 +121,19 @@ test("骨架提示词写明候选、时间窗与必含节点约束", () => {
   assert.match(instruction, /8000/);
 });
 
+// 候选清单只约束景点类节点；餐宿休息等固定槽位由模型自行命名。
+test("候选限制只作用于景点类节点", () => {
+  const instruction = buildSkeletonInstruction(instructionInput);
+
+  // 正面：把「必须来自 candidates」明确绑定到景点类节点。
+  assert.match(instruction, /景点类节点（attraction \/ night-activity）必须来自 candidates\.name/);
+  // 其余节点不受候选清单限制，自行给出合理名称。
+  assert.match(instruction, /其余节点[\s\S]{0,80}自行给出合理名称/);
+  // 反面：不得再出现把名称一律绑定到候选清单的旧措辞。
+  assert.doesNotMatch(instruction, /只能来自 candidates/);
+  assert.doesNotMatch(instruction, /(用餐|住宿|休息)[^；。]{0,40}来自 candidates/);
+});
+
 test("重排指令包含违规清单与两条硬约束", () => {
   const violations: PlanViolation[] = [
     {
