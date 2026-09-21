@@ -37,6 +37,16 @@ function browserExecutable() {
   ].find((candidate) => existsSync(candidate));
 }
 
+/** 反复点击直到目标出现：冷启动的开发服务里 React 水合完成时间不确定。 */
+async function clickUntilVisible(button, expected, attempts = 30) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await button.click({ timeout: 15_000 }).catch(() => {});
+    if ((await expected.count()) > 0) return;
+    await delay(400);
+  }
+  throw new Error("点击后界面没有进入下一步，可能是水合尚未完成");
+}
+
 function npmCommand() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
@@ -96,7 +106,7 @@ async function stopProcessTree(child) {
   if (child.exitCode === null) child.kill("SIGKILL");
 }
 
-test("真实向导输出包含换乘节点、可切日期且移动端无溢出", { timeout: 120_000 }, async () => {
+test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300_000 }, async () => {
   const port = await reservePort();
   let server = null;
   let browser = null;
@@ -122,10 +132,9 @@ test("真实向导输出包含换乘节点、可切日期且移动端无溢出",
     );
 
     await page.goto(server.url, { waitUntil: "domcontentloaded", timeout: 120_000 });
-    await page.waitForTimeout(1000);
-    await page.getByRole("button", { name: /帮我决定去哪/ }).click();
+    const entryButton = page.getByRole("button", { name: /帮我决定去哪/ });
     const destinationChoice = page.getByRole("button", { name: "奇峰与山水" });
-    await destinationChoice.waitFor({ state: "visible", timeout: 60_000 });
+    await clickUntilVisible(entryButton, destinationChoice);
     await destinationChoice.click();
     await page.getByRole("button", { name: "3 天" }).click();
     await page.getByRole("button", { name: "适中" }).click();
@@ -147,15 +156,26 @@ test("真实向导输出包含换乘节点、可切日期且移动端无溢出",
     await page.getByRole("button", { name: "纯电" }).click();
     await page.getByRole("button", { name: "生成旅行规划" }).click();
 
-    const layout = page.locator('[aria-label="B 布局行程执行结果"]');
-    await layout.waitFor({ state: "visible", timeout: 60_000 });
-    await page.getByText(/上海.*黄山.*换乘/).waitFor({ state: "visible" });
-    await page.getByText("全团总预算").waitFor({ state: "visible" });
+    // 结果页现在就是路书：页面逐页流式到达，全部就绪后才允许导出 PDF。
+    await page.getByText("逐页生成你的路书").waitFor({ state: "visible", timeout: 60_000 });
+    await page
+      .getByText(/路书已就绪 · 共 \d+ 页/)
+      .waitFor({ state: "visible", timeout: 180_000 });
 
-    const dayButtons = page.locator('aside[aria-label="日期导航"] button');
-    assert.ok((await dayButtons.count()) >= 2);
-    await dayButtons.nth(1).click();
-    await page.getByText("当前第 2 / 3 天").waitFor({ state: "visible" });
+    const guidebookFrame = page
+      .frames()
+      .find((frame) => frame !== page.mainFrame() && frame.url() === "about:blank");
+    assert.ok(guidebookFrame, "路书预览 iframe 应存在");
+    const guidebookPageCount = await guidebookFrame.locator("section.page").count();
+    assert.ok(guidebookPageCount >= 9, `路书页数应不少于 9 页，实际 ${guidebookPageCount} 页`);
+    await guidebookFrame.getByText("换乘").first().waitFor({ state: "visible", timeout: 30_000 });
+    await guidebookFrame.getByText("全团总预算").first().waitFor({ state: "visible", timeout: 30_000 });
+    // 结尾走并行生成的 AI 回望（服务端拼路线总结/评价/寄语），不再是旧的兜底文案。
+    await guidebookFrame.getByText(/路线总结/).first().waitFor({ state: "visible", timeout: 30_000 });
+
+    const exportButton = page.getByRole("button", { name: "生成路书 PDF" });
+    await exportButton.waitFor({ state: "visible", timeout: 30_000 });
+    assert.equal(await exportButton.isEnabled(), true, "路书就绪后导出按钮应可用");
 
     await page.screenshot({ path: "screenshots/task-6-plan-output-desktop.png", fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });

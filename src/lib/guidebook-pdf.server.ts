@@ -324,18 +324,28 @@ async function fetchGuidebookImageDataUrl(
   return null;
 }
 
+/**
+ * 把单张远程图片转成可内联的 data URL（失败时给占位图）。
+ *
+ * 抽成导出函数是为了让逐页流式预览按页取图：纯文字页不必等图片，
+ * 需要地图或二维码的页各自等自己的那一张。
+ */
+export async function prepareGuidebookImage(
+  value: string | undefined,
+  kind: GuidebookImageKind,
+  options: GuidebookImageFetchOptions = {},
+): Promise<string | undefined> {
+  if (!value) return value;
+  const dataUrl = await fetchGuidebookImageDataUrl(value, kind, options);
+  return dataUrl ?? guidebookPlaceholderSvg(kind);
+}
+
 export async function prepareGuidebookPlan(
   plan: TripPlan,
   options: GuidebookImageFetchOptions = {},
 ): Promise<TripPlan> {
-  const prepareImage = async (
-    value: string | undefined,
-    kind: GuidebookImageKind,
-  ): Promise<string | undefined> => {
-    if (!value) return value;
-    const dataUrl = await fetchGuidebookImageDataUrl(value, kind, options);
-    return dataUrl ?? guidebookPlaceholderSvg(kind);
-  };
+  const prepareImage = (value: string | undefined, kind: GuidebookImageKind) =>
+    prepareGuidebookImage(value, kind, options);
 
   const staticMapUrl = await prepareImage(plan.route.staticMapUrl, "map");
   const days = await Promise.all(

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import type { TripPlan } from "@/lib/travel-plan";
@@ -20,7 +20,8 @@ type PreparedPdf = {
 export type GuidebookExportController = {
   state: GuidebookGenerationState;
   preparedPdf: PreparedPdf | null;
-  regenerate: () => void;
+  isGenerating: boolean;
+  generate: () => Promise<void>;
   download: () => void;
 };
 
@@ -39,11 +40,11 @@ function fallbackPdfFilename(plan: TripPlan): string {
 }
 
 /**
- * 生成前先缓存 PDF，避免下载时才现场渲染。
+ * 路书 PDF 导出控制器。
  *
- * 服务端渲染一次约十几秒，如果放到点击下载时再执行，大文件在传输中容易被
- * 截断，用户会拿到空白或残缺文件。这里改成结果页出现后自动预生成，下载时
- * 只取已经准备好的 Blob。
+ * PDF 渲染要起一次无头浏览器并拉取静态地图，成本高于页面预览，所以不再随
+ * 结果页自动触发：用户点「生成路书 PDF」时才渲染，成功后立刻下载，之后按钮
+ * 变成可重复下载。
  */
 export function useGuidebookExport(plan: TripPlan): GuidebookExportController {
   const exportGuidebookFn = useServerFn(exportGuidebook);
@@ -54,11 +55,23 @@ export function useGuidebookExport(plan: TripPlan): GuidebookExportController {
   const [preparedPdf, setPreparedPdf] = useState<PreparedPdf | null>(null);
   const runRef = useRef(0);
 
+  const downloadBlob = useCallback((file: PreparedPdf) => {
+    const url = URL.createObjectURL(file.blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = file.filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_RELEASE_MS);
+  }, []);
+
   const generate = useCallback(async () => {
     const runId = runRef.current + 1;
     runRef.current = runId;
     setPreparedPdf(null);
     setState((current) => advanceGuidebookProgress(current, "preparing"));
+    // 服务端单次渲染十几秒，中途没有更细的信号，这里给出可见的阶段推进。
     const finalizeTimer = window.setTimeout(() => {
       if (runRef.current === runId) {
         setState((current) => advanceGuidebookProgress(current, "finalizing"));
@@ -85,8 +98,15 @@ export function useGuidebookExport(plan: TripPlan): GuidebookExportController {
         return;
       }
 
-      setPreparedPdf({ filename: result.filename, blob, readyAt: Date.now() });
+      const file: PreparedPdf = {
+        filename: result.filename || fallbackPdfFilename(plan),
+        blob,
+        readyAt: Date.now(),
+      };
+      setPreparedPdf(file);
       setState((current) => advanceGuidebookProgress(current, "ready"));
+      downloadBlob(file);
+      toast.success("路书 PDF 已开始下载");
     } catch (error) {
       if (runRef.current !== runId) return;
       setState((current) =>
@@ -99,48 +119,23 @@ export function useGuidebookExport(plan: TripPlan): GuidebookExportController {
     } finally {
       window.clearTimeout(finalizeTimer);
     }
-  }, [exportGuidebookFn, plan]);
-
-  const planKey = JSON.stringify({
-    title: plan.meta.title,
-    origin: plan.meta.origin,
-    waypoints: plan.meta.waypoints,
-    destination: plan.meta.destination,
-    startDate: plan.meta.startDate,
-    days: plan.meta.days,
-    travelers: plan.meta.travelers,
-    nodeCount: plan.days.reduce((total, day) => total + day.nodes.length, 0),
-    estimatedTotal: plan.budget.estimatedTotal,
-  });
-  const planKeyRef = useRef("");
-
-  // 结果页出现后立即预生成；行程内容变化时才重新生成，避免父级重渲染触发重复请求。
-  useEffect(() => {
-    if (planKeyRef.current === planKey) return;
-    planKeyRef.current = planKey;
-    void generate();
-  }, [generate, planKey]);
-
-  const regenerate = useCallback(() => {
-    void generate();
-  }, [generate]);
+  }, [downloadBlob, exportGuidebookFn, plan]);
 
   const download = useCallback(() => {
     if (!preparedPdf) {
-      toast.info("路书还在生成中，完成后即可下载。");
+      toast.info("路书 PDF 还没生成，先点生成。");
       return;
     }
-
-    const url = URL.createObjectURL(preparedPdf.blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = preparedPdf.filename || fallbackPdfFilename(plan);
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_RELEASE_MS);
+    downloadBlob(preparedPdf);
     toast.success("路书 PDF 已开始下载");
-  }, [plan, preparedPdf]);
+  }, [downloadBlob, preparedPdf]);
 
-  return { state, preparedPdf, regenerate, download };
+  return {
+    state,
+    preparedPdf,
+    isGenerating:
+      state.stage === "preparing" || state.stage === "rendering" || state.stage === "finalizing",
+    generate,
+    download,
+  };
 }

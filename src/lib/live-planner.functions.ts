@@ -11,6 +11,8 @@ import {
 } from "./live-planner";
 import { searchTavily } from "./tavily.server";
 import { buildLongPlannerMessages, parseLongPlanJson, type LongPlan } from "./long-planner";
+import { buildTripClosingWithDeepSeek } from "./travel-plan.server.ts";
+import type { TripClosing } from "./travel-plan.ts";
 import type { Pace, WeatherDay } from "./planner";
 import type { RoutePlan } from "./route-planner";
 import {
@@ -51,6 +53,8 @@ export type LivePlanResult =
       plan: ReturnType<typeof parsePlannerJson>;
       sources: SearchResult[];
       discoveries: DiscoveryNotice[];
+      /** 旅行回望：与主行程并行生成，失败时是确定性兜底文案。 */
+      closing: TripClosing;
     };
 
 function failedDiscoveryNotices(route: RoutePlan): DiscoveryNotice[] {
@@ -282,6 +286,26 @@ export const generateLiveItinerary = createServerFn({ method: "POST" })
       return { status: "needs_configuration", missing };
     }
 
+    // 结尾只依赖路线与节奏，不等每日正文，所以和主行程同时发出，不占关键路径。
+    const closingPromise = buildTripClosingWithDeepSeek(
+      {
+        origin: data.route.origin,
+        destination: data.route.destination,
+        waypoints: data.route.waypoints,
+        routeNodes: [data.route.origin, ...data.route.waypoints, data.route.destination],
+        days: data.days,
+        returnMode: data.route.returnMode ?? null,
+        pace: data.pace,
+        interests: data.interests,
+        highlights: data.seedPlaces.map((place) => place.name),
+      },
+      {
+        apiKey: deepseekKey,
+        baseUrl: process.env.DEEPSEEK_BASE_URL?.trim(),
+        fetchImpl: fetch,
+      },
+    );
+
     let discoveries: DiscoveryNotice[] = [];
     let discoverySourceGroups: DiscoverySourceGroup[] = [];
     let discoveredStops: DiscoveredStop[] = [];
@@ -322,21 +346,24 @@ export const generateLiveItinerary = createServerFn({ method: "POST" })
       discoverySourceGroups,
     });
 
-    const plan = await planWithDeepSeek({
-      apiKey: deepseekKey,
-      baseUrl: process.env.DEEPSEEK_BASE_URL?.trim(),
-      destinationName: data.destination.name,
-      region: data.destination.region,
-      startDate: data.startDate,
-      days: data.days,
-      dailyHours: data.dailyHours,
-      pace: data.pace,
-      interests: data.interests,
-      weather: data.weather,
-      sources,
-      discoveredStops,
-      route: data.route,
-    });
+    const [plan, closing] = await Promise.all([
+      planWithDeepSeek({
+        apiKey: deepseekKey,
+        baseUrl: process.env.DEEPSEEK_BASE_URL?.trim(),
+        destinationName: data.destination.name,
+        region: data.destination.region,
+        startDate: data.startDate,
+        days: data.days,
+        dailyHours: data.dailyHours,
+        pace: data.pace,
+        interests: data.interests,
+        weather: data.weather,
+        sources,
+        discoveredStops,
+        route: data.route,
+      }),
+      closingPromise,
+    ]);
 
-    return { status: "ok", plan, sources, discoveries };
+    return { status: "ok", plan, sources, discoveries, closing };
   });

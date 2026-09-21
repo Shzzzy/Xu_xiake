@@ -148,6 +148,11 @@ test("renders day navigation, timeline and budget", () => {
   const html = renderToStaticMarkup(<TripOverview plan={fixturePlan} />);
 
   assert.match(html, /DAY 01/);
+  // 天序号取自行程顺序、日期按“月日”渲染：日期是 2026-09-20，不能出现 “2026月” 或 “DAY 20”。
+  assert.match(html, /9月20日/);
+  assert.match(html, /DAY 01 · 2026年9月20日/);
+  assert.doesNotMatch(html, /2026月/);
+  assert.doesNotMatch(html, /DAY 20/);
   assert.match(html, /西湖核心环线/);
   assert.match(html, /全团总预算/);
   assert.match(html, /日期导航/);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import {
@@ -56,7 +56,11 @@ import {
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
 import { recommendBudget } from "@/lib/budget-advice.functions";
 import { buildTripPlanOutput } from "@/lib/plan-output-adapter";
-import { validateTripBrief, type TripBrief as TravelerBudgetTripBrief } from "@/lib/travel-plan";
+import {
+  validateTripBrief,
+  type TripBrief as TravelerBudgetTripBrief,
+  type TripClosing,
+} from "@/lib/travel-plan";
 import {
   createUnknownPlanDraft,
   updateUnknownPlanDraft,
@@ -81,9 +85,15 @@ import {
 } from "./InspirationCatalogProvider";
 import { TravelDatePicker } from "./TravelDatePicker";
 import { TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
-import { ExportGuidebookButton } from "./plan-output/ExportGuidebookButton";
-import { TripOverview } from "./plan-output/TripOverview";
 import { WeatherStrip } from "./WeatherStrip";
+
+/**
+ * 路书预览只在结果页用到，懒加载避免首页提前下载预览与导出代码。
+ */
+const GuidebookPreview = lazy(async () => {
+  const module = await import("./plan-output/GuidebookPreview");
+  return { default: module.GuidebookPreview };
+});
 
 type Screen = "landing" | "known" | "unknown" | "result";
 
@@ -1784,6 +1794,7 @@ function ItineraryScreen({
   const [weatherState, setWeatherState] = useState<"loading" | "ready" | "error">("loading");
   const [weatherError, setWeatherError] = useState<string | null>(null);
   const [livePlan, setLivePlan] = useState<GeneratedItinerary | null>(null);
+  const [liveClosing, setLiveClosing] = useState<TripClosing | null>(null);
   const [longPlan, setLongPlan] = useState<LongPlan | null>(null);
   const [plannerState, setPlannerState] = useState<"idle" | "loading" | "ready" | "fallback">(
     "idle",
@@ -1868,6 +1879,7 @@ function ItineraryScreen({
     setPlannerState("loading");
     setPlannerMessage("");
     setLivePlan(null);
+    setLiveClosing(null);
     setLongPlan(null);
     setLiveSourceCount(null);
 
@@ -1901,6 +1913,7 @@ function ItineraryScreen({
           if (cancelled) return;
           if (result.status === "ok") {
             setLivePlan(result.plan);
+            setLiveClosing(result.closing);
             setLiveSourceCount(result.sources.length);
             setPlannerState("ready");
             notifyDiscoveries(result.discoveries);
@@ -2022,8 +2035,9 @@ function ItineraryScreen({
         plannedDays,
         routePlan,
         title: livePlan?.title,
+        closing: liveClosing ?? undefined,
       }),
-    [brief, destination, livePlan?.title, plannedDays, routePlan],
+    [brief, destination, liveClosing, livePlan?.title, plannedDays, routePlan],
   );
   const rainDays = weather.filter((day) => {
     const tone = classifyWeather(day.code).tone;
@@ -2088,7 +2102,6 @@ function ItineraryScreen({
           ) : null}
         </div>
         <div className="result-hero-actions">
-          {detailedTrip ? <ExportGuidebookButton plan={executionPlan} /> : null}
           <Button variant="outline" size="sm" onClick={onEdit}>
             调整条件
           </Button>
@@ -2099,6 +2112,7 @@ function ItineraryScreen({
         </div>
       </section>
 
+      {!detailedTrip ? (
       <section className="result-weather">
         <div className="section-kicker">
           <span>{detailedTrip ? "WEATHER / 逐日天气" : "WEATHER / 前 16 天趋势"}</span>
@@ -2123,21 +2137,30 @@ function ItineraryScreen({
         ) : null}
         {rainDays > 0 ? (
           <p className="mt-4 text-sm text-[var(--v-muted)]">
-            {detailedTrip ? "这段时间有 " : "前 16 天中有 "}
+            前 16 天中有
             <strong className="text-[var(--v-ink)]">{rainDays} 天</strong>
             可能降雨，行程会优先照顾室内或短时景点。
           </p>
         ) : null}
       </section>
+      ) : null}
 
       {detailedTrip ? (
         <div className="space-y-4">
           {plannerState === "fallback" ? (
             <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-soft)] px-4 py-3 text-xs leading-6 text-[var(--v-muted)]">
-              当前展示开发期精选数据；实时搜索与 DeepSeek 可用后会自动更新执行时间轴。
+              当前展示开发期精选数据；实时搜索与 DeepSeek 可用后会自动更新路书内容。
             </div>
           ) : null}
-          <TripOverview plan={executionPlan} />
+          <Suspense
+            fallback={
+              <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-6 text-sm text-[var(--v-muted)]">
+                正在加载路书预览…
+              </div>
+            }
+          >
+            <GuidebookPreview plan={executionPlan} />
+          </Suspense>
         </div>
       ) : null}
 

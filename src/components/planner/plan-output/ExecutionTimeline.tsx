@@ -99,7 +99,7 @@ function TimelineNode({ node }: { node: TripTimelineNode }) {
   );
 }
 
-export function ExecutionTimeline({ day }: { day: TripDay }) {
+export function ExecutionTimeline({ day, dayNumber }: { day: TripDay; dayNumber: number }) {
   const focusNodes = day.nodes.filter(
     (node) => node.type === "attraction" || node.type === "night-activity",
   ).length;
@@ -109,7 +109,7 @@ export function ExecutionTimeline({ day }: { day: TripDay }) {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="max-w-2xl">
           <p className="text-[0.62rem] tracking-[0.18em] text-[var(--v-accent)]">
-            DAY {String(day.date).slice(-2)} · {dateLabel(day.date)}
+            DAY {String(dayNumber).padStart(2, "0")} · {dateLabel(day.date)}
           </p>
           <h2 className="mt-2 font-serif text-2xl text-[var(--v-ink)]">{day.theme}</h2>
           <p className="mt-2 text-sm leading-6 text-[var(--v-muted)]">{day.purpose}</p>

@@ -13,6 +13,7 @@ import {
   type AttractionAudit,
   type Travelers,
   type TripBudget,
+  type TripClosing,
   type TripDay,
   type TripPlan,
   type TripRoute,
@@ -36,6 +37,8 @@ export type PlanOutputBuilderInput = {
   plannedDays: PlannedDay[];
   routePlan: RoutePlan | null;
   title?: string;
+  /** 旅行回望文案：由并行生成的 AI 结尾提供，缺省时退回确定性文案。 */
+  closing?: TripClosing;
 };
 
 const TRANSPORT_MINUTES: Record<TransportMode, number> = {
@@ -335,7 +338,7 @@ export function buildTripPlanOutput(input: PlanOutputBuilderInput): TripPlan {
     budget,
     route: buildTripRoute(input.routePlan, input.roundTrip, input.returnMode),
     days,
-    closing: {
+    closing: input.closing ?? {
       quote: null,
       source: null,
       message: "行程节点已按时间与预算展开，出发前请再核对天气、开放时间和交通班次。",

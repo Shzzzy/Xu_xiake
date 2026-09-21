@@ -10,33 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiGuidebookPreviewRouteImport } from './routes/api/guidebook-preview'
+import { Route as ApiGuidebookProbeRouteImport } from './routes/api/guidebook-probe'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiGuidebookPreviewRoute = ApiGuidebookPreviewRouteImport.update({
+  id: '/api/guidebook-preview',
+  path: '/api/guidebook-preview',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGuidebookProbeRoute = ApiGuidebookProbeRouteImport.update({
+  id: '/api/guidebook-probe',
+  path: '/api/guidebook-probe',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
+  '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
+  '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
+  '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/guidebook-preview' | '/api/guidebook-probe'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/guidebook-preview' | '/api/guidebook-probe'
+  id: '__root__' | '/' | '/api/guidebook-preview' | '/api/guidebook-probe'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiGuidebookPreviewRoute: typeof ApiGuidebookPreviewRoute
+  ApiGuidebookProbeRoute: typeof ApiGuidebookProbeRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +68,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/guidebook-preview': {
+      id: '/api/guidebook-preview'
+      path: '/api/guidebook-preview'
+      fullPath: '/api/guidebook-preview'
+      preLoaderRoute: typeof ApiGuidebookPreviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/guidebook-probe': {
+      id: '/api/guidebook-probe'
+      path: '/api/guidebook-probe'
+      fullPath: '/api/guidebook-probe'
+      preLoaderRoute: typeof ApiGuidebookProbeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiGuidebookPreviewRoute: ApiGuidebookPreviewRoute,
+  ApiGuidebookProbeRoute: ApiGuidebookProbeRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

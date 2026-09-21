@@ -4,7 +4,8 @@ import { BudgetPanel } from "./BudgetPanel";
 import { ExecutionTimeline } from "./ExecutionTimeline";
 
 function formatDayDate(date: string, index: number) {
-  const [, month, day] = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date) ?? [];
+  // 日期形如 2026-09-20：第一个捕获组是年份，必须跳过，否则会把年份当成月份渲染。
+  const [, , month, day] = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date) ?? [];
   if (!month || !day) return `第 ${index + 1} 天`;
   return `${Number(month)}月${Number(day)}日`;
 }
@@ -99,7 +100,7 @@ export function TripOverview({ plan }: { plan: TripPlan }) {
         </aside>
 
         <section className="min-w-0" aria-label="执行时间轴">
-          <ExecutionTimeline day={activeDay} />
+          <ExecutionTimeline day={activeDay} dayNumber={activeIndex + 1} />
         </section>
 
         <BudgetPanel budget={plan.budget} />
