@@ -349,3 +349,30 @@ test("history.source 的显示文本也参与未安排景点校验", async () =>
   assert.equal(prepared.analysisFailed, true);
   assert.equal(prepared.history?.length ?? 0, 0);
 });
+test("history.source 的 host 和 hash 也参与未安排景点校验", async () => {
+  const source = plan.days[0];
+  assert.ok(source);
+  const base = {
+    ...source,
+    purpose: "上午游览黄山风景区。",
+    highlights: ["黄山风景区：按当天排程游览"],
+    cautions: ["天气变化注意保暖"],
+  };
+  const planWithSources: TripPlan = {
+    ...plan,
+    meta: { ...plan.meta, narrativeSource: "butler", allowedAttractions: ["黄山风景区", "故宫"] },
+    days: [
+      {
+        ...base,
+        history: [
+          { title: "来源一", background: "记录古村历史。", source: "https://example.com/page#故宫" },
+          { title: "来源二", background: "记录古村历史。", source: "https://故宫.example/page" },
+        ],
+      },
+    ],
+  };
+
+  const prepared = await prepareGuidebookDayNarrative(planWithSources, 0);
+  assert.equal(prepared.analysisFailed, true);
+  assert.equal(prepared.history?.length ?? 0, 0);
+});

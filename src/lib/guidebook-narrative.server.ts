@@ -160,20 +160,28 @@ export function validateDayNarrative(
   const historySourceTexts = (day.history ?? []).map((entry) => {
     try {
       const source = new URL(entry.source);
-      return decodeURIComponent(`${source.pathname}${source.search}`);
+      return [
+        entry.source,
+        decodeURIComponent(entry.source),
+        decodeURIComponent(source.host),
+        decodeURIComponent(source.pathname + source.search + source.hash),
+      ].join(" ");
     } catch {
       return entry.source;
     }
   });
-  const historyTexts = (day.history ?? []).flatMap((entry, historyIndex) => [
+  const historyDisplayTexts = (day.history ?? []).flatMap((entry) => [
     entry.title,
     entry.background,
-    historySourceTexts[historyIndex] ?? "",
   ]);
-  for (const text of [...day.highlights, ...day.cautions, day.purpose, ...historyTexts]) {
+  const historyTexts = [...historyDisplayTexts, ...historySourceTexts];
+  for (const text of [...day.highlights, ...day.cautions, day.purpose, ...historyDisplayTexts]) {
     if (/https?:\/\/|<[^>]+>/i.test(text)) {
       throw new Error(`第 ${index + 1} 天文案包含 URL 或 HTML`);
     }
+  }
+  if (historySourceTexts.some((text) => /<[^>]+>/i.test(text))) {
+    throw new Error(`第 ${index + 1} 天历史来源包含 HTML`);
   }
   for (const entry of day.history ?? []) {
     let source: URL;
