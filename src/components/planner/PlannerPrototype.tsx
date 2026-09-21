@@ -84,7 +84,8 @@ import {
   useInspirationCatalogRefresh,
 } from "./InspirationCatalogProvider";
 import { TravelDatePicker } from "./TravelDatePicker";
-import { applySuggestedBudget, TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
+import { TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
+import { requestAndApplyBudget } from "./plan-output/budget-advice-apply";
 import { WeatherStrip } from "./WeatherStrip";
 
 /**
@@ -727,8 +728,8 @@ function KnownPlanScreen({
       const destination = resolveTripDestination(brief, inspirationCatalog);
       const primaryTransport =
         routePlan?.legs.find((leg) => leg.kind === "outbound")?.transport ?? "balanced";
-      const result = await recommendBudgetFn({
-        data: {
+      const outcome = await requestAndApplyBudget<TripBrief>({
+        payload: {
           destination: destination.name,
           region: destination.region,
           days: brief.days,
@@ -737,15 +738,16 @@ function KnownPlanScreen({
           pace: brief.pace,
           interests: brief.interests,
         },
+        request: (payload) => recommendBudgetFn({ data: payload }),
+        apply: onBrief,
       });
-      if (result.status === "ok") {
-        onBrief((prev) => applySuggestedBudget(prev, result.advice.total));
-        toast.success(`建议预算 ¥${result.advice.total}`);
-      } else if (result.status === "needs_configuration") {
-        // 配置缺失属于部署问题，不把原始提示透给终端用户。
+
+      if (outcome.status === "applied") {
+        toast.success(`建议预算 ¥${outcome.total}`);
+      } else if (outcome.status === "unavailable") {
         toast.error("预算建议暂时不可用，请稍后再试或手动填写预算");
       } else {
-        toast.error(result.message);
+        toast.error(outcome.message);
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "预算建议失败");

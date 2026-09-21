@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { BudgetCategory, TimelineNodeType, TripBrief, TripPlan } from "../../../lib/travel-plan";
-import { applySuggestedBudget, TravelerBudgetFields } from "./TravelerBudgetFields";
+import { TravelerBudgetFields } from "./TravelerBudgetFields";
+import { requestAndApplyBudget } from "./budget-advice-apply";
 import { TripOverview } from "./TripOverview";
 
 function category(amount: number, ratio: number): BudgetCategory {
@@ -198,8 +199,18 @@ test("全团总预算旁提供 AI 推荐按钮", () => {
   assert.match(html, /AI 推荐/);
 });
 
-test("AI 建议预算合并最新 brief 并保留请求期间的编辑", () => {
-  const clicked: TripBrief = {
+const budgetAdvicePayload = {
+  destination: "杭州",
+  region: "浙江",
+  days: 2,
+  travelers: { adults: 2, children: 0 },
+  transportPreference: "均衡推荐",
+  pace: "balanced",
+  interests: ["自然山水"],
+};
+
+test("AI 建议预算基于最新 brief 回写且不覆盖请求期间的编辑", async () => {
+  let latest: TripBrief = {
     adults: 2,
     children: 0,
     totalBudget: 8000,
@@ -207,23 +218,48 @@ test("AI 建议预算合并最新 brief 并保留请求期间的编辑", () => {
     endTime: "18:00",
     vehicleEnergy: null,
   };
+  let applyArgIsFunction = false;
 
-  // 模拟父组件 setBrief 的函数式更新语义；非函数式更新直接判为错误。
-  let latest = clicked;
-  const setBrief = (update: TripBrief | ((prev: TripBrief) => TripBrief)) => {
-    if (typeof update !== "function") {
-      throw new Error("AI 建议回写必须使用函数式更新，否则会覆盖请求期间的编辑");
-    }
-    latest = update(latest);
-  };
+  const outcome = await requestAndApplyBudget({
+    payload: budgetAdvicePayload,
+    request: async () => {
+      // 请求返回前用户把成人数改成了 3，回写不能覆盖这次编辑。
+      latest = { ...latest, adults: 3 };
+      return { status: "ok" as const, advice: { total: 12000 } };
+    },
+    apply: (updater: (prev: TripBrief) => TripBrief) => {
+      applyArgIsFunction = typeof updater === "function";
+      latest = updater(latest);
+    },
+  });
 
-  // 用户在请求期间把成人数改成 4。
-  setBrief((prev) => ({ ...prev, adults: 4 }));
-  // 建议返回后回写预算，应基于最新状态合并。
-  setBrief((prev) => applySuggestedBudget(prev, 12000));
-
-  assert.equal(latest.adults, 4);
+  assert.equal(outcome.status, "applied");
+  assert.equal(applyArgIsFunction, true);
+  assert.equal(latest.adults, 3);
   assert.equal(latest.children, 0);
   assert.equal(latest.totalBudget, 12000);
   assert.equal(latest.startTime, "09:00");
+});
+
+test("needs_configuration 返回友好提示，failed 保留原始信息", async () => {
+  const unavailable = await requestAndApplyBudget({
+    payload: budgetAdvicePayload,
+    request: async () => ({
+      status: "needs_configuration" as const,
+      message: "缺少 DEEPSEEK_API_KEY",
+    }),
+    apply: () => {
+      throw new Error("未配置时不应回写预算");
+    },
+  });
+  assert.deepEqual(unavailable, { status: "unavailable" });
+
+  const failed = await requestAndApplyBudget({
+    payload: budgetAdvicePayload,
+    request: async () => ({ status: "failed" as const, message: "DeepSeek 预算建议请求超时" }),
+    apply: () => {
+      throw new Error("失败时不应回写预算");
+    },
+  });
+  assert.deepEqual(failed, { status: "failed", message: "DeepSeek 预算建议请求超时" });
 });
