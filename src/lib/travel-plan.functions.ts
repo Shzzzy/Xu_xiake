@@ -7,13 +7,14 @@ import {
   type GuidebookExportResult,
 } from "./guidebook-pdf.server.ts";
 import { tripPlanSchema } from "./trip-plan-schema.ts";
-import { enrichTripPlanNarrative } from "./guidebook-narrative.server.ts";
+import { prepareGuidebookNarrativePlan } from "./guidebook-narrative.server.ts";
 
 const GUIDEBOOK_PDF_TOTAL_TIMEOUT_MS = 25_000;
 
 export const exportGuidebook = createServerFn({ method: "POST" })
   .validator(z.object({ plan: tripPlanSchema }))
   .handler(async ({ data }): Promise<GuidebookExportResult> => {
+    const narrativePlan = await prepareGuidebookNarrativePlan(data.plan);
     const controller = new AbortController();
     let timeoutResolve: ((result: GuidebookExportResult) => void) | undefined;
     const timeoutPromise = new Promise<GuidebookExportResult>((resolve) => {
@@ -23,7 +24,7 @@ export const exportGuidebook = createServerFn({ method: "POST" })
       controller.abort(new Error("PDF 导出超过总预算"));
       timeoutResolve?.({
         status: "html",
-        html: renderGuidebookHtml(data.plan),
+        html: renderGuidebookHtml(narrativePlan),
         message: "PDF 导出超时，已改为可打印 HTML。",
       });
     }, GUIDEBOOK_PDF_TOTAL_TIMEOUT_MS);
@@ -31,8 +32,7 @@ export const exportGuidebook = createServerFn({ method: "POST" })
     try {
       const exportPromise = (async () => {
         // 与逐页预览共用同一份每日文案；butler 计划会直接跳过 legacy enrichment。
-        const plan = await enrichTripPlanNarrative(data.plan);
-        return exportGuidebookForTest(plan, {
+        return exportGuidebookForTest(narrativePlan, {
           renderPdf: renderGuidebookPdf,
           signal: controller.signal,
           timeoutMs: GUIDEBOOK_PDF_TOTAL_TIMEOUT_MS,

@@ -4,6 +4,7 @@ import { once } from "node:events";
 import test from "node:test";
 import { renderGuidebookHtml } from "./guidebook-html.server.ts";
 import { clearNarrativeCache, enrichTripPlanNarrative } from "./guidebook-narrative.server.ts";
+import { streamGuidebookPages } from "./guidebook-stream.server.ts";
 import type { BudgetCategory, TripPlan } from "./travel-plan.ts";
 import {
   exportGuidebookForTest,
@@ -384,4 +385,41 @@ test("PDF export reuses butler narrative instead of legacy enrichment", async ()
   assert.equal(result.status, "ok");
   assert.match(renderedHtml, /管家原文目的/);
   assert.match(renderedHtml, /本页分析未能生成/);
+});
+
+test("同一非法计划的预览与导出使用相同 fallback 文案", async () => {
+  const invalidPlan: TripPlan = {
+    ...fixturePlan,
+    meta: { ...fixturePlan.meta, narrativeSource: "butler" },
+    days: fixturePlan.days.map((day) => ({
+      ...day,
+      purpose: "顺路去故宫看看",
+      highlights: ["故宫：临时增加的景点"],
+      cautions: ["天气变化注意保暖"],
+    })),
+  };
+
+  const previewEvents = [];
+  for await (const event of streamGuidebookPages(invalidPlan, { runId: "preview-run" })) {
+    previewEvents.push(event);
+  }
+  const previewHtml = previewEvents
+    .flatMap((event) => (event.type === "page" ? [event.html] : []))
+    .join("");
+
+  let exportedHtml = "";
+  const exportResult = await exportGuidebookForTest(invalidPlan, {
+    renderPdf: async (html) => {
+      exportedHtml = html;
+      return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    },
+  });
+
+  assert.equal(exportResult.status, "ok");
+  assert.match(previewHtml, /第 1 天：水乡慢游/);
+  assert.match(previewHtml, /本页分析未能生成/);
+  assert.doesNotMatch(previewHtml, /故宫/);
+  assert.match(exportedHtml, /第 1 天：水乡慢游/);
+  assert.match(exportedHtml, /本页分析未能生成/);
+  assert.doesNotMatch(exportedHtml, /故宫/);
 });

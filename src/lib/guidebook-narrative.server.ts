@@ -201,6 +201,62 @@ export function buildFallbackDayNarrative(day: TripDay, index: number): TripDay 
   };
 }
 
+export function freezeExistingDayNarrative(day: TripDay, index: number): TripDay {
+  try {
+    validateDayNarrative(day, index);
+    return day;
+  } catch {
+    return buildFallbackDayNarrative(day, index);
+  }
+}
+
+export type GuidebookNarrativePreparationOptions = {
+  deps?: DeepSeekTravelDeps;
+  loadDayNarrative?: (day: TripDay, dayIndex: number) => Promise<TripDay>;
+  failNarrativeDay?: number;
+};
+
+/**
+ * 预览、PDF 和导出的唯一文案固化入口。
+ * butler 计划只校验已有文案，绝不再触发 legacy AI enrichment。
+ */
+export async function prepareGuidebookDayNarrative(
+  plan: TripPlan,
+  index: number,
+  options: GuidebookNarrativePreparationOptions = {},
+): Promise<TripDay> {
+  const day = plan.days[index];
+  if (!day) throw new Error(`第 ${index + 1} 天不存在`);
+
+  let candidate = day;
+  try {
+    if (options.failNarrativeDay === index + 1) {
+      throw new Error(`第 ${index + 1} 天强制降级`);
+    }
+    if (options.loadDayNarrative) {
+      candidate = await options.loadDayNarrative(day, index);
+    } else if (!isButlerNarrativePlan(plan)) {
+      candidate = await enrichTripPlanNarrativeForDay(plan, index, options.deps);
+    }
+    validateDayNarrative(candidate, index);
+  } catch {
+    candidate = buildFallbackDayNarrative(day, index);
+    validateDayNarrative(candidate, index, { allowAnalysisFailure: true });
+  }
+
+  return candidate;
+}
+
+export async function prepareGuidebookNarrativePlan(
+  plan: TripPlan,
+  options: GuidebookNarrativePreparationOptions = {},
+): Promise<TripPlan> {
+  const days: TripDay[] = [];
+  for (let index = 0; index < plan.days.length; index += 1) {
+    days.push(await prepareGuidebookDayNarrative(plan, index, options));
+  }
+  return { ...plan, days };
+}
 /** 逐日生成并校验文案；单日失败只生成经过校验的 fallback，不阻塞后续日期。 */
 export async function enrichTripPlanNarrativeForDay(
   plan: TripPlan,

@@ -7,6 +7,7 @@ import {
   type GuidebookMapEnrichmentOptions,
 } from "./guidebook-map.server.ts";
 import { renderGuidebookHtml } from "./guidebook-html.server.ts";
+import { prepareGuidebookNarrativePlan } from "./guidebook-narrative.server.ts";
 import type { TripPlan } from "./travel-plan.ts";
 
 const PDF_RENDER_TIMEOUT_MS = 30_000;
@@ -505,7 +506,8 @@ export async function exportGuidebookForTest(
   dependencies: GuidebookExportDependencies,
 ): Promise<GuidebookExportResult> {
   const startedAt = Date.now();
-  const mapPlan = await enrichGuidebookPlanWithMaps(plan, dependencies);
+  const narrativePlan = await prepareGuidebookNarrativePlan(plan);
+  const mapPlan = await enrichGuidebookPlanWithMaps(narrativePlan, dependencies);
   const preparedPlan = await prepareGuidebookPlan(mapPlan, dependencies);
   const preparedAt = Date.now();
   const html = renderGuidebookHtml(preparedPlan);
@@ -521,7 +523,7 @@ export async function exportGuidebookForTest(
     return {
       status: "ok",
       pdfBase64: Buffer.from(pdf).toString("base64"),
-      filename: guidebookFilename(plan),
+      filename: guidebookFilename(narrativePlan),
     };
   } catch (error) {
     return {

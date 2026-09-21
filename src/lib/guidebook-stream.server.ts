@@ -1,10 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  buildFallbackDayNarrative,
-  enrichTripPlanNarrativeForDay,
-  isButlerNarrativePlan,
-  validateDayNarrative,
-} from "./guidebook-narrative.server.ts";
+import { prepareGuidebookDayNarrative } from "./guidebook-narrative.server.ts";
 import { enrichGuidebookPlanWithMaps } from "./guidebook-map.server.ts";
 import { guidebookPageSpecs, renderGuidebookHead } from "./guidebook-html.server.ts";
 import { prepareGuidebookImage, type GuidebookImageFetchOptions } from "./guidebook-pdf.server.ts";
@@ -115,33 +110,18 @@ export async function* streamGuidebookPages(
     if (dayMatch) {
       const dayIndex = Number(dayMatch[1]) - 1;
 
-      // 先完成当天文案生成与校验，再进入该日的地图页和总结页。
+      // 与 PDF 共用同一个单日固化步骤；当天通过后才进入该日页面。
       if (!validatedDays.has(dayIndex)) {
-        const currentDay = prepared.days[dayIndex];
-        if (currentDay) {
-          let candidate = currentDay;
-          try {
-            if (options.failNarrativeDay === dayIndex + 1) {
-              throw new Error(`第 ${dayIndex + 1} 天强制降级`);
-            }
-            if (options.loadDayNarrative) {
-              candidate = await options.loadDayNarrative(currentDay, dayIndex);
-            } else if (!isButlerNarrativePlan(prepared)) {
-              candidate = await enrichTripPlanNarrativeForDay(prepared, dayIndex);
-            }
-            validateDayNarrative(candidate, dayIndex);
-          } catch {
-            candidate = buildFallbackDayNarrative(currentDay, dayIndex);
-            validateDayNarrative(candidate, dayIndex, { allowAnalysisFailure: true });
-          }
-
-          prepared = {
-            ...prepared,
-            days: prepared.days.map((day, itemIndex) =>
-              itemIndex === dayIndex ? candidate : day,
-            ),
-          };
-        }
+        const narrativeDay = await prepareGuidebookDayNarrative(prepared, dayIndex, {
+          loadDayNarrative: options.loadDayNarrative,
+          failNarrativeDay: options.failNarrativeDay,
+        });
+        prepared = {
+          ...prepared,
+          days: prepared.days.map((day, itemIndex) =>
+            itemIndex === dayIndex ? narrativeDay : day,
+          ),
+        };
         validatedDays.add(dayIndex);
       }
 
@@ -163,7 +143,6 @@ export async function* streamGuidebookPages(
         }
       }
     }
-
     const html = spec.render(prepared);
     yield emit({
       type: "page",
