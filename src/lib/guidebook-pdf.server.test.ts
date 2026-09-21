@@ -535,3 +535,31 @@ test("渲染中取消会向 renderer 传递已中止信号", async () => {
   assert.equal(result.status, "html");
   assert.equal(rendererSignal?.aborted, true);
 });
+
+test("仅 theme 非法时导出会重建安全 theme", async () => {
+  const plan: TripPlan = {
+    ...fixturePlan,
+    meta: { ...fixturePlan.meta, narrativeSource: "butler", allowedAttractions: ["故宫"] },
+    route: { ...fixturePlan.route, staticMapUrl: undefined },
+    days: fixturePlan.days.map((day) => ({
+      ...day,
+      theme: "顺路去故宫看看",
+      purpose: "沿河慢走，体验江南水乡。",
+      highlights: ["西栅夜色：灯光与河道相映"],
+      cautions: ["周末人流较多，建议错峰用餐。"],
+      mapUrl: undefined,
+      qrCodeUrl: undefined,
+    })),
+  };
+  let renderedHtml = "";
+  const result = await exportGuidebookForTest(plan, {
+    renderPdf: async (html) => {
+      renderedHtml = html;
+      return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    },
+  });
+
+  assert.equal(result.status, "ok");
+  assert.match(renderedHtml, /已安全降级行程/);
+  assert.doesNotMatch(renderedHtml, /故宫/);
+});

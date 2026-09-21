@@ -175,7 +175,13 @@ export function validateDayNarrative(
     entry.background,
   ]);
   const historyTexts = [...historyDisplayTexts, ...historySourceTexts];
-  for (const text of [...day.highlights, ...day.cautions, day.purpose, ...historyDisplayTexts]) {
+  for (const text of [
+    day.theme,
+    ...day.highlights,
+    ...day.cautions,
+    day.purpose,
+    ...historyDisplayTexts,
+  ]) {
     if (/https?:\/\/|<[^>]+>/i.test(text)) {
       throw new Error(`第 ${index + 1} 天文案包含 URL 或 HTML`);
     }
@@ -196,6 +202,7 @@ export function validateDayNarrative(
   }
 
   const normalizedTexts = [
+    day.theme,
     ...day.highlights,
     ...day.cautions,
     day.purpose,
@@ -230,6 +237,7 @@ export function buildFallbackDayNarrative(day: TripDay, index: number): TripDay 
   if (day.analysisFailed) {
     return {
       ...day,
+      theme: "已安全降级行程",
       cautions: day.cautions.includes(FAILED_DAY_CAUTION)
         ? day.cautions
         : [FAILED_DAY_CAUTION, ...day.cautions],
@@ -242,7 +250,8 @@ export function buildFallbackDayNarrative(day: TripDay, index: number): TripDay 
     .map((node) => node.name);
   return {
     ...day,
-    purpose: `第 ${index + 1} 天：${day.theme || "按已冻结排程继续行程"}`,
+    theme: "已安全降级行程",
+    purpose: `第 ${index + 1} 天：按已冻结排程继续行程`,
     highlights:
       attractionNames.length > 0
         ? attractionNames.slice(0, 3).map((name) => `${name}：按当天排程游览`)
