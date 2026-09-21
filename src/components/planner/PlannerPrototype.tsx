@@ -2095,6 +2095,7 @@ function ItineraryScreen({
       return buildTripPlanFromSkeleton({
         skeleton: butlerResult.skeleton,
         dayCopy: butlerResult.dayCopy,
+        candidates: butlerResult.candidates,
         failedDays: butlerResult.failedDays,
         violations: butlerResult.violations,
         origin: brief.origin,

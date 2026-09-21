@@ -4,6 +4,7 @@ import { destinations } from "../data/planner-destinations.ts";
 import { buildRouteFallbackDays } from "./planner.ts";
 import { buildRoutePlan } from "./route-planner.ts";
 import { buildTripPlanFromSkeleton, buildTripPlanOutput } from "./plan-output-adapter.ts";
+import { prepareGuidebookDayNarrative } from "./guidebook-narrative.server.ts";
 import type { PlannerSkeleton } from "./planner-skeleton.ts";
 import type { PlannerDayCopy } from "./planner-day-copy.ts";
 import type { PlanViolation } from "./plan-validator.ts";
@@ -248,4 +249,32 @@ test("其他项在兜底路径下按前四类 10% 预留", () => {
   const plan = fixtureOutput();
   assert.ok(plan.budget.other.amount >= 200, "杂事开销最低 ¥200");
   assert.ok(plan.budget.other.amount > 0, "不应再恒为 0");
+});
+
+test("骨架转 TripPlan 写入本 run 候选并驱动文案拒绝未安排景点", async () => {
+  const copy: PlannerDayCopy[] = [
+    {
+      day: 1,
+      purpose: "顺路去故宫看看",
+      highlights: ["午餐后继续行程", "休息后再出发", "关注天气变化"],
+      cautions: ["带好雨具", "注意保暖"],
+      history: [],
+    },
+  ];
+  const plan = buildTripPlanFromSkeleton({
+    ...skeletonInputFixture,
+    dayCopy: copy,
+    candidates: [
+      { name: "黄山风景区", summary: "主景区", source: "https://example.com/huangshan" },
+      { name: "宏村", summary: "古村", source: "https://example.com/hongcun" },
+      { name: "故宫", summary: "候选但未安排", source: "https://example.com/gugong" },
+    ],
+  });
+
+  assert.deepEqual(plan.meta.allowedAttractions, ["黄山风景区", "宏村", "故宫"]);
+
+  const prepared = await prepareGuidebookDayNarrative(plan, 0);
+  assert.match(prepared.purpose, /第 1 天：/);
+  assert.equal(prepared.analysisFailed, true);
+  assert.doesNotMatch(JSON.stringify(prepared), /故宫/);
 });

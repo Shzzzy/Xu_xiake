@@ -48,6 +48,8 @@ export type PlanOutputBuilderInput = {
 export type TripPlanFromSkeletonInput = {
   skeleton: PlannerSkeleton;
   dayCopy?: PlannerDayCopy[];
+  /** 本 run 的候选景点；用于下游文案校验和 fallback。 */
+  candidates?: readonly { name: string; summary?: string; source?: string }[];
   origin: string;
   destination: Destination;
   startDate: string;
@@ -426,6 +428,13 @@ export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): Tri
       transportPreference: input.transportPreference,
       pace: input.pace,
       interests: input.interests,
+      allowedAttractions: [
+        ...new Set(
+          (input.candidates ?? [])
+            .map((candidate) => candidate.name.trim())
+            .filter((name) => name.length > 0),
+        ),
+      ],
       // 管家 dayCopy 是每日文案权威源，下游 preview/PDF 的 legacy enrichment 必须跳过。
       narrativeSource: "butler",
     },

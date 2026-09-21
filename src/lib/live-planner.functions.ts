@@ -108,6 +108,7 @@ export type LivePlanResult =
       violations: PlanViolation[];
       attempts: number;
       closing: TripClosing;
+      candidates: { name: string; summary: string; source: string }[];
       sources: SearchResult[];
       discoveries: DiscoveryNotice[];
       route: RoutePlan;
@@ -513,6 +514,7 @@ async function runButlerPlan(
     violations: result.violations,
     attempts: result.attempts,
     closing: result.closing,
+    candidates: result.candidates,
     // 结果页的「N 个候选景区」依赖 sources，绝不能返回空数组。
     sources: result.candidates.map((candidate) => ({
       title: candidate.name,
