@@ -263,3 +263,36 @@ test("真实单日准备入口保留当天景点和通用词", async () => {
   assert.match(prepared.purpose, /黄山风景区/);
   assert.match(JSON.stringify(prepared), /午餐/);
 });
+
+test("history 未安排景点和危险文本触发 fallback 且不泄漏", async () => {
+  const source = plan.days[0];
+  assert.ok(source);
+  const planWithHistory: TripPlan = {
+    ...plan,
+    meta: {
+      ...plan.meta,
+      narrativeSource: "butler",
+      allowedAttractions: ["黄山风景区", "故宫"],
+    },
+    days: [
+      {
+        ...source,
+        purpose: "上午游览黄山风景区。",
+        highlights: ["黄山风景区：按当天排程游览"],
+        cautions: ["天气变化注意保暖"],
+        history: [
+          {
+            title: "故宫午后",
+            background: "顺路去故宫看看<script>alert(1)</script>",
+            source: "javascript:alert(1)",
+          },
+        ],
+      },
+    ],
+  };
+
+  const prepared = await prepareGuidebookDayNarrative(planWithHistory, 0);
+  assert.equal(prepared.analysisFailed, true);
+  assert.equal(prepared.history?.length ?? 0, 0);
+  assert.doesNotMatch(JSON.stringify(prepared), /故宫|script|javascript:/);
+});

@@ -157,15 +157,30 @@ export function validateDayNarrative(
       .map((node) => normalizeNarrativeLabel(node.name)),
   );
 
-  for (const text of [...day.highlights, ...day.cautions, day.purpose]) {
+  const historyTexts = (day.history ?? []).flatMap((entry) => [entry.title, entry.background]);
+  for (const text of [...day.highlights, ...day.cautions, day.purpose, ...historyTexts]) {
     if (/https?:\/\/|<[^>]+>/i.test(text)) {
       throw new Error(`第 ${index + 1} 天文案包含 URL 或 HTML`);
     }
   }
+  for (const entry of day.history ?? []) {
+    let source: URL;
+    try {
+      source = new URL(entry.source);
+    } catch {
+      throw new Error(`第 ${index + 1} 天历史来源不是有效 URL`);
+    }
+    if (source.protocol !== "http:" && source.protocol !== "https:") {
+      throw new Error(`第 ${index + 1} 天历史来源协议不安全`);
+    }
+  }
 
-  const normalizedTexts = [...day.highlights, ...day.cautions, day.purpose].map(
-    normalizeNarrativeLabel,
-  );
+  const normalizedTexts = [
+    ...day.highlights,
+    ...day.cautions,
+    day.purpose,
+    ...historyTexts,
+  ].map(normalizeNarrativeLabel);
   for (const knownAttraction of options.knownAttractions ?? []) {
     const normalizedKnown = normalizeNarrativeLabel(knownAttraction);
     if (!normalizedKnown) continue;
@@ -198,6 +213,7 @@ export function buildFallbackDayNarrative(day: TripDay, index: number): TripDay 
       cautions: day.cautions.includes(FAILED_DAY_CAUTION)
         ? day.cautions
         : [FAILED_DAY_CAUTION, ...day.cautions],
+      history: [],
     };
   }
 
@@ -212,6 +228,7 @@ export function buildFallbackDayNarrative(day: TripDay, index: number): TripDay 
         ? attractionNames.slice(0, 3).map((name) => `${name}：按当天排程游览`)
         : ["自由活动：按冻结排程保留休息与机动时间"],
     cautions: [FAILED_DAY_CAUTION, "所有时间与费用以现场情况为准。"],
+    history: [],
     analysisFailed: true,
   };
 }
