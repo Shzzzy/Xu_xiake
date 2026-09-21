@@ -970,6 +970,68 @@
   gap: 0.5rem;
 }
 
+.constraint-notice {
+  position: relative;
+  margin-top: 1rem;
+  padding: 1rem 1rem 1rem 1.25rem;
+  border: 1px solid color-mix(in oklab, var(--color-warn) 45%, var(--color-border));
+  border-radius: var(--v-card-radius);
+  background: color-mix(in oklab, var(--color-warn) 9%, var(--color-surface));
+  color: var(--v-ink);
+}
+
+.constraint-notice-bar {
+  position: absolute;
+  left: 0;
+  top: 1rem;
+  bottom: 1rem;
+  width: 4px;
+  border-radius: 999px;
+  background: var(--color-warn);
+}
+
+.constraint-notice-body {
+  position: relative;
+}
+
+.constraint-notice h2 {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.constraint-notice ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.constraint-notice li {
+  position: relative;
+  padding-left: 1.1rem;
+  color: var(--v-muted);
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.constraint-notice li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--color-warn);
+}
+
+.constraint-notice p {
+  margin: 0.6rem 0 0;
+  color: var(--v-muted);
+  font-size: 0.76rem;
+  line-height: 1.7;
+}
 .result-weather {
   margin-top: 1.5rem;
 }

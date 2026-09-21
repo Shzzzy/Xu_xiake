@@ -363,6 +363,37 @@ test("renders only sourced daily history and never promotes node tips", () => {
   assert.match(summaryFocus, /计划中未记录可核验的历史沿革/);
   assert.doesNotMatch(summaryFocus, /步道平缓/);
 });
+
+test("总览页展示未满足约束清单", () => {
+  const html = renderGuidebookHtml({
+    ...fixturePlan,
+    violations: [
+      {
+        code: "OVER_BUDGET",
+        message: "预计 ¥18,420，超出预算 ¥420",
+        detail: { expected: "≤¥18,000", actual: "¥18,420" },
+      },
+    ],
+  });
+  assert.match(html, /未满足/);
+  assert.match(html, /18,420/);
+});
+
+test("受影响日期的执行提醒包含违规项", () => {
+  const html = renderGuidebookHtml({
+    ...fixturePlan,
+    violations: [
+      {
+        code: "TIME_WINDOW",
+        day: 2,
+        message: "第 2 天比设定结束时间晚 1 小时 30 分",
+        detail: { expected: "≤18:00", actual: "19:30" },
+      },
+    ],
+  });
+  const dayRight = pageFragments(html, "day-right")[1];
+  assert.match(dayRight ?? "", /未满足条件/);
+});
 test("only renders verified closing citations from TripClosing.source", () => {
   const withoutSource: TripPlan = {
     ...fixturePlan,

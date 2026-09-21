@@ -41,6 +41,7 @@ import {
   generateLiveItinerary,
   generateLongItinerary,
   type DiscoveryNotice,
+  type LivePlanResult,
 } from "@/lib/live-planner.functions";
 import type { GeneratedItinerary } from "@/lib/live-planner";
 import { buildFallbackLongPlan, type LongPlan } from "@/lib/long-planner";
@@ -55,7 +56,7 @@ import {
 } from "@/lib/route-planner";
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
 import { recommendBudget } from "@/lib/budget-advice.functions";
-import { buildTripPlanOutput } from "@/lib/plan-output-adapter";
+import { buildTripPlanFromSkeleton, buildTripPlanOutput } from "@/lib/plan-output-adapter";
 import {
   validateTripBrief,
   type TripBrief as TravelerBudgetTripBrief,
@@ -97,6 +98,15 @@ const GuidebookPreview = lazy(async () => {
 });
 
 type Screen = "landing" | "known" | "unknown" | "result";
+
+/** 管家排程成功结果，复用 live-planner 的 ok-butler 分支。 */
+type ButlerPlanResult = Extract<LivePlanResult, { status: "ok"; mode: "butler" }>;
+
+/** 管家模式的交通偏好：route 首腿是 economy / speed 时原样采用，否则回落到 balanced。 */
+function butlerTransportPreference(routePlan: RoutePlan): "economy" | "balanced" | "speed" {
+  const first = routePlan.legs[0]?.transport;
+  return first === "economy" || first === "speed" ? first : "balanced";
+}
 
 type TripBrief = TravelerBudgetTripBrief & {
   origin: string;
@@ -1807,6 +1817,7 @@ function ItineraryScreen({
   );
   const [plannerMessage, setPlannerMessage] = useState("");
   const [liveSourceCount, setLiveSourceCount] = useState<number | null>(null);
+  const [butlerResult, setButlerResult] = useState<ButlerPlanResult | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
 
   const detailedTrip = brief.days <= 16;
@@ -1887,6 +1898,7 @@ function ItineraryScreen({
     setLivePlan(null);
     setLiveClosing(null);
     setLongPlan(null);
+    setButlerResult(null);
     setLiveSourceCount(null);
 
     if (!routePlan) {
@@ -1936,9 +1948,15 @@ function ItineraryScreen({
             return;
           }
           if (result.status === "ok") {
-            // 管家模式的结果由 Task 10 接入展示；先落到可理解的占位状态，避免误读旧结构。
-            setPlannerState("fallback");
-            setPlannerMessage("管家排程已生成，结果页展示将在后续版本接入。");
+            // 管家模式：把骨架、逐日文案与校验结果落到状态，executionPlan 与提示条由下方 useMemo 组装。
+            setButlerResult(result);
+            setLiveClosing(result.closing);
+            setLiveSourceCount(result.sources.length);
+            setPlannerState("ready");
+            notifyDiscoveries(result.discoveries);
+            if (result.discoveries.some((discovery) => discovery.status === "published")) {
+              void refreshInspirationCatalog();
+            }
             return;
           }
           setPlannerState("fallback");
@@ -1999,11 +2017,17 @@ function ItineraryScreen({
       cancelled = true;
     };
   }, [
+    brief.adults,
+    brief.children,
     brief.dailyHours,
     brief.days,
+    brief.endTime,
     brief.interests,
+    brief.origin,
     brief.pace,
     brief.startDate,
+    brief.startTime,
+    brief.totalBudget,
     detailedTrip,
     destination.id,
     destination.name,
@@ -2035,29 +2059,48 @@ function ItineraryScreen({
     [brief.days, brief.pace, destination.places, livePlan, routePlan, weather],
   );
 
-  const executionPlan = useMemo(
-    () =>
-      buildTripPlanOutput({
+  const executionPlan = useMemo(() => {
+    if (butlerResult && routePlan) {
+      return buildTripPlanFromSkeleton({
+        skeleton: butlerResult.skeleton,
+        dayCopy: butlerResult.dayCopy,
+        failedDays: butlerResult.failedDays,
+        violations: butlerResult.violations,
         origin: brief.origin,
         destination,
         startDate: brief.startDate,
-        days: brief.days,
-        pace: brief.pace,
-        interests: brief.interests,
-        waypoints: brief.waypoints,
-        roundTrip: brief.roundTrip,
-        returnMode: brief.returnMode,
         travelers: { adults: brief.adults, children: brief.children },
         totalBudget: brief.totalBudget,
-        startTime: brief.startTime,
-        endTime: brief.endTime,
-        plannedDays,
+        pace: brief.pace,
+        interests: brief.interests,
+        roundTrip: brief.roundTrip,
+        returnMode: brief.returnMode,
         routePlan,
-        title: livePlan?.title,
+        weather,
         closing: liveClosing ?? undefined,
-      }),
-    [brief, destination, liveClosing, livePlan?.title, plannedDays, routePlan],
-  );
+        transportPreference: butlerTransportPreference(routePlan),
+      });
+    }
+    return buildTripPlanOutput({
+      origin: brief.origin,
+      destination,
+      startDate: brief.startDate,
+      days: brief.days,
+      pace: brief.pace,
+      interests: brief.interests,
+      waypoints: brief.waypoints,
+      roundTrip: brief.roundTrip,
+      returnMode: brief.returnMode,
+      travelers: { adults: brief.adults, children: brief.children },
+      totalBudget: brief.totalBudget,
+      startTime: brief.startTime,
+      endTime: brief.endTime,
+      plannedDays,
+      routePlan,
+      title: livePlan?.title,
+      closing: liveClosing ?? undefined,
+    });
+  }, [brief, butlerResult, destination, liveClosing, livePlan?.title, plannedDays, routePlan, weather]);
   const rainDays = weather.filter((day) => {
     const tone = classifyWeather(day.code).tone;
     return tone === "rain" || tone === "storm";
@@ -2076,8 +2119,18 @@ function ItineraryScreen({
           <Badge className="border-white/20 bg-white/10 text-white">
             {detailedTrip ? "目的地周边 · 时间驱动" : "长线规划 · 阶段汇总"}
           </Badge>
-          <h1>{longPlan?.title ?? livePlan?.title ?? `${destination.name}怎么玩`}</h1>
-          <p>{longPlan?.summary ?? livePlan?.summary ?? destination.summary}</p>
+          <h1>
+            {butlerResult?.skeleton.title ??
+              longPlan?.title ??
+              livePlan?.title ??
+              `${destination.name}怎么玩`}
+          </h1>
+          <p>
+            {butlerResult?.skeleton.summary ??
+              longPlan?.summary ??
+              livePlan?.summary ??
+              destination.summary}
+          </p>
           <div className="result-meta">
             <span>
               <CalendarDays className="size-4" /> {formatDate(brief.startDate)} 起 · {brief.days} 天
@@ -2130,6 +2183,23 @@ function ItineraryScreen({
           </Button>
         </div>
       </section>
+
+      {(executionPlan.violations?.length ?? 0) > 0 ? (
+        <div className="constraint-notice" role="status">
+          <div className="constraint-notice-bar" aria-hidden="true" />
+          <div className="constraint-notice-body">
+            <h2>本次有 {executionPlan.violations!.length} 项未满足你设定的条件</h2>
+            <ul>
+              {executionPlan.violations!.map((violation, index) => (
+                <li key={`${violation.code}-${violation.day ?? "all"}-${index}`}>
+                  {violation.message}
+                </li>
+              ))}
+            </ul>
+            <p>已尝试在设定的时间、预算与节奏条件内降级调整；上方逐条为最终仍未能满足的项。</p>
+          </div>
+        </div>
+      ) : null}
 
       {!detailedTrip ? (
       <section className="result-weather">
