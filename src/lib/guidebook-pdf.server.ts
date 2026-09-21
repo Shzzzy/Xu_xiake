@@ -637,13 +637,20 @@ async function exportPreparedGuidebookForTest(
   narrativePlan: TripPlan,
   dependencies: GuidebookExportDependencies,
 ): Promise<GuidebookExportResult> {
+  const throwIfAborted = () => {
+    if (dependencies.signal?.aborted) throw new Error("PDF 导出已取消");
+  };
+  throwIfAborted();
   const startedAt = Date.now();
   const mapPlan = await enrichGuidebookPlanWithMaps(narrativePlan, dependencies);
+  throwIfAborted();
   const preparedPlan = await prepareGuidebookPlan(mapPlan, dependencies);
+  throwIfAborted();
   const preparedAt = Date.now();
   const html = renderGuidebookHtml(preparedPlan);
 
   try {
+    throwIfAborted();
     const pdf = await dependencies.renderPdf(html, { signal: dependencies.signal });
     if (process.env.GUIDEBOOK_EXPORT_TIMING === "1") {
       const finishedAt = Date.now();

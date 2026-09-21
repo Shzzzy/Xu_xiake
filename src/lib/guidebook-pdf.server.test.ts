@@ -480,3 +480,57 @@ test("预取消信号在进入 Playwright 前终止 PDF 渲染", async () => {
     /中止|abort/i,
   );
 });
+test("文案完成后图片准备超时不再调用 renderPdf", async () => {
+  const unique = Date.now();
+  const plan: TripPlan = {
+    ...fixturePlan,
+    route: {
+      ...fixturePlan.route,
+      staticMapUrl: "https://restapi.amap.com/v3/staticmap?zoom=10&size=750*500&key=server-only-key&unique=" + unique,
+    },
+  };
+  let renderPdfCalls = 0;
+  const result = await exportGuidebookWithTimeout(plan, {
+    timeoutMs: 5,
+    amapKey: "server-only-key",
+    prepareNarrative: async (narrativePlan) => narrativePlan,
+    fetchImpl: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        headers: { "content-type": "image/png" },
+      });
+    },
+    renderPdf: async () => {
+      renderPdfCalls += 1;
+      return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    },
+  });
+
+  assert.equal(result.status, "html");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(renderPdfCalls, 0);
+});
+
+test("渲染中取消会向 renderer 传递已中止信号", async () => {
+  let rendererSignal: AbortSignal | undefined;
+  const plan: TripPlan = {
+    ...fixturePlan,
+    route: { ...fixturePlan.route, staticMapUrl: undefined },
+    days: fixturePlan.days.map((day) => ({ ...day, mapUrl: undefined, qrCodeUrl: undefined })),
+  };
+  const result = await exportGuidebookWithTimeout(plan, {
+    timeoutMs: 5,
+    prepareNarrative: async (plan) => plan,
+    renderPdf: async (_html, options) => {
+      const signal = options?.signal;
+      assert.ok(signal);
+      rendererSignal = signal;
+      return new Promise<Uint8Array>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("render aborted")));
+      });
+    },
+  });
+
+  assert.equal(result.status, "html");
+  assert.equal(rendererSignal?.aborted, true);
+});
