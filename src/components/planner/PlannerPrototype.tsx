@@ -1828,6 +1828,7 @@ function ItineraryScreen({
   const [plannerMessage, setPlannerMessage] = useState("");
   const [liveSourceCount, setLiveSourceCount] = useState<number | null>(null);
   const [butlerResult, setButlerResult] = useState<ButlerPlanResult | null>(null);
+  const [plannedRoute, setPlannedRoute] = useState<RoutePlan | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
   const notifiedDiscoveryKeys = useRef(new Set<string>());
 
@@ -1871,6 +1872,7 @@ function ItineraryScreen({
     brief.roundTrip,
     brief.waypoints,
   ]);
+  const resolvedRoutePlan = plannedRoute ?? routePlan;
 
   useEffect(() => {
     let cancelled = false;
@@ -1921,6 +1923,7 @@ function ItineraryScreen({
     setLiveClosing(null);
     setLongPlan(null);
     setButlerResult(null);
+    setPlannedRoute(null);
     setLiveSourceCount(null);
 
     if (!routePlan) {
@@ -1961,6 +1964,7 @@ function ItineraryScreen({
           if (result.status === "ok" && result.mode === "legacy") {
             setLivePlan(result.plan);
             setLiveClosing(result.closing);
+            setPlannedRoute(result.route);
             setLiveSourceCount(result.sources.length);
             setPlannerState("ready");
             notifyDiscoveryOnce(result.discoveries);
@@ -1973,6 +1977,7 @@ function ItineraryScreen({
             // 管家模式：把骨架、逐日文案与校验结果落到状态，executionPlan 与提示条由下方 useMemo 组装。
             setButlerResult(result);
             setLiveClosing(result.closing);
+            setPlannedRoute(result.route);
             setLiveSourceCount(result.sources.length);
             setPlannerState("ready");
             notifyDiscoveryOnce(result.discoveries);
@@ -2073,9 +2078,9 @@ function ItineraryScreen({
         weather: weather[day.day - 1],
       }));
     }
-    if (routePlan) {
+    if (resolvedRoutePlan) {
       return buildRouteFallbackDays({
-        route: routePlan,
+        route: resolvedRoutePlan,
         days: brief.days,
         destinationPlaces: destination.places,
         weather,
@@ -2083,10 +2088,10 @@ function ItineraryScreen({
       });
     }
     return splitPlacesAcrossDays(destination.places, weather, brief.pace);
-  }, [brief.days, brief.pace, butlerResult, destination.places, livePlan, routePlan, weather]);
+  }, [brief.days, brief.pace, butlerResult, destination.places, livePlan, resolvedRoutePlan, weather]);
 
   const executionPlan = useMemo(() => {
-    if (butlerResult && routePlan) {
+    if (butlerResult && resolvedRoutePlan) {
       return buildTripPlanFromSkeleton({
         skeleton: butlerResult.skeleton,
         dayCopy: butlerResult.dayCopy,
@@ -2101,10 +2106,10 @@ function ItineraryScreen({
         interests: brief.interests,
         roundTrip: brief.roundTrip,
         returnMode: brief.returnMode,
-        routePlan,
+        routePlan: resolvedRoutePlan,
         weather,
         closing: liveClosing ?? undefined,
-        transportPreference: butlerTransportPreference(routePlan),
+        transportPreference: butlerTransportPreference(resolvedRoutePlan),
       });
     }
     return buildTripPlanOutput({
@@ -2122,11 +2127,11 @@ function ItineraryScreen({
       startTime: brief.startTime,
       endTime: brief.endTime,
       plannedDays,
-      routePlan,
+      routePlan: resolvedRoutePlan,
       title: livePlan?.title,
       closing: liveClosing ?? undefined,
     });
-  }, [brief, butlerResult, destination, liveClosing, livePlan?.title, plannedDays, routePlan, weather]);
+  }, [brief, butlerResult, destination, liveClosing, livePlan?.title, plannedDays, resolvedRoutePlan, weather]);
   const rainDays = weather.filter((day) => {
     const tone = classifyWeather(day.code).tone;
     return tone === "rain" || tone === "storm";
@@ -2171,18 +2176,18 @@ function ItineraryScreen({
                 : `${longPlan?.phases.length ?? "多个"} 个路线阶段`}
             </span>
           </div>
-          {routePlan ? (
+          {resolvedRoutePlan ? (
             <div>
               <p className="result-route-path">
-                {routePlan.legs.map((leg) => leg.from).join(" → ")} → {routePlan.legs.at(-1)?.to}
-                {routePlan.roundTrip
-                  ? routePlan.returnMode === "scenic"
+                {resolvedRoutePlan.legs.map((leg) => leg.from).join(" → ")} → {resolvedRoutePlan.legs.at(-1)?.to}
+                {resolvedRoutePlan.roundTrip
+                  ? resolvedRoutePlan.returnMode === "scenic"
                     ? " · 不走回头"
                     : " · 快速回家"
                   : ""}
               </p>
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                {routePlan.legs.map((leg, index) => (
+                {resolvedRoutePlan.legs.map((leg, index) => (
                   <div
                     key={leg.id}
                     className="rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-xs text-white/75"

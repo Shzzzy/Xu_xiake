@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import {
   buildSkeletonInstruction,
   buildSkeletonRepairInstruction,
+  enforceTransportPriceFloors,
   parsePlannerSkeleton,
 } from "./planner-skeleton.ts";
 import type { PlanViolation } from "./plan-validator.ts";
+import type { TransportPriceReference } from "./route-planner.ts";
 
 // 一份合法的骨架样例，供解析与拒绝用例复用。
 const validSkeleton = {
@@ -120,6 +122,95 @@ test("骨架提示词写明候选、时间窗与必含节点约束", () => {
   assert.match(instruction, /休息/);
   assert.match(instruction, /核心景点/);
   assert.match(instruction, /8000/);
+});
+
+test("骨架提示词把交通价格资料和本地最低总价传给模型", () => {
+  const transportPriceReferences: TransportPriceReference[] = [
+    {
+      legId: "outbound:0",
+      from: "厦门",
+      to: "北京",
+      mode: "flight",
+      distanceKm: 1720,
+      minimumUnitPrice: 946,
+      minimumPartyTotal: 2838,
+      travelerCount: 3,
+      basis: "本地最低参考价",
+      sources: [
+        {
+          title: "厦门到北京机票价格",
+          url: "https://example.com/flight-price",
+          content: "单程经济舱约九百元起。",
+        },
+      ],
+    },
+    {
+      legId: "return",
+      from: "北京",
+      to: "厦门",
+      mode: "flight",
+      distanceKm: 1720,
+      minimumUnitPrice: 946,
+      minimumPartyTotal: 2838,
+      travelerCount: 3,
+      basis: "本地最低参考价",
+      sources: [],
+    },
+  ];
+  const instruction = buildSkeletonInstruction({
+    ...instructionInput,
+    transportPriceReferences,
+  });
+
+  assert.match(instruction, /transportPriceReferences/);
+  assert.match(instruction, /minimumPartyTotal/);
+  assert.match(instruction, /5676/);
+  assert.match(instruction, /去返程/);
+  assert.match(instruction, /不得低于/);
+});
+
+test("交通节点低于本地最低价时确定性抬高并修正交通方式", () => {
+  const skeleton = parsePlannerSkeleton(
+    JSON.stringify({
+      ...validSkeleton,
+      days: [
+        {
+          ...validSkeleton.days[0],
+          nodes: [
+            {
+              type: "transport",
+              startTime: "08:00",
+              endTime: "10:00",
+              name: "厦门 → 北京",
+              transportMode: "balanced",
+              estimatedCost: 660,
+            },
+            ...validSkeleton.days[0]!.nodes,
+          ],
+        },
+      ],
+    }),
+  );
+  const references: TransportPriceReference[] = [
+    {
+      legId: "outbound:0",
+      from: "厦门",
+      to: "北京",
+      mode: "flight",
+      distanceKm: 1720,
+      minimumUnitPrice: 946,
+      minimumPartyTotal: 2838,
+      travelerCount: 3,
+      basis: "本地最低参考价",
+      sources: [],
+    },
+  ];
+
+  const adjusted = enforceTransportPriceFloors(skeleton, references);
+  const transport = adjusted.days[0]?.nodes.find((node) => node.type === "transport");
+
+  assert.equal(transport?.transportMode, "flight");
+  assert.ok((transport?.estimatedCost ?? 0) >= 2838);
 });
 
 // 候选清单只约束景点类节点；餐宿休息等固定槽位由模型自行命名。

@@ -57,6 +57,8 @@ type RouteDiscoveryInput = {
   fetchImpl?: typeof fetch;
   maxUnknown?: number;
   repository?: PlacePersistenceRepository;
+  /** live planner 的目的地景点由 AMap 负责，可关闭 Tavily 目的地发现。 */
+  includeDestination?: boolean;
 };
 
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
@@ -135,6 +137,7 @@ export function routeNodesNeedingDiscovery(
   route: RoutePlan,
   knownNames: ReadonlySet<string>,
   maxUnknown = DEFAULT_MAX_UNKNOWN,
+  includeDestination = true,
 ): string[] {
   const known = new Set(
     [...knownNames, ...STATIC_DESTINATION_NAMES]
@@ -149,7 +152,10 @@ export function routeNodesNeedingDiscovery(
   const normalizedOrigin = normalizePlaceName(route.origin);
   if (normalizedOrigin) seen.add(normalizedOrigin);
 
-  for (const rawNode of [...route.waypoints, route.destination]) {
+  const discoveryNodes = includeDestination
+    ? [...route.waypoints, route.destination]
+    : route.waypoints;
+  for (const rawNode of discoveryNodes) {
     if (nodes.length >= limit) break;
     const node = sanitizePlaceText(rawNode);
     const normalized = normalizePlaceName(node);
@@ -246,7 +252,12 @@ export async function discoverRoutePlaces(
       (name): name is string => Boolean(name),
     );
     return {
-      notices: routeNodesNeedingDiscovery(input.route, new Set(), input.maxUnknown).map(
+      notices: routeNodesNeedingDiscovery(
+        input.route,
+        new Set(),
+        input.maxUnknown,
+        input.includeDestination !== false,
+      ).map(
         (inputName) => ({
           inputName,
           status: "failed",
@@ -262,7 +273,12 @@ export async function discoverRoutePlaces(
 
   const fetchImpl = input.fetchImpl ?? fetch;
   const persistence = input.repository ?? (await import("./discovered-places.server.ts"));
-  const routeNodes = routeNodesNeedingDiscovery(input.route, new Set(), Number.POSITIVE_INFINITY);
+  const routeNodes = routeNodesNeedingDiscovery(
+    input.route,
+    new Set(),
+    Number.POSITIVE_INFINITY,
+    input.includeDestination !== false,
+  );
   const now = Date.now();
   const cachedByNormalizedName = new Map<string, DiscoveredPlaceRecord>();
   const cachedNoticesByNormalizedName = new Map<string, RouteDiscoveryNotice>();
@@ -314,7 +330,12 @@ export async function discoverRoutePlaces(
   }
 
   const knownNames = new Set(cachedByNormalizedName.keys());
-  const unknownNames = routeNodesNeedingDiscovery(input.route, knownNames, input.maxUnknown);
+  const unknownNames = routeNodesNeedingDiscovery(
+    input.route,
+    knownNames,
+    input.maxUnknown,
+    input.includeDestination !== false,
+  );
   const searchSettled = await Promise.allSettled(
     unknownNames.map((inputName) => searchPlaceSources(inputName, tavilyKey, fetchImpl)),
   );

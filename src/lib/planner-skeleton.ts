@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { Pace, WeatherDay } from "./planner.ts";
-import type { RoutePlan, TransportMode, TravelStyle } from "./route-planner.ts";
+import type {
+  RoutePlan,
+  TransportMode,
+  TransportPriceReference,
+  TravelStyle,
+} from "./route-planner.ts";
 import { violationSummary, type PlanViolation } from "./plan-validator.ts";
 
 export type PlannerSkeletonNodeType =
@@ -114,7 +119,76 @@ export type SkeletonInstructionInput = {
   route: RoutePlan;
   weather: WeatherDay[];
   candidates: SkeletonCandidate[];
+  transportPriceReferences?: TransportPriceReference[];
 };
+
+function normalizeNodeName(value: string): string {
+  return value.trim().replace(/\s+/g, "").toLowerCase();
+}
+
+/**
+ * 模型偶发把长途交通写成低价时，按确定性最低参考价抬高对应节点；
+ * 不改变节点顺序与时间，只把费用兜底到真实下限。
+ */
+export function enforceTransportPriceFloors(
+  skeleton: PlannerSkeleton,
+  references: TransportPriceReference[] = [],
+): PlannerSkeleton {
+  if (references.length === 0) return skeleton;
+
+  const cloned: PlannerSkeleton = {
+    ...skeleton,
+    days: skeleton.days.map((day) => ({
+      ...day,
+      nodes: day.nodes.map((node) => ({ ...node })),
+      radar: { ...day.radar },
+    })),
+  };
+  const transportNodes = cloned.days.flatMap((day) =>
+    day.nodes.filter((node) => node.type === "transport" || node.type === "transfer"),
+  );
+  if (transportNodes.length === 0) return cloned;
+
+  const usedNodes = new Set<(typeof transportNodes)[number]>();
+  for (const reference of references) {
+    const fromName = normalizeNodeName(reference.from);
+    const toName = normalizeNodeName(reference.to);
+    const matched =
+      transportNodes.find(
+        (node) =>
+          !usedNodes.has(node) &&
+          normalizeNodeName(node.name).includes(fromName) &&
+          normalizeNodeName(node.name).includes(toName),
+      ) ??
+      transportNodes.find(
+        (node) => !usedNodes.has(node) && node.transportMode === reference.mode,
+      ) ??
+      transportNodes.find((node) => !usedNodes.has(node));
+
+    if (!matched) continue;
+    usedNodes.add(matched);
+    matched.transportMode = reference.mode;
+    matched.estimatedCost = Math.max(matched.estimatedCost, reference.minimumPartyTotal);
+    matched.tips = [
+      matched.tips,
+      `全团单程最低参考价约 ${reference.minimumPartyTotal} 元（${reference.basis}）`,
+    ]
+      .filter(Boolean)
+      .join("；");
+  }
+
+  const minimumTotal = references.reduce(
+    (total, reference) => total + reference.minimumPartyTotal,
+    0,
+  );
+  const currentTotal = transportNodes.reduce((total, node) => total + node.estimatedCost, 0);
+  if (currentTotal < minimumTotal) {
+    // 无法逐段匹配时，把差额补到第一个交通节点，保证总费用不低于本地下限。
+    transportNodes[0]!.estimatedCost += minimumTotal - currentTotal;
+  }
+
+  return cloned;
+}
 
 const paceLimits: Record<Pace, number> = { relaxed: 2, balanced: 3, deep: 4 };
 const paceLabels: Record<Pace, string> = { relaxed: "轻松", balanced: "适中", deep: "充实" };
@@ -154,6 +228,10 @@ const skeletonRequiredSchema = {
 
 export function buildSkeletonInstruction(input: SkeletonInstructionInput): string {
   const { brief } = input;
+  const transportMinimumTotal = (input.transportPriceReferences ?? []).reduce(
+    (total, reference) => total + reference.minimumPartyTotal,
+    0,
+  );
   const constraints = [
     "只输出严格 JSON，不要 Markdown、不要解释、不要多余文字",
     "只有景点类节点（attraction 与 night-activity）的 name 必须来自 candidates，不得编造候选清单之外的景点",
@@ -169,6 +247,14 @@ export function buildSkeletonInstruction(input: SkeletonInstructionInput): strin
     }档节奏）`,
     "标题与摘要必须与逐日排程保持一致，不得描述排程里没有的安排",
     `必须生成恰好 ${brief.days} 天，day 从 1 连续编号到 ${brief.days}`,
+    ...(input.transportPriceReferences && input.transportPriceReferences.length > 0
+      ? [
+          "route.legs 中每个交通 leg 都必须在 transport 或 transfer 节点中出现，transportMode 必须与 route.legs.transport 一致",
+          "非自驾交通节点的 estimatedCost 是全团金额，必须覆盖对应 leg 的 minimumPartyTotal；去返程必须分别计入",
+          `全部去返程交通节点 estimatedCost 合计不得低于本地最低总价 ${transportMinimumTotal} 元；优先采用 transportPriceReferences 中 Tavily 摘要给出的合理区间`,
+          "不得给出低于 minimumPartyTotal 或本地最低参考价的交通费用；价格资料只用于估算，不得伪造实时票价",
+        ]
+      : []),
   ];
 
   const payload = {
@@ -178,6 +264,7 @@ export function buildSkeletonInstruction(input: SkeletonInstructionInput): strin
     route: input.route,
     weather: input.weather,
     candidates: input.candidates,
+    transportPriceReferences: input.transportPriceReferences ?? [],
     constraints,
   };
 

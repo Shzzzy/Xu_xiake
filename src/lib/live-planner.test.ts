@@ -16,6 +16,7 @@ import type {
   DiscoveredPlaceRecord,
   PlacePersistenceRepository,
 } from "./place-discovery.ts";
+import type { AmapClient } from "./amap.server.ts";
 
 test("normalizes Tavily results and drops entries without a URL", () => {
   const results = normalizeTavilyResults({
@@ -502,4 +503,96 @@ test("管家骨架失败时退回 legacy 链路而不抛错", async () => {
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
   assert.equal(result.mode, "legacy");
+});
+
+test("高德目的地候选非空时会进入管家 sources", async () => {
+  const tavilyQueries: string[] = [];
+  const baseFetch = fakeButlerFetch();
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("tavily")) {
+      const body = JSON.parse(String(init?.body)) as { query?: string };
+      if (body.query) tavilyQueries.push(body.query);
+    }
+    return baseFetch(input, init);
+  }) as typeof fetch;
+  const amapClient: AmapClient = {
+    async searchPoi() {
+      return [
+        {
+          id: "B000A8UIN8",
+          name: "故宫博物院",
+          type: "风景名胜;博物馆",
+          address: "北京市东城区景山前街4号",
+          location: [116.397, 39.918],
+        },
+        {
+          id: "B000A8UIN9",
+          name: "天坛公园",
+          type: "风景名胜;公园",
+          address: "北京市东城区天坛东里甲1号",
+          location: [116.410, 39.882],
+        },
+      ];
+    },
+    async fetchStaticMap() {
+      return new Uint8Array();
+    },
+    async route() {
+      throw new Error("本测试不应调用 AMap 路线规划");
+    },
+    async geocode(input) {
+      const map = {
+        厦门: { location: [118.089425, 24.479834] as [number, number], province: "福建省" },
+        北京: { location: [116.407526, 39.90403] as [number, number], province: "北京市" },
+      } as const;
+      const point = map[input.address.trim() as keyof typeof map];
+      if (!point) return [];
+      return [
+        {
+          formattedAddress: input.address,
+          province: point.province,
+          city: input.address,
+          district: "",
+          adcode: "",
+          location: point.location,
+        },
+      ];
+    },
+    async weather() {
+      return [];
+    },
+  };
+
+  const result = await runLivePlannerWith(
+    buildLiveInput({
+      destination: { id: "beijing", name: "北京", region: "北京市" },
+      origin: "厦门",
+      seedPlaces: [],
+      route: {
+        origin: "厦门",
+        destination: "北京",
+        waypoints: [],
+        roundTrip: true,
+        returnMode: "fast",
+        legs: [
+          { id: "outbound:0", from: "厦门", to: "北京", transport: "balanced", style: "direct", kind: "outbound" },
+          { id: "return", from: "北京", to: "厦门", transport: "balanced", style: "direct", kind: "return" },
+        ],
+      },
+    }),
+    {
+      env: { BUTLER_PLANNER: "1", DEEPSEEK_API_KEY: "k", TAVILY_API_KEY: "k" },
+      fetchImpl,
+      repository: createMemoryPlaceRepository(),
+      amapClient,
+    },
+  );
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  assert.ok(result.sources.some((source) => source.title === "故宫博物院"));
+  assert.ok(result.sources.some((source) => source.url.includes("amap.com/place/")));
+  assert.deepEqual(result.route.legs.map((leg) => leg.transport), ["flight", "flight"]);
+  assert.ok(tavilyQueries.length >= 2);
+  assert.ok(tavilyQueries.every((query) => query.includes("票价")));
 });

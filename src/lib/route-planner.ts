@@ -20,6 +20,23 @@ export type RoutePlan = {
   legs: RouteLeg[];
 };
 
+export type TransportPriceReference = {
+  legId: string;
+  from: string;
+  to: string;
+  mode: TransportMode;
+  distanceKm: number;
+  minimumUnitPrice: number;
+  minimumPartyTotal: number;
+  travelerCount: number;
+  basis: string;
+  sources: {
+    title: string;
+    url: string;
+    content: string;
+  }[];
+};
+
 export type RouteLegPreference = {
   transport?: TransportMode;
   style?: TravelStyle;

@@ -1,6 +1,7 @@
 import {
   buildSkeletonInstruction,
   buildSkeletonRepairInstruction,
+  enforceTransportPriceFloors,
   parsePlannerSkeleton,
   type PlannerSkeleton,
   type PlannerSkeletonDay,
@@ -15,7 +16,12 @@ import {
 import { buildTripClosingWithDeepSeek, type TripClosingInput } from "./travel-plan.server.ts";
 import type { TripClosing } from "./travel-plan.ts";
 import type { Pace, WeatherDay } from "./planner.ts";
-import type { RoutePlan, TransportMode, TravelStyle } from "./route-planner.ts";
+import type {
+  RoutePlan,
+  TransportMode,
+  TransportPriceReference,
+  TravelStyle,
+} from "./route-planner.ts";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-chat";
@@ -65,6 +71,8 @@ export type ButlerPlanInput = {
   weather: WeatherDay[];
   /** 候选资料由调用方抓取后传入；结果原样回传供结果页展示「N 个候选景区」。 */
   candidates: { name: string; summary: string; source: string }[];
+  /** Tavily 摘要与本地最低价组成的交通价格参考。 */
+  transportPriceReferences?: TransportPriceReference[];
 };
 
 export type ButlerPlanResult =
@@ -164,6 +172,7 @@ function buildSkeletonInstructionInput(input: ButlerPlanInput): SkeletonInstruct
     route: input.route,
     weather: input.weather,
     candidates: input.candidates,
+    transportPriceReferences: input.transportPriceReferences ?? [],
   };
 }
 
@@ -253,7 +262,10 @@ async function obtainSkeleton(
 
     let skeleton: PlannerSkeleton;
     try {
-      skeleton = parsePlannerSkeleton(content);
+      skeleton = enforceTransportPriceFloors(
+        parsePlannerSkeleton(content),
+        input.transportPriceReferences,
+      );
     } catch {
       // 解析/结构失败：换更严格的格式指令重试一次。
       if (sawParseFailure) {

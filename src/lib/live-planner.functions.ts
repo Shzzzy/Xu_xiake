@@ -12,7 +12,8 @@ import {
 import { buildLongPlannerMessages, parseLongPlanJson, type LongPlan } from "./long-planner.ts";
 import type { TripClosing } from "./travel-plan.ts";
 import type { Pace, WeatherDay } from "./planner.ts";
-import type { RoutePlan } from "./route-planner.ts";
+import type { RoutePlan, TransportPriceReference } from "./route-planner.ts";
+import type { AmapClient } from "./amap.server.ts";
 import type { RouteDiscoveryNotice } from "./place-discovery.server.ts";
 import type { PlacePersistenceRepository } from "./place-discovery.ts";
 import type { ButlerPlanInput } from "./planner-orchestrator.server.ts";
@@ -21,12 +22,6 @@ import type { PlannerDayCopy } from "./planner-day-copy.ts";
 import type { PlanViolation } from "./plan-validator.ts";
 
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
-
-/** 服务端专属模块统一通过 server-only 闭包按需加载，避免 client 构建被 import-protection 拦截。 */
-const loadTavily = createServerOnlyFn(async () => {
-  const { searchTavily } = await import("./tavily.server.ts");
-  return searchTavily;
-});
 
 const loadPlaceDiscovery = createServerOnlyFn(async () => {
   const { discoverRoutePlaces, routeNodesNeedingDiscovery } = await import(
@@ -43,6 +38,10 @@ const loadTripClosing = createServerOnlyFn(async () => {
 const loadButler = createServerOnlyFn(async () => {
   const { planWithButler } = await import("./planner-orchestrator.server.ts");
   return planWithButler;
+});
+
+const loadPlannerContext = createServerOnlyFn(async () => {
+  return import("./planner-context.server.ts");
 });
 
 export type DiscoveryNotice = RouteDiscoveryNotice;
@@ -90,6 +89,7 @@ export type LivePlanResult =
       plan: ReturnType<typeof parsePlannerJson>;
       sources: SearchResult[];
       discoveries: DiscoveryNotice[];
+      route: RoutePlan;
       /** 旅行回望：与主行程并行生成，失败时是确定性兜底文案。 */
       closing: TripClosing;
     }
@@ -105,6 +105,7 @@ export type LivePlanResult =
       closing: TripClosing;
       sources: SearchResult[];
       discoveries: DiscoveryNotice[];
+      route: RoutePlan;
     };
 
 /** 可注入的环境变量：测试与 handler 都通过它读取，而不是直接读 process.env。 */
@@ -115,6 +116,9 @@ export type LivePlannerEnv = {
   DEEPSEEK_BASE_URL?: string;
   TAVILY_SEARCH_URL?: string;
   DEEPSEEK_MODEL?: string;
+  AMAP_WEB_SERVICE_KEY?: string;
+  AMAP_API_KEY?: string;
+  AMAP_KEY?: string;
 };
 
 export type LivePlannerDeps = {
@@ -123,6 +127,8 @@ export type LivePlannerDeps = {
   fetchImpl?: typeof fetch;
   /** 地点发现注入的内存仓储，避免测试触碰真实数据库。 */
   repository?: PlacePersistenceRepository;
+  /** 契约测试注入高德客户端，避免真实网络。 */
+  amapClient?: AmapClient;
 };
 
 const liveItineraryInputSchema = z.object({
@@ -372,6 +378,8 @@ type SharedPlannerContext = {
   discoveries: DiscoveryNotice[];
   sources: SearchResult[];
   discoveredStops: DiscoveredStop[];
+  route: RoutePlan;
+  transportPriceReferences: TransportPriceReference[];
   baseUrl?: string;
   model?: string;
 };
@@ -387,12 +395,12 @@ async function runLegacyPlan(
   const buildTripClosingWithDeepSeek = await loadTripClosing();
   const closingPromise = buildTripClosingWithDeepSeek(
     {
-      origin: input.route.origin,
-      destination: input.route.destination,
-      waypoints: input.route.waypoints,
-      routeNodes: [input.route.origin, ...input.route.waypoints, input.route.destination],
+      origin: context.route.origin,
+      destination: context.route.destination,
+      waypoints: context.route.waypoints,
+      routeNodes: [context.route.origin, ...context.route.waypoints, context.route.destination],
       days: input.days,
-      returnMode: input.route.returnMode ?? null,
+      returnMode: context.route.returnMode ?? null,
       pace: input.pace,
       interests: input.interests,
       highlights: input.seedPlaces.map((place) => place.name),
@@ -421,7 +429,7 @@ async function runLegacyPlan(
       weather: input.weather,
       sources: context.sources,
       discoveredStops: context.discoveredStops,
-      route: input.route,
+      route: context.route,
     }),
     closingPromise,
   ]);
@@ -432,6 +440,7 @@ async function runLegacyPlan(
     plan,
     sources: context.sources,
     discoveries: context.discoveries,
+    route: context.route,
     closing,
   };
 }
@@ -446,6 +455,10 @@ async function runButlerPlan(
     summary: source.content,
     source: source.url,
   }));
+  const briefTransport =
+    input.transport && context.route.legs.every((leg) => leg.transport === input.transport)
+      ? input.transport
+      : null;
 
   const butlerInput: ButlerPlanInput = {
     origin: input.origin,
@@ -459,11 +472,12 @@ async function runButlerPlan(
     totalBudget: input.totalBudget,
     travelers: input.travelers,
     interests: input.interests,
-    transport: input.transport,
+    transport: briefTransport,
     style: input.style,
-    route: input.route,
+    route: context.route,
     weather: input.weather,
     candidates,
+    transportPriceReferences: context.transportPriceReferences,
   };
 
   const planWithButler = await loadButler();
@@ -500,6 +514,7 @@ async function runButlerPlan(
       score: 1,
     })),
     discoveries: context.discoveries,
+    route: context.route,
   };
 }
 
@@ -519,47 +534,53 @@ export async function runLivePlannerWith(
     return { status: "needs_configuration", missing };
   }
 
-  let discoveries: DiscoveryNotice[] = [];
-  let discoverySourceGroups: DiscoverySourceGroup[] = [];
-  let discoveredStops: DiscoveredStop[] = [];
-  try {
-    const { discoverRoutePlaces } = await loadPlaceDiscovery();
-    const discovery = await discoverRoutePlaces({
-      route: input.route,
-      deepseekKey,
-      tavilyKey,
-      fetchImpl,
-      repository: deps.repository,
-    });
-    discoveries = discovery.notices;
-    discoverySourceGroups = discovery.sourceGroups;
-    discoveredStops = mapDiscoveredStops({
-      verifiedPlaces: discovery.verifiedPlaces,
-      candidatePlaces: discovery.candidatePlaces,
-    });
-  } catch {
-    discoveries = await failedDiscoveryNotices(input.route);
-  }
+  // 详细行程的景点与途经点都不再由 Tavily 发现；Tavily 仅在下方的交通价格查询中使用。
+  const discoveries: DiscoveryNotice[] = [];
+  const discoverySourceGroups: DiscoverySourceGroup[] = [];
+  const discoveredStops: DiscoveredStop[] = [];
 
-  const queries = [
-    `${input.destination.name} 热门景区 周边游 推荐`,
-    `${input.destination.name} 值得去的景点 路线`,
-    `${input.destination.region} 一日游 景点`,
-  ];
   const tavilyUrl = readLiveEnv(deps, "TAVILY_SEARCH_URL")?.trim();
-  const searchTavily = await loadTavily();
-  const searchBatches = await Promise.all(
-    queries.map((query) => searchTavily(tavilyKey, query, tavilyUrl, fetchImpl)),
-  );
-  const seedSources = input.seedPlaces.map((place) => ({
-    title: place.name,
-    url: place.source,
-    content: `${place.area}。${place.summary}。建议停留 ${place.duration} 分钟。`,
-    score: 1,
+  const plannerContext = await loadPlannerContext();
+  const amapKey = plannerContext.resolvePlannerAmapKey({
+    webServiceKey: readLiveEnv(deps, "AMAP_WEB_SERVICE_KEY")?.trim(),
+    apiKey: readLiveEnv(deps, "AMAP_API_KEY")?.trim(),
+    key: readLiveEnv(deps, "AMAP_KEY")?.trim(),
+  });
+  const amapClient =
+    deps.amapClient ?? plannerContext.createPlannerAmapClient(amapKey, fetchImpl);
+  const seedCandidates = input.seedPlaces.map((place) => ({
+    name: place.name,
+    summary: `${place.area}。${place.summary}。建议停留 ${place.duration} 分钟。`,
+    source: place.source,
   }));
+  const [amapCandidates, transportPlan] = await Promise.all([
+    plannerContext.searchAmapDestinationCandidates({
+      client: amapClient,
+      destination: input.destination.name,
+      region: input.destination.region,
+    }),
+    plannerContext.prepareRouteTransportPlan({
+      client: amapClient,
+      route: input.route,
+      startDate: input.startDate,
+      travelers: input.travelers,
+      tavilyKey,
+      tavilyEndpoint: tavilyUrl,
+      fetchImpl,
+    }),
+  ]);
+  const candidates = plannerContext.mergePlannerCandidates({
+    primary: amapCandidates,
+    fallback: seedCandidates,
+  });
   const sources = selectPlannerSources({
-    destinationSources: searchBatches.flat(),
-    seedSources,
+    destinationSources: candidates.map((candidate) => ({
+      title: candidate.name,
+      url: candidate.source,
+      content: candidate.summary,
+      score: 1,
+    })),
+    seedSources: [],
     discoverySourceGroups,
   });
 
@@ -568,6 +589,8 @@ export async function runLivePlannerWith(
     discoveries,
     sources,
     discoveredStops,
+    route: transportPlan.route,
+    transportPriceReferences: transportPlan.references,
     baseUrl: readLiveEnv(deps, "DEEPSEEK_BASE_URL")?.trim(),
     model: readLiveEnv(deps, "DEEPSEEK_MODEL")?.trim(),
   };
