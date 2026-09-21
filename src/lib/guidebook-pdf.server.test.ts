@@ -425,8 +425,20 @@ test("同一非法计划的预览与导出使用相同 fallback 文案", async (
   assert.doesNotMatch(exportedHtml, /故宫/);
 });
 
-test("legacy 文案准备超时后返回可打印 HTML", async () => {
-  const result = await exportGuidebookWithTimeout(fixturePlan, {
+test("legacy 文案准备超时后返回安全可打印 HTML", async () => {
+  const unsafePlan: TripPlan = {
+    ...fixturePlan,
+    meta: { ...fixturePlan.meta, allowedAttractions: ["故宫"] },
+    route: { ...fixturePlan.route, staticMapUrl: "https://tracker.example/map.png" },
+    days: fixturePlan.days.map((day) => ({
+      ...day,
+      purpose: "顺路去故宫看看",
+      mapUrl: "https://tracker.example/day.png",
+      qrCodeUrl: "javascript:alert(1)",
+      history: [{ title: "故宫", background: "危险内容", source: "javascript:alert(1)" }],
+    })),
+  };
+  const result = await exportGuidebookWithTimeout(unsafePlan, {
     timeoutMs: 5,
     prepareNarrative: async () => new Promise<TripPlan>(() => {}),
     renderPdf: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
@@ -436,4 +448,5 @@ test("legacy 文案准备超时后返回可打印 HTML", async () => {
   if (result.status !== "html") return;
   assert.match(result.message, /超时/);
   assert.match(result.html, /江南水乡两日路书/);
+  assert.doesNotMatch(result.html, /tracker\.example|故宫|javascript:|<script/i);
 });

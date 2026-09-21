@@ -7,7 +7,11 @@ import {
   type GuidebookMapEnrichmentOptions,
 } from "./guidebook-map.server.ts";
 import { renderGuidebookHtml } from "./guidebook-html.server.ts";
-import { prepareGuidebookNarrativePlan } from "./guidebook-narrative.server.ts";
+import {
+  buildFallbackDayNarrative,
+  prepareGuidebookNarrativePlan,
+  validateDayNarrative,
+} from "./guidebook-narrative.server.ts";
 import type { TripPlan } from "./travel-plan.ts";
 
 const PDF_RENDER_TIMEOUT_MS = 30_000;
@@ -508,6 +512,45 @@ export type GuidebookTimeoutExportDependencies = GuidebookExportDependencies & {
   prepareNarrative?: (plan: TripPlan) => Promise<TripPlan>;
 };
 
+function buildSafeGuidebookFallbackPlan(plan: TripPlan): TripPlan {
+  const scheduledAttractions = plan.days.flatMap((day) =>
+    day.nodes
+      .filter((node) => node.type === "attraction" || node.type === "night-activity")
+      .map((node) => node.name),
+  );
+  const knownAttractions = [...(plan.meta.allowedAttractions ?? []), ...scheduledAttractions];
+  const days = plan.days.map((day, index) => {
+    const safeDay = {
+      ...day,
+      mapUrl: undefined,
+      qrCodeUrl: undefined,
+      navigationUrl: undefined,
+      history: [],
+      nodes: day.nodes.map((node) => ({ ...node, navigation: null })),
+    };
+    try {
+      validateDayNarrative(safeDay, index, { knownAttractions });
+      return safeDay;
+    } catch {
+      return buildFallbackDayNarrative(safeDay, index);
+    }
+  });
+
+  const stripSegmentNavigation = (segments: TripPlan["route"]["outboundSegments"]) =>
+    segments.map((segment) => ({ ...segment, navigation: "" }));
+
+  return {
+    ...plan,
+    route: {
+      ...plan.route,
+      staticMapUrl: undefined,
+      outboundSegments: stripSegmentNavigation(plan.route.outboundSegments),
+      returnSegments: stripSegmentNavigation(plan.route.returnSegments),
+    },
+    days,
+    closing: { ...plan.closing, source: null },
+  };
+}
 export const GUIDEBOOK_EXPORT_TOTAL_TIMEOUT_MS = 25_000;
 
 /** 总超时先于文案准备启动；准备完成后复用的 plan 不再二次准备。 */
@@ -517,7 +560,7 @@ export async function exportGuidebookWithTimeout(
 ): Promise<GuidebookExportResult> {
   const controller = new AbortController();
   const timeoutMs = dependencies.timeoutMs ?? GUIDEBOOK_EXPORT_TOTAL_TIMEOUT_MS;
-  let fallbackPlan = plan;
+  let fallbackPlan = buildSafeGuidebookFallbackPlan(plan);
   let timeoutResolve: ((result: GuidebookExportResult) => void) | undefined;
   const timeoutPromise = new Promise<GuidebookExportResult>((resolve) => {
     timeoutResolve = resolve;
@@ -535,7 +578,7 @@ export async function exportGuidebookWithTimeout(
     const exportPromise = (async () => {
       const prepareNarrative = dependencies.prepareNarrative ?? prepareGuidebookNarrativePlan;
       const narrativePlan = await prepareNarrative(plan);
-      fallbackPlan = narrativePlan;
+      fallbackPlan = buildSafeGuidebookFallbackPlan(narrativePlan);
       return exportGuidebookForTest(narrativePlan, {
         ...dependencies,
         signal: controller.signal,
