@@ -172,6 +172,12 @@ function isRelevantAmapPoi(poi: AmapPoi, destination: string, region: string): b
     return false;
   }
 
+  const expectedCity = extractAmapCityQuery(region, destination);
+  if (expectedCity && !/^\d{6}$/u.test(expectedCity)) {
+    const cityToken = normalizeName(expectedCity.replace(/市$/u, ""));
+    if (cityToken && !poiText.includes(cityToken)) return false;
+  }
+
   return true;
 }
 
