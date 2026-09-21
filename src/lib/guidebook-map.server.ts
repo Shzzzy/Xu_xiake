@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   buildNavigationUrl,
   buildStaticMapUrl,
@@ -17,6 +18,9 @@ import type {
 } from "./travel-plan.ts";
 
 const MAX_POI_LOOKUPS = 24;
+const DEFAULT_ENRICHMENT_TIMEOUT_MS = 20_000;
+const ENRICHMENT_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_ENRICHMENT_CACHE_ENTRIES = 200;
 const MAX_ROUTE_MAP_POINTS = 40;
 const MAX_DAY_MAP_POINTS = 24;
 const MAP_OPERATION_CONCURRENCY = 6;
@@ -36,6 +40,10 @@ export type GuidebookMapEnrichmentOptions = {
   /** 确定性测试和调用方可注入 fake client。 */
   amapClient?: AmapClient;
   fetchImpl?: typeof fetch;
+  /** 整个 enrichment 的总预算；默认 20 秒。 */
+  timeoutMs?: number;
+  /** 调用方取消预览/导出时联动停止地图请求。 */
+  signal?: AbortSignal;
   /** 上报降级原因，调用方可在不包含密钥的前提下记录日志。 */
   onError?: (message: string) => void;
 };
@@ -51,12 +59,38 @@ type CoordinateResolver = {
   ): Promise<AmapCoordinate | null>;
 };
 
-type RouteResolver = (
-  origin: AmapCoordinate,
-  destination: AmapCoordinate,
-  mode: AmapRouteMode,
-) => Promise<AmapRoute | null>;
+type RouteResolver = (input: {
+  origin: AmapCoordinate;
+  destination: AmapCoordinate;
+  mode: AmapRouteMode;
+  city?: string;
+  destinationCity?: string;
+}) => Promise<AmapRoute | null>;
 
+type OperationDeadline = {
+  signal: AbortSignal;
+  timedOut: () => boolean;
+  cleanup: () => void;
+};
+
+type EnrichmentCacheEntry = {
+  expiresAt: number;
+  promise: Promise<TripPlan>;
+};
+
+type RouteDecision =
+  | {
+      kind: "route";
+      routeMode: AmapRouteMode;
+      navigationMode: NavigationInput["mode"] | null;
+      city?: string;
+      destinationCity?: string;
+      durationFromRoute: boolean;
+    }
+  | {
+      kind: "unsupported";
+      navigationMode: null;
+    };
 type EnrichedRoute = {
   route: TripRoute;
   routeStops: Map<string, AmapCoordinate>;
@@ -64,6 +98,161 @@ type EnrichedRoute = {
 
 function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
+    .join(",")}}`;
+}
+
+function mapEnrichmentSource(plan: TripPlan) {
+  return {
+    meta: {
+      origin: plan.meta.origin,
+      waypoints: plan.meta.waypoints,
+      destination: plan.meta.destination,
+      startDate: plan.meta.startDate,
+      days: plan.meta.days,
+      transportPreference: plan.meta.transportPreference,
+    },
+    route: {
+      outbound: plan.route.outbound,
+      returnPath: plan.route.returnPath,
+      outboundSegments: plan.route.outboundSegments,
+      returnSegments: plan.route.returnSegments,
+      returnMode: plan.route.returnMode,
+      staticMapUrl: plan.route.staticMapUrl ?? null,
+    },
+    days: plan.days.map((day) => ({
+      date: day.date,
+      weather: day.weather ?? null,
+      mapUrl: day.mapUrl ?? null,
+      navigationUrl: day.navigationUrl ?? null,
+      qrCodeUrl: day.qrCodeUrl ?? null,
+      nodes: day.nodes.map((node) => ({
+        type: node.type,
+        name: node.name,
+        location: node.location ?? null,
+        coordinates: node.coordinates ?? null,
+        transportMode: node.transportMode ?? null,
+        navigation: node.navigation,
+      })),
+    })),
+  };
+}
+
+function mapEnrichmentKey(plan: TripPlan, amapKey: string, timeoutMs: number): string {
+  const keyHash = amapKey ? createHash("sha256").update(amapKey).digest("hex") : "injected-client";
+  return createHash("sha256")
+    .update(stableSerialize(mapEnrichmentSource(plan)))
+    .update(`|${keyHash}|${timeoutMs}`)
+    .digest("hex");
+}
+
+const sharedEnrichmentCache = new Map<string, EnrichmentCacheEntry>();
+const injectedEnrichmentCaches = new WeakMap<AmapClient, Map<string, EnrichmentCacheEntry>>();
+const fetchEnrichmentCaches = new WeakMap<typeof fetch, Map<string, EnrichmentCacheEntry>>();
+
+function weakCacheFor<T extends object>(
+  owner: T,
+  store: WeakMap<T, Map<string, EnrichmentCacheEntry>>,
+): Map<string, EnrichmentCacheEntry> {
+  const cached = store.get(owner);
+  if (cached) return cached;
+  const cache = new Map<string, EnrichmentCacheEntry>();
+  store.set(owner, cache);
+  return cache;
+}
+
+function enrichmentCacheFor(
+  options: GuidebookMapEnrichmentOptions,
+): Map<string, EnrichmentCacheEntry> {
+  if (options.amapClient) return weakCacheFor(options.amapClient, injectedEnrichmentCaches);
+  if (options.fetchImpl) return weakCacheFor(options.fetchImpl, fetchEnrichmentCaches);
+  return sharedEnrichmentCache;
+}
+
+function rememberEnrichment(
+  cache: Map<string, EnrichmentCacheEntry>,
+  key: string,
+  promise: Promise<TripPlan>,
+): void {
+  if (cache.size >= MAX_ENRICHMENT_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest) cache.delete(oldest);
+  }
+  cache.set(key, { expiresAt: Date.now() + ENRICHMENT_CACHE_TTL_MS, promise });
+}
+
+export function clearGuidebookMapCache(): void {
+  sharedEnrichmentCache.clear();
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+function createDeadline(options: GuidebookMapEnrichmentOptions): OperationDeadline {
+  const controller = new AbortController();
+  const timeoutMs =
+    Number.isFinite(options.timeoutMs) && (options.timeoutMs ?? 0) > 0
+      ? Math.round(options.timeoutMs as number)
+      : DEFAULT_ENRICHMENT_TIMEOUT_MS;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error("地图 enrichment 超过总预算"));
+  }, timeoutMs);
+  const onAbort = () =>
+    controller.abort(options.signal?.reason ?? new Error("地图 enrichment 已取消"));
+  if (options.signal?.aborted) onAbort();
+  else options.signal?.addEventListener("abort", onAbort, { once: true });
+
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cleanup: () => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
+function abortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  return new Error("地图 enrichment 已取消");
+}
+
+function withDeadline<T>(promise: Promise<T>, deadline: OperationDeadline): Promise<T> {
+  if (deadline.signal.aborted) return Promise.reject(abortReason(deadline.signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortReason(deadline.signal));
+    deadline.signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        deadline.signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        deadline.signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function withAbortSignal(fetchImpl: typeof fetch, signal: AbortSignal): typeof fetch {
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestSignal = init?.signal ? AbortSignal.any([init.signal, signal]) : signal;
+    return fetchImpl(input, { ...init, signal: requestSignal });
+  }) as typeof fetch;
 }
 
 export function resolveGuidebookAmapKey(override?: string | null): string {
@@ -189,14 +378,57 @@ function estimateDurationMinutes(distance: number, mode: RouteSegment["mode"]): 
   return Math.max(1, Math.round((distance / speedKmh[mode]) * 60));
 }
 
-function toAmapRouteMode(mode: RouteSegment["mode"]): AmapRouteMode {
-  return mode === "train" ? "transit" : "car";
+function cityForPlace(plan: TripPlan, value: string): string {
+  const text = cleanText(value);
+  const stops = [plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination];
+  const matched = stops.find(
+    (stop) => text.includes(cleanText(stop)) || cleanText(stop).includes(text),
+  );
+  return cleanText(matched) || text;
 }
 
-function toNavigationMode(mode: RouteSegment["mode"] | undefined): NavigationInput["mode"] {
+function routeDecision(plan: TripPlan, segment: RouteSegment): RouteDecision {
+  switch (segment.mode) {
+    case "train":
+      return {
+        kind: "route",
+        routeMode: "transit",
+        navigationMode: "transit",
+        city: cityForPlace(plan, segment.from),
+        destinationCity: cityForPlace(plan, segment.to),
+        durationFromRoute: true,
+      };
+    case "bus":
+      // 公交仍沿道路取路径和距离，但耗时使用本产品的公交估算，不用驾车耗时覆盖。
+      return {
+        kind: "route",
+        routeMode: "car",
+        navigationMode: "transit",
+        durationFromRoute: false,
+      };
+    case "drive":
+    case "economy":
+    case "balanced":
+    case "speed":
+      return {
+        kind: "route",
+        routeMode: "car",
+        navigationMode: "car",
+        durationFromRoute: true,
+      };
+    case "flight":
+    case "ship":
+      return { kind: "unsupported", navigationMode: null };
+  }
+}
+
+function toNavigationMode(mode: RouteSegment["mode"] | undefined): NavigationInput["mode"] | null {
   if (!mode) return "walking";
-  if (mode === "train") return "transit";
-  return "car";
+  if (mode === "train" || mode === "bus") return "transit";
+  if (mode === "drive" || mode === "economy" || mode === "balanced" || mode === "speed") {
+    return "car";
+  }
+  return null;
 }
 
 async function mapWithConcurrency<T, R>(
@@ -224,19 +456,26 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function createCoordinateResolver(client: AmapClient, report: ErrorReporter): CoordinateResolver {
+function createCoordinateResolver(
+  client: AmapClient,
+  report: ErrorReporter,
+  deadline: OperationDeadline,
+): CoordinateResolver {
   const geocodeCache = new Map<string, Promise<AmapCoordinate | null>>();
   const poiCache = new Map<string, Promise<AmapCoordinate | null>>();
 
   const geocode = (address: string, city?: string): Promise<AmapCoordinate | null> => {
     const normalizedAddress = cleanText(address);
     if (!normalizedAddress) return Promise.resolve(null);
+    if (deadline.signal.aborted) return Promise.resolve(null);
     const key = `${normalizedAddress}|${cleanText(city)}`;
     const cached = geocodeCache.get(key);
     if (cached) return cached;
 
-    const pending = client
-      .geocode({ address: normalizedAddress, city: cleanText(city) || undefined })
+    const pending = withDeadline(
+      client.geocode({ address: normalizedAddress, city: cleanText(city) || undefined }),
+      deadline,
+    )
       .then((results) => results[0]?.location ?? null)
       .catch((error) => {
         report(`地理编码失败：${errorText(error)}`);
@@ -249,12 +488,15 @@ function createCoordinateResolver(client: AmapClient, report: ErrorReporter): Co
   const searchPoi = (keywords: string, city: string): Promise<AmapCoordinate | null> => {
     const normalizedKeywords = cleanText(keywords);
     if (!normalizedKeywords) return Promise.resolve(null);
+    if (deadline.signal.aborted) return Promise.resolve(null);
     const key = `${normalizedKeywords}|${cleanText(city)}`;
     const cached = poiCache.get(key);
     if (cached) return cached;
 
-    const pending = client
-      .searchPoi({ keywords: normalizedKeywords, city: cleanText(city) || undefined })
+    const pending = withDeadline(
+      client.searchPoi({ keywords: normalizedKeywords, city: cleanText(city) || undefined }),
+      deadline,
+    )
       .then((results) => results[0]?.location ?? null)
       .catch((error) => {
         report(`地点解析失败：${errorText(error)}`);
@@ -280,16 +522,29 @@ function createCoordinateResolver(client: AmapClient, report: ErrorReporter): Co
     },
   };
 }
-
-function createRouteResolver(client: AmapClient, report: ErrorReporter): RouteResolver {
+function createRouteResolver(
+  client: AmapClient,
+  report: ErrorReporter,
+  deadline: OperationDeadline,
+): RouteResolver {
   const cache = new Map<string, Promise<AmapRoute | null>>();
-  return (origin, destination, mode) => {
-    const key = `${mode}|${coordinateKey(origin)}|${coordinateKey(destination)}`;
+  return (input) => {
+    if (deadline.signal.aborted) return Promise.resolve(null);
+    const key = `${input.mode}|${coordinateKey(input.origin)}|${coordinateKey(input.destination)}|${input.city ?? ""}|${input.destinationCity ?? ""}`;
     const cached = cache.get(key);
     if (cached) return cached;
 
-    const pending = client.route({ origin, destination, mode }).catch((error) => {
-      report(`${mode} 路线规划失败：${errorText(error)}`);
+    const pending = withDeadline(
+      client.route({
+        origin: input.origin,
+        destination: input.destination,
+        mode: input.mode,
+        city: input.city,
+        destinationCity: input.destinationCity,
+      }),
+      deadline,
+    ).catch((error) => {
+      report(`${input.mode} 路线规划失败：${errorText(error)}`);
       return null;
     });
     cache.set(key, pending);
@@ -324,13 +579,38 @@ function returnSegmentsFor(plan: TripPlan): RouteSegment[] {
 
 async function enrichSegment(
   segment: RouteSegment,
+  plan: TripPlan,
   resolver: CoordinateResolver,
   routeResolver: RouteResolver,
 ): Promise<{ segment: RouteSegment; path: AmapCoordinate[] }> {
+  const decision = routeDecision(plan, segment);
   const [origin, destination] = await Promise.all([
     resolver.resolveAddress(segment.from),
     resolver.resolveAddress(segment.to),
   ]);
+
+  if (decision.kind === "unsupported") {
+    const path = origin && destination ? [origin, destination] : [];
+    const estimatedDistance =
+      segment.distanceKm > 0
+        ? segment.distanceKm
+        : origin && destination
+          ? distanceKm(origin, destination)
+          : 0;
+    const estimatedMinutes =
+      segment.durationMinutes > 0
+        ? segment.durationMinutes
+        : estimateDurationMinutes(estimatedDistance, segment.mode);
+    return {
+      segment: {
+        ...segment,
+        distanceKm: estimatedDistance,
+        durationMinutes: estimatedMinutes,
+        navigation: "",
+      },
+      path,
+    };
+  }
 
   if (!origin || !destination) {
     return {
@@ -342,35 +622,46 @@ async function enrichSegment(
     };
   }
 
-  const navigation = buildNavigationUrl({
-    from: origin,
-    to: destination,
-    mode: toNavigationMode(segment.mode),
-    fromName: segment.from,
-    toName: segment.to,
+  const navigation = decision.navigationMode
+    ? buildNavigationUrl({
+        from: origin,
+        to: destination,
+        mode: decision.navigationMode,
+        fromName: segment.from,
+        toName: segment.to,
+      })
+    : "";
+  const route = await routeResolver({
+    origin,
+    destination,
+    mode: decision.routeMode,
+    city: decision.city,
+    destinationCity: decision.destinationCity,
   });
-  const route = await routeResolver(origin, destination, toAmapRouteMode(segment.mode));
   const path = route?.path.length ? route.path : [origin, destination];
-  const estimatedDistance = route ? route.distanceMeters / 1000 : distanceKm(origin, destination);
+  const estimatedDistance =
+    route !== null
+      ? route.distanceMeters / 1000
+      : segment.distanceKm > 0
+        ? segment.distanceKm
+        : distanceKm(origin, destination);
+  const estimatedMinutes =
+    route !== null && decision.durationFromRoute
+      ? route.durationSeconds / 60
+      : segment.durationMinutes > 0
+        ? segment.durationMinutes
+        : estimateDurationMinutes(estimatedDistance, segment.mode);
 
   return {
     segment: {
       ...segment,
       distanceKm: Math.round(estimatedDistance * 10) / 10,
-      durationMinutes: Math.max(
-        1,
-        Math.round(
-          route
-            ? route.durationSeconds / 60
-            : estimateDurationMinutes(estimatedDistance, segment.mode),
-        ),
-      ),
+      durationMinutes: Math.max(1, Math.round(estimatedMinutes)),
       navigation,
     },
     path,
   };
 }
-
 function buildStaticMapUrlSafely(
   input: Parameters<typeof buildStaticMapUrl>[0],
   report: ErrorReporter,
@@ -394,10 +685,10 @@ async function enrichRoute(
 
   const [outboundResults, returnResults] = await Promise.all([
     mapWithConcurrency(outboundSegments, MAP_OPERATION_CONCURRENCY, (segment) =>
-      enrichSegment(segment, resolver, routeResolver),
+      enrichSegment(segment, plan, resolver, routeResolver),
     ),
     mapWithConcurrency(returnSegments, MAP_OPERATION_CONCURRENCY, (segment) =>
-      enrichSegment(segment, resolver, routeResolver),
+      enrichSegment(segment, plan, resolver, routeResolver),
     ),
   ]);
 
@@ -459,15 +750,51 @@ async function enrichRoute(
   };
 }
 
+type DayCityContext = {
+  name: string;
+  coordinate?: AmapCoordinate;
+  routeIndex: number;
+};
+
+function deriveDayCityContexts(
+  plan: TripPlan,
+  routeStops: Map<string, AmapCoordinate>,
+): DayCityContext[] {
+  const stops = [plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination].map(cleanText);
+  let lastIndex = 0;
+
+  return plan.days.map((day, dayIndex) => {
+    const text = day.nodes
+      .map((node) => `${node.name} ${node.location ?? ""}`)
+      .join(" ")
+      .trim();
+    const matches = stops.flatMap((stop, index) => (stop && text.includes(stop) ? [index] : []));
+    const forwardMatches = matches.filter((index) => index >= lastIndex);
+    const fallbackIndex = dayIndex === 0 ? lastIndex : Math.min(stops.length - 1, lastIndex + 1);
+    const routeIndex = forwardMatches.at(-1) ?? matches.at(-1) ?? fallbackIndex;
+    lastIndex = Math.max(0, routeIndex);
+    const name = stops[lastIndex] ?? plan.meta.destination;
+    return {
+      name,
+      ...(routeStops.get(name) ? { coordinate: routeStops.get(name) } : {}),
+      routeIndex: lastIndex,
+    };
+  });
+}
+
 function dayMapPoints(
   nodes: TripTimelineNode[],
+  start: AmapCoordinate | undefined,
+  end: AmapCoordinate | undefined,
   plan: TripPlan,
   route: TripRoute,
   routeStops: Map<string, AmapCoordinate>,
 ): AmapCoordinate[] {
-  const points = uniqueCoordinates(
-    nodes.flatMap((node) => (node.coordinates ? [node.coordinates] : [])),
-  );
+  const points = uniqueCoordinates([
+    ...(start ? [start] : []),
+    ...nodes.flatMap((node) => (node.coordinates ? [node.coordinates] : [])),
+    ...(end ? [end] : []),
+  ]);
   const destination = routeStops.get(plan.meta.destination);
   const origin = routeStops.get(plan.meta.origin);
 
@@ -498,7 +825,8 @@ async function enrichDays(
   resolver: CoordinateResolver,
   report: ErrorReporter,
 ): Promise<TripDay[]> {
-  const candidates: { key: string; node: TripTimelineNode }[] = [];
+  const cityContexts = deriveDayCityContexts(plan, routeStops);
+  const candidates: { key: string; node: TripTimelineNode; city: string }[] = [];
   const existing = new Map<string, AmapCoordinate>();
 
   plan.days.forEach((day, dayIndex) => {
@@ -515,7 +843,11 @@ async function enrichDays(
           node.type === "hotel" ||
           node.type === "meal")
       ) {
-        candidates.push({ key, node });
+        candidates.push({
+          key,
+          node,
+          city: cityContexts[dayIndex]?.name ?? plan.meta.destination,
+        });
       }
     });
   });
@@ -523,10 +855,9 @@ async function enrichDays(
   const resolvedCandidates = await mapWithConcurrency(
     candidates,
     MAP_OPERATION_CONCURRENCY,
-    async ({ key, node }) => {
+    async ({ key, node, city }) => {
       const routeStop = routeStops.get(cleanText(node.name));
-      const coordinate =
-        routeStop ?? (await resolver.resolvePlace(node.name, node.location, plan.meta.destination));
+      const coordinate = routeStop ?? (await resolver.resolvePlace(node.name, node.location, city));
       return { key, coordinate };
     },
   );
@@ -534,24 +865,36 @@ async function enrichDays(
     if (coordinate) existing.set(key, coordinate);
   }
 
-  const destination = routeStops.get(plan.meta.destination);
-  const origin = routeStops.get(plan.meta.origin);
+  const result: TripDay[] = [];
+  let previousDayEnd: AmapCoordinate | undefined;
 
-  return plan.days.map((day, dayIndex) => {
-    let previousCoordinate = origin ?? destination ?? route.outbound[0] ?? route.returnPath[0];
+  for (let dayIndex = 0; dayIndex < plan.days.length; dayIndex += 1) {
+    const day = plan.days[dayIndex];
+    if (!day) continue;
+    const context = cityContexts[dayIndex];
+    const origin = routeStops.get(plan.meta.origin);
+    const dayStart =
+      dayIndex === 0
+        ? (origin ?? context?.coordinate ?? route.outbound[0] ?? route.returnPath[0])
+        : (previousDayEnd ?? context?.coordinate ?? route.outbound[0] ?? route.returnPath[0]);
+    let previousCoordinate = dayStart;
+
     const nodes = day.nodes.map((node, nodeIndex) => {
       const key = routeNodeKey(dayIndex, nodeIndex);
       const coordinate = existing.get(key) ?? node.coordinates;
+      const navigationMode = toNavigationMode(node.transportMode);
       const navigation =
-        coordinate && previousCoordinate
+        coordinate && previousCoordinate && navigationMode
           ? buildNavigationUrl({
               from: previousCoordinate,
               to: coordinate,
-              mode: toNavigationMode(node.transportMode),
+              mode: navigationMode,
               fromName: node.location ?? node.name,
               toName: node.name,
             })
-          : sanitizePublicUrl(node.navigation);
+          : navigationMode === null
+            ? null
+            : sanitizePublicUrl(node.navigation);
       if (coordinate) previousCoordinate = coordinate;
       return {
         ...node,
@@ -560,7 +903,12 @@ async function enrichDays(
       };
     });
 
-    const points = dayMapPoints(nodes, plan, route, routeStops);
+    const hotelEnd = [...nodes]
+      .reverse()
+      .find((node) => node.type === "hotel" && node.coordinates)?.coordinates;
+    const lastNodeEnd = [...nodes].reverse().find((node) => node.coordinates)?.coordinates;
+    const dayEnd = hotelEnd ?? lastNodeEnd ?? context?.coordinate ?? dayStart;
+    const points = dayMapPoints(nodes, dayStart, dayEnd, plan, route, routeStops);
     const mapUrl =
       points.length > 0
         ? buildStaticMapUrlSafely(
@@ -574,68 +922,60 @@ async function enrichDays(
             report,
           )
         : undefined;
-    const firstPoint = points[0];
-    const lastPoint = points.at(-1);
+    const firstPoint = dayStart ?? points[0];
+    const lastPoint = dayEnd ?? points.at(-1);
+    const requestedNavigationMode = toNavigationMode(
+      day.nodes.find((node) => node.transportMode)?.transportMode,
+    );
     const navigationUrl =
-      firstPoint && lastPoint
+      firstPoint && lastPoint && requestedNavigationMode
         ? buildNavigationUrl({
             from: firstPoint,
             to: lastPoint,
-            mode: toNavigationMode(day.nodes.find((node) => node.transportMode)?.transportMode),
+            mode: requestedNavigationMode,
             fromName: day.nodes[0]?.location ?? day.nodes[0]?.name,
             toName: day.nodes.at(-1)?.name,
           })
-        : sanitizePublicUrl(day.navigationUrl);
+        : requestedNavigationMode === null
+          ? undefined
+          : sanitizePublicUrl(day.navigationUrl);
 
-    return {
+    result.push({
       ...day,
       nodes,
       mapUrl: mapUrl ?? sanitizePublicUrl(day.mapUrl),
       navigationUrl,
       qrCodeUrl: buildQrCodeUrl(navigationUrl) ?? sanitizePublicUrl(day.qrCodeUrl),
-    };
-  });
-}
-
-function hasCompleteMapData(plan: TripPlan): boolean {
-  const hasRoutePath =
-    plan.route.outbound.length > 0 &&
-    (plan.route.returnMode === null || plan.route.returnPath.length > 0);
-  const hasRouteMap = Boolean(sanitizePublicUrl(plan.route.staticMapUrl));
-  const everyDayHasMap = plan.days.every((day) => Boolean(sanitizePublicUrl(day.mapUrl)));
-  return hasRoutePath && hasRouteMap && everyDayHasMap;
-}
-
-/**
- * 用高德补齐 TripPlan 的地图、路线、坐标与导航数据。
- *
- * 该函数以“永不阻塞路书生成”为约束：缺少 Key、某一项地理服务失败或返回无效数据时，
- * 都只保留原字段或交给现有 schematic / placeholder 降级，不向调用方抛错。
- */
-export async function enrichGuidebookPlanWithMaps(
-  plan: TripPlan,
-  options: GuidebookMapEnrichmentOptions = {},
-): Promise<TripPlan> {
-  if (hasCompleteMapData(plan)) return plan;
-
-  const amapKey = resolveGuidebookAmapKey(options.amapKey);
-  const client =
-    options.amapClient ?? (amapKey ? createAmapClient(amapKey, options.fetchImpl ?? fetch) : null);
-  if (!client) return plan;
-
-  const observed = Boolean(options.amapClient || amapKey);
-  const report: ErrorReporter =
-    options.onError ??
-    ((message) => {
-      if (observed) console.warn(`[guidebook-map] ${message}`);
     });
+    previousDayEnd = dayEnd ?? previousCoordinate ?? dayStart;
+  }
+
+  return result;
+}
+async function performEnrichment(
+  plan: TripPlan,
+  options: GuidebookMapEnrichmentOptions,
+  amapKey: string,
+  client: AmapClient,
+  deadline: OperationDeadline,
+): Promise<TripPlan> {
+  const observed = Boolean(options.amapClient || amapKey);
+  const reported = new Set<string>();
+  const report: ErrorReporter = (message) => {
+    if (reported.has(message)) return;
+    reported.add(message);
+    if (options.onError) options.onError(message);
+    else if (observed && process.env.NODE_ENV === "production") {
+      console.warn(`[guidebook-map] ${message}`);
+    }
+  };
   const safeReport: ErrorReporter = (message) => {
     report(amapKey ? message.split(amapKey).join("[redacted]") : message);
   };
 
   try {
-    const resolver = createCoordinateResolver(client, safeReport);
-    const routeResolver = createRouteResolver(client, safeReport);
+    const resolver = createCoordinateResolver(client, safeReport, deadline);
+    const routeResolver = createRouteResolver(client, safeReport, deadline);
     const enrichedRoute = await enrichRoute(plan, resolver, routeResolver, safeReport);
     const days = await enrichDays(
       plan,
@@ -644,9 +984,58 @@ export async function enrichGuidebookPlanWithMaps(
       resolver,
       safeReport,
     );
-    return { ...plan, route: enrichedRoute.route, days };
+    if (deadline.timedOut()) {
+      safeReport("地图 enrichment 达到总预算，已返回已完成字段并继续使用本地降级。");
+    } else if (deadline.signal.aborted) {
+      safeReport("地图 enrichment 已取消，已返回已完成字段并继续使用本地降级。");
+    }
+    return deepFreeze({ ...plan, route: enrichedRoute.route, days });
   } catch (error) {
     safeReport(`地图 enrichment 失败，已保留本地降级内容：${errorText(error)}`);
+    return deepFreeze(plan);
+  }
+}
+
+/**
+ * 用高德补齐 TripPlan 的地图、路线、坐标与导航数据。
+ *
+ * 该函数以“永不阻塞路书生成”为约束：缺少 Key、某一项地理服务失败或返回无效数据时，
+ * 都只保留原字段或交给现有 schematic / placeholder 降级，不向调用方抛错。
+ * 相同地图输入会在服务进程内复用同一份不可变结果，预览与 PDF 不重复请求高德。
+ */
+export async function enrichGuidebookPlanWithMaps(
+  plan: TripPlan,
+  options: GuidebookMapEnrichmentOptions = {},
+): Promise<TripPlan> {
+  const amapKey = resolveGuidebookAmapKey(options.amapKey);
+  if (!options.amapClient && !amapKey) return plan;
+
+  const timeoutMs =
+    Number.isFinite(options.timeoutMs) && (options.timeoutMs ?? 0) > 0
+      ? Math.round(options.timeoutMs as number)
+      : DEFAULT_ENRICHMENT_TIMEOUT_MS;
+  const cache = enrichmentCacheFor(options);
+  const cacheKey = mapEnrichmentKey(plan, amapKey, timeoutMs);
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  if (cached) cache.delete(cacheKey);
+
+  if (options.signal?.aborted) return plan;
+  const deadline = createDeadline({ ...options, timeoutMs });
+  let client: AmapClient;
+  try {
+    client =
+      options.amapClient ??
+      createAmapClient(amapKey, withAbortSignal(options.fetchImpl ?? fetch, deadline.signal));
+  } catch (error) {
+    deadline.cleanup();
+    if (options.onError) options.onError(`地图客户端初始化失败：${errorText(error)}`);
     return plan;
   }
+
+  const promise = performEnrichment(plan, options, amapKey, client, deadline).finally(
+    deadline.cleanup,
+  );
+  rememberEnrichment(cache, cacheKey, promise);
+  return promise;
 }

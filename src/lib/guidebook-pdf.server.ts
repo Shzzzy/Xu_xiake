@@ -327,6 +327,7 @@ async function fetchGuidebookImageDataUrl(
  * 需要地图或二维码的页各自等自己的那一张。
  */
 const GUIDEBOOK_IMAGE_CACHE_TTL_MS = 120_000;
+const GUIDEBOOK_IMAGE_CONCURRENCY = 4;
 
 type GuidebookImageCacheEntry = {
   expiresAt: number;
@@ -334,6 +335,8 @@ type GuidebookImageCacheEntry = {
 };
 
 const guidebookImageCaches = new WeakMap<typeof fetch, Map<string, GuidebookImageCacheEntry>>();
+let activeGuidebookImages = 0;
+const queuedGuidebookImages: (() => void)[] = [];
 
 function guidebookImageCache(fetchImpl: typeof fetch) {
   const cached = guidebookImageCaches.get(fetchImpl);
@@ -341,6 +344,19 @@ function guidebookImageCache(fetchImpl: typeof fetch) {
   const cache = new Map<string, GuidebookImageCacheEntry>();
   guidebookImageCaches.set(fetchImpl, cache);
   return cache;
+}
+
+async function withGuidebookImageSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (activeGuidebookImages >= GUIDEBOOK_IMAGE_CONCURRENCY) {
+    await new Promise<void>((resolve) => queuedGuidebookImages.push(resolve));
+  }
+  activeGuidebookImages += 1;
+  try {
+    return await task();
+  } finally {
+    activeGuidebookImages -= 1;
+    queuedGuidebookImages.shift()?.();
+  }
 }
 
 export async function prepareGuidebookImage(
@@ -355,13 +371,26 @@ export async function prepareGuidebookImage(
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
 
-  const promise = fetchGuidebookImageDataUrl(value, kind, options)
-    .then((dataUrl) => dataUrl ?? guidebookPlaceholderSvg(kind))
-    .catch(() => guidebookPlaceholderSvg(kind));
-  cache.set(cacheKey, { expiresAt: Date.now() + GUIDEBOOK_IMAGE_CACHE_TTL_MS, promise });
+  const promise = withGuidebookImageSlot(() => fetchGuidebookImageDataUrl(value, kind, options))
+    .then((dataUrl) => {
+      if (!dataUrl) {
+        if (cache.get(cacheKey)?.promise === promise) cache.delete(cacheKey);
+        return guidebookPlaceholderSvg(kind);
+      }
+      const success = Promise.resolve(dataUrl);
+      cache.set(cacheKey, {
+        expiresAt: Date.now() + GUIDEBOOK_IMAGE_CACHE_TTL_MS,
+        promise: success,
+      });
+      return dataUrl;
+    })
+    .catch(() => {
+      if (cache.get(cacheKey)?.promise === promise) cache.delete(cacheKey);
+      return guidebookPlaceholderSvg(kind);
+    });
+  cache.set(cacheKey, { expiresAt: Number.POSITIVE_INFINITY, promise });
   return promise;
 }
-
 export async function prepareGuidebookPlan(
   plan: TripPlan,
   options: GuidebookImageFetchOptions = {},
