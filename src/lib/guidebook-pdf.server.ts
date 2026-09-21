@@ -499,14 +499,63 @@ function fallbackMessage(error: unknown): string {
 
 export type GuidebookExportDependencies = GuidebookImageFetchOptions & {
   renderPdf: GuidebookPdfRenderer;
+  /** 调用方已完成共享文案固化时跳过第二次准备。 */
+  narrativePrepared?: boolean;
 };
 
+export type GuidebookTimeoutExportDependencies = GuidebookExportDependencies & {
+  timeoutMs?: number;
+  prepareNarrative?: (plan: TripPlan) => Promise<TripPlan>;
+};
+
+export const GUIDEBOOK_EXPORT_TOTAL_TIMEOUT_MS = 25_000;
+
+/** 总超时先于文案准备启动；准备完成后复用的 plan 不再二次准备。 */
+export async function exportGuidebookWithTimeout(
+  plan: TripPlan,
+  dependencies: GuidebookTimeoutExportDependencies,
+): Promise<GuidebookExportResult> {
+  const controller = new AbortController();
+  const timeoutMs = dependencies.timeoutMs ?? GUIDEBOOK_EXPORT_TOTAL_TIMEOUT_MS;
+  let fallbackPlan = plan;
+  let timeoutResolve: ((result: GuidebookExportResult) => void) | undefined;
+  const timeoutPromise = new Promise<GuidebookExportResult>((resolve) => {
+    timeoutResolve = resolve;
+  });
+  const timer = setTimeout(() => {
+    controller.abort(new Error("PDF 导出超过总预算"));
+    timeoutResolve?.({
+      status: "html",
+      html: renderGuidebookHtml(fallbackPlan),
+      message: "PDF 导出超时，已改为可打印 HTML。",
+    });
+  }, timeoutMs);
+
+  try {
+    const exportPromise = (async () => {
+      const prepareNarrative = dependencies.prepareNarrative ?? prepareGuidebookNarrativePlan;
+      const narrativePlan = await prepareNarrative(plan);
+      fallbackPlan = narrativePlan;
+      return exportGuidebookForTest(narrativePlan, {
+        ...dependencies,
+        signal: controller.signal,
+        timeoutMs,
+        narrativePrepared: true,
+      });
+    })();
+    return await Promise.race([exportPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 export async function exportGuidebookForTest(
   plan: TripPlan,
   dependencies: GuidebookExportDependencies,
 ): Promise<GuidebookExportResult> {
   const startedAt = Date.now();
-  const narrativePlan = await prepareGuidebookNarrativePlan(plan);
+  const narrativePlan = dependencies.narrativePrepared
+    ? plan
+    : await prepareGuidebookNarrativePlan(plan);
   const mapPlan = await enrichGuidebookPlanWithMaps(narrativePlan, dependencies);
   const preparedPlan = await prepareGuidebookPlan(mapPlan, dependencies);
   const preparedAt = Date.now();
