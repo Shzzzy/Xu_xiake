@@ -92,7 +92,7 @@ test("特定景区名称优先按地区精确查询且不会返回北京地标",
   };
   const client = createFakeAmapClient(async (input) => {
     calls.push({ keywords: input.keywords, city: input.city });
-    if (input.keywords === "北海银滩" && input.city === "广西") return [silverBeach];
+    if (input.keywords === "北海银滩") return [silverBeach];
     return [forbiddenCity];
   });
 
@@ -107,12 +107,87 @@ test("特定景区名称优先按地区精确查询且不会返回北京地标",
     ["北海银滩"],
   );
   const exactIndex = calls.findIndex(
-    (call) => call.keywords === "北海银滩" && call.city === "广西",
+    (call) => call.keywords === "北海银滩",
   );
   const genericIndex = calls.findIndex((call) => call.keywords === "热门景点");
   assert.ok(exactIndex >= 0);
   assert.ok(genericIndex >= 0);
   assert.ok(exactIndex < genericIndex);
+  assert.equal(calls[exactIndex]?.city, undefined);
+  assert.equal(calls.some((call) => call.city === "广西"), false);
+});
+
+test("AMap city 只接受可识别城市或 adcode", async () => {
+  const cases = [
+    { destination: "北海银滩", region: "广西", expectedCity: undefined },
+    { destination: "徽州古城", region: "安徽 · 徽州", expectedCity: undefined },
+    { destination: "北海银滩", region: "自由输入", expectedCity: undefined },
+    { destination: "北海银滩", region: "广西北海市", expectedCity: "北海市" },
+    { destination: "西湖", region: "330100", expectedCity: "330100" },
+  ] as const;
+
+  for (const scenario of cases) {
+    const calls: { keywords: string; city?: string }[] = [];
+    const poi: AmapPoi = {
+      id: `B-${scenario.destination}`,
+      name: scenario.destination,
+      type: "风景名胜;风景名胜",
+      address:
+        scenario.region === "安徽 · 徽州"
+          ? "安徽省黄山市徽州区"
+          : scenario.region === "330100"
+            ? "浙江省杭州市西湖区"
+            : "广西壮族自治区北海市银海区",
+      location: [109.116, 21.405],
+    };
+    const client = createFakeAmapClient(async (input) => {
+      calls.push({ keywords: input.keywords, city: input.city });
+      return input.keywords === scenario.destination ? [poi] : [];
+    });
+
+    await searchAmapDestinationCandidates({
+      client,
+      destination: scenario.destination,
+      region: scenario.region,
+    });
+
+    const exactCall = calls.find((call) => call.keywords === scenario.destination);
+    assert.equal(exactCall?.city, scenario.expectedCity);
+    if (scenario.expectedCity === undefined) {
+      assert.equal(calls.some((call) => call.city === scenario.region), false);
+    }
+  }
+});
+
+test("无城市重试丢弃目的地同名但地区冲突的异地结果", async () => {
+  const conflict: AmapPoi = {
+    id: "B-QINGDAO-SILVER-BEACH",
+    name: "北海银滩",
+    type: "风景名胜;风景名胜;海滩",
+    address: "山东省青岛市黄岛区银沙滩路",
+    location: [120.24, 35.96],
+  };
+  const correct: AmapPoi = {
+    id: "B-BEIHai-SILVER-BEACH",
+    name: "北海银滩",
+    type: "风景名胜;风景名胜;海滩",
+    address: "广西壮族自治区北海市银海区银滩中路",
+    location: [109.116, 21.405],
+  };
+  const client = createFakeAmapClient(async (input) =>
+    input.keywords === "北海银滩" ? [conflict, correct] : [],
+  );
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "北海银滩",
+    region: "广西",
+  });
+
+  assert.deepEqual(
+    result.map((candidate) => candidate.id),
+    ["B-BEIHai-SILVER-BEACH"],
+  );
 });
 
 test("高德 POI 转为候选景点，来源不含 key 且优先合并", () => {
@@ -284,6 +359,58 @@ test("同区域景点优先聚到同一天且不同城市不混组", () => {
     beijingGroup?.map((candidate) => candidate.name),
     ["故宫博物院", "天坛公园"],
   );
+});
+
+test("相同 areaKey 超过聚类距离时仍会拆分大型区县", () => {
+  const candidates: DestinationCandidate[] = [
+    {
+      id: "shankou-mangrove",
+      name: "山口红树林",
+      type: "风景名胜;自然保护区",
+      address: "广西壮族自治区北海市合浦县山口镇",
+      location: [109.1, 21.4],
+      publicUrl: "https://www.amap.com/place/shankou-mangrove",
+      areaKey: "北海市-合浦县",
+    },
+    {
+      id: "weizhou-island",
+      name: "涠洲岛",
+      type: "风景名胜;风景名胜",
+      address: "广西壮族自治区北海市海城区涠洲镇",
+      location: [109.5, 21.8],
+      publicUrl: "https://www.amap.com/place/weizhou-island",
+      areaKey: "北海市-合浦县",
+    },
+  ];
+
+  const groups = clusterCandidates(candidates, 2);
+
+  assert.deepEqual(
+    groups.map((group) => group.map((candidate) => candidate.name)),
+    [["山口红树林"], ["涠洲岛"]],
+  );
+});
+
+test("maxPerDay 非有限值时回退为每个候选一天", () => {
+  const candidates: DestinationCandidate[] = ["清风园", "明月湖", "望江亭"].map(
+    (name, index) => ({
+      id: `candidate-${index}`,
+      name,
+      type: "风景名胜;风景名胜",
+      address: "浙江省杭州市西湖区",
+      location: [120.14 + index * 0.01, 30.24 + index * 0.01],
+      publicUrl: `https://www.amap.com/place/candidate-${index}`,
+      areaKey: "杭州市-西湖区",
+    }),
+  );
+
+  for (const maxPerDay of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const groups = clusterCandidates(candidates, maxPerDay);
+    assert.deepEqual(
+      groups.map((group) => group.map((candidate) => candidate.name)),
+      [["清风园"], ["明月湖"], ["望江亭"]],
+    );
+  }
 });
 
 test("高德 key 按现有环境变量优先级读取并跳过空值", () => {

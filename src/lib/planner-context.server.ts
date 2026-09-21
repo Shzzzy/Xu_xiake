@@ -74,6 +74,43 @@ const MAX_DESTINATION_CANDIDATES = 16;
 const MAX_TAVILY_SOURCES_PER_LEG = 3;
 const AREA_CLUSTER_RADIUS_KM = 15;
 
+const PROVINCE_ALIASES: ReadonlyArray<{ key: string; aliases: string[] }> = [
+  { key: "北京", aliases: ["北京市", "北京"] },
+  { key: "天津", aliases: ["天津市", "天津"] },
+  { key: "上海", aliases: ["上海市", "上海"] },
+  { key: "重庆", aliases: ["重庆市", "重庆"] },
+  { key: "河北", aliases: ["河北省", "河北"] },
+  { key: "山西", aliases: ["山西省", "山西"] },
+  { key: "辽宁", aliases: ["辽宁省", "辽宁"] },
+  { key: "吉林", aliases: ["吉林省", "吉林"] },
+  { key: "黑龙江", aliases: ["黑龙江省", "黑龙江"] },
+  { key: "江苏", aliases: ["江苏省", "江苏"] },
+  { key: "浙江", aliases: ["浙江省", "浙江"] },
+  { key: "安徽", aliases: ["安徽省", "安徽"] },
+  { key: "福建", aliases: ["福建省", "福建"] },
+  { key: "江西", aliases: ["江西省", "江西"] },
+  { key: "山东", aliases: ["山东省", "山东"] },
+  { key: "河南", aliases: ["河南省", "河南"] },
+  { key: "湖北", aliases: ["湖北省", "湖北"] },
+  { key: "湖南", aliases: ["湖南省", "湖南"] },
+  { key: "广东", aliases: ["广东省", "广东"] },
+  { key: "广西", aliases: ["广西壮族自治区", "广西"] },
+  { key: "海南", aliases: ["海南省", "海南"] },
+  { key: "四川", aliases: ["四川省", "四川"] },
+  { key: "贵州", aliases: ["贵州省", "贵州"] },
+  { key: "云南", aliases: ["云南省", "云南"] },
+  { key: "西藏", aliases: ["西藏自治区", "西藏"] },
+  { key: "陕西", aliases: ["陕西省", "陕西"] },
+  { key: "甘肃", aliases: ["甘肃省", "甘肃"] },
+  { key: "青海", aliases: ["青海省", "青海"] },
+  { key: "内蒙古", aliases: ["内蒙古自治区", "内蒙古"] },
+  { key: "宁夏", aliases: ["宁夏回族自治区", "宁夏"] },
+  { key: "新疆", aliases: ["新疆维吾尔自治区", "新疆"] },
+  { key: "台湾", aliases: ["台湾省", "台湾"] },
+  { key: "香港", aliases: ["香港特别行政区", "香港"] },
+  { key: "澳门", aliases: ["澳门特别行政区", "澳门"] },
+];
+
 const TRANSPORT_LABELS: Record<TransportMode, string> = {
   economy: "经济交通",
   balanced: "均衡交通",
@@ -87,6 +124,55 @@ const TRANSPORT_LABELS: Record<TransportMode, string> = {
 
 function normalizeName(value: string): string {
   return value.trim().replace(/\s+/g, "").toLowerCase();
+}
+
+function extractAmapCityQuery(...values: (string | undefined)[]): string | undefined {
+  for (const value of values) {
+    const adcode = value?.match(/(?:^|\D)(\d{6})(?:\D|$)/u)?.[1];
+    if (adcode) return adcode;
+  }
+
+  for (const value of values) {
+    const city = value?.match(/[\u4e00-\u9fa5]{2,10}?市/u)?.[0];
+    if (!city) continue;
+
+    let normalizedCity = normalizeName(city);
+    for (const province of PROVINCE_ALIASES) {
+      const alias = province.aliases.find((item) => normalizedCity.startsWith(item));
+      if (alias && normalizedCity.length > alias.length) {
+        normalizedCity = normalizedCity.slice(alias.length);
+        break;
+      }
+    }
+    if (normalizedCity.endsWith("市")) return normalizedCity;
+  }
+
+  return undefined;
+}
+
+function findProvinces(value: string): string[] {
+  const normalizedValue = normalizeName(value);
+  return PROVINCE_ALIASES.filter((province) =>
+    province.aliases.some((alias) => normalizedValue.includes(normalizeName(alias))),
+  ).map((province) => province.key);
+}
+
+function isRelevantAmapPoi(poi: AmapPoi, destination: string, region: string): boolean {
+  const poiText = normalizeName([poi.name, poi.address, poi.type].join(" "));
+  const destinationText = normalizeName(destination);
+  if (!destinationText || !poiText.includes(destinationText)) return false;
+
+  const expectedProvince = findProvinces(region)[0] ?? findProvinces(destination)[0];
+  const mentionedProvinces = findProvinces(poiText);
+  if (
+    expectedProvince &&
+    mentionedProvinces.length > 0 &&
+    !mentionedProvinces.includes(expectedProvince)
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function buildAreaKey(address: string, location: AmapCoordinate): string {
@@ -192,7 +278,7 @@ export function clusterCandidates(
 ): DestinationCandidate[][] {
   if (candidates.length === 0) return [];
 
-  const dayLimit = Math.max(1, Math.floor(maxPerDay));
+  const dayLimit = Number.isFinite(maxPerDay) ? Math.max(1, Math.floor(maxPerDay)) : 1;
   const seenIds = new Set<string>();
   const seenNames = new Set<string>();
   const areas: { areaKey: string; centroid: AmapCoordinate; candidates: DestinationCandidate[] }[] =
@@ -208,15 +294,21 @@ export function clusterCandidates(
     const areaKey = candidate.areaKey.trim() || buildAreaKey(candidate.address, candidate.location);
     const sameArea = areas.filter((area) => area.areaKey === areaKey);
     const nearestSameArea = findNearestArea(candidate.location, sameArea);
-    const nearestArea = nearestSameArea ?? findNearestArea(candidate.location, areas);
+    const nearestArea = findNearestArea(candidate.location, areas);
+    const nearestSameAreaDistance = nearestSameArea
+      ? distanceKm(candidate.location, nearestSameArea.centroid)
+      : Number.POSITIVE_INFINITY;
+    const nearestAreaDistance = nearestArea
+      ? distanceKm(candidate.location, nearestArea.centroid)
+      : Number.POSITIVE_INFINITY;
+    const target =
+      nearestSameAreaDistance <= AREA_CLUSTER_RADIUS_KM
+        ? nearestSameArea
+        : nearestAreaDistance <= AREA_CLUSTER_RADIUS_KM
+          ? nearestArea
+          : undefined;
 
-    if (
-      nearestSameArea ||
-      (nearestArea &&
-        distanceKm(candidate.location, nearestArea.centroid) <= AREA_CLUSTER_RADIUS_KM)
-    ) {
-      const target = nearestSameArea ?? nearestArea;
-      if (!target) continue;
+    if (target) {
       target.candidates.push(candidate);
       const count = target.candidates.length;
       target.centroid = [
@@ -269,7 +361,7 @@ export async function searchAmapDestinationCandidates(input: {
   const destination = input.destination.trim();
   if (!destination) return [];
   const region = input.region?.trim() ?? "";
-  const city = region || destination;
+  const city = extractAmapCityQuery(region, destination);
 
   const search = async (keywords: string, scopedCity?: string) => {
     try {
@@ -283,20 +375,16 @@ export async function searchAmapDestinationCandidates(input: {
     }
   };
 
-  // 先按用户地区执行精确查询，避免景区名被错误当作城市名解析。
-  const exactBatch = await search(destination, region || undefined);
-  const exactRetryBatch = region ? await search(destination) : [];
+  // 先执行精确查询；只有能识别合法城市/adcode 时才限定 AMap city。
+  const exactBatch = await search(destination, city);
+  const exactRetryBatch = city ? await search(destination) : [];
   const genericBatches = await Promise.all([
     ...AMAP_POI_QUERIES.map((keywords) => search(keywords, city)),
-    ...AMAP_POI_QUERIES.map((keywords) => search(destination + " " + keywords)),
+    ...AMAP_POI_QUERIES.map((keywords) => search(destination + " " + keywords, city)),
   ]);
-  const contextTokens = [destination, region].filter(Boolean);
   const relevant = [exactBatch, exactRetryBatch, ...genericBatches]
     .flatMap((batch) => batch ?? [])
-    .filter((poi) => {
-      const text = poi.name + " " + poi.address + " " + poi.type;
-      return contextTokens.some((token) => text.includes(token));
-    });
+    .filter((poi) => isRelevantAmapPoi(poi, destination, region));
 
   return buildAmapDestinationCandidates(relevant);
 }
