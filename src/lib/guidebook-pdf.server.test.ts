@@ -432,6 +432,7 @@ test("legacy 文案准备超时后返回安全可打印 HTML", async () => {
     route: { ...fixturePlan.route, staticMapUrl: "https://tracker.example/map.png" },
     days: fixturePlan.days.map((day) => ({
       ...day,
+      theme: "顺路去故宫看看",
       purpose: "顺路去故宫看看",
       highlights: ["故宫：危险旧文案"],
       analysisFailed: true,

@@ -551,21 +551,33 @@ function buildSafeGuidebookFallbackPlan(plan: TripPlan): TripPlan {
       validateDayNarrative(safeDay, index, { knownAttractions });
       return safeDay;
     } catch {
-      const forced = buildFallbackDayNarrative(
-        {
-          ...safeDay,
-          purpose: "",
-          highlights: [],
-          cautions: [],
-          analysisFailed: false,
-        },
-        index,
-      );
-      validateDayNarrative(forced, index, {
-        allowAnalysisFailure: true,
-        knownAttractions,
-      });
-      return forced;
+      const forced = {
+        ...safeDay,
+        theme: `第 ${index + 1} 天安全行程`,
+        purpose: `第 ${index + 1} 天：按已冻结排程继续行程`,
+        highlights: [],
+        cautions: ["本页分析未能生成，已改用基础行程与本地提示。"],
+        history: [],
+        analysisFailed: true,
+      };
+      try {
+        validateDayNarrative(forced, index, {
+          allowAnalysisFailure: true,
+          knownAttractions,
+        });
+        return forced;
+      } catch {
+        const minimal = {
+          ...forced,
+          theme: "已安全降级行程",
+          purpose: "已改用基础行程与本地提示。",
+        };
+        validateDayNarrative(minimal, index, {
+          allowAnalysisFailure: true,
+          knownAttractions: [],
+        });
+        return minimal;
+      }
     }
   });
 
