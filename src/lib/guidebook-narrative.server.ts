@@ -157,7 +157,19 @@ export function validateDayNarrative(
       .map((node) => normalizeNarrativeLabel(node.name)),
   );
 
-  const historyTexts = (day.history ?? []).flatMap((entry) => [entry.title, entry.background]);
+  const historySourceTexts = (day.history ?? []).map((entry) => {
+    try {
+      const source = new URL(entry.source);
+      return decodeURIComponent(`${source.pathname}${source.search}`);
+    } catch {
+      return entry.source;
+    }
+  });
+  const historyTexts = (day.history ?? []).flatMap((entry, historyIndex) => [
+    entry.title,
+    entry.background,
+    historySourceTexts[historyIndex] ?? "",
+  ]);
   for (const text of [...day.highlights, ...day.cautions, day.purpose, ...historyTexts]) {
     if (/https?:\/\/|<[^>]+>/i.test(text)) {
       throw new Error(`第 ${index + 1} 天文案包含 URL 或 HTML`);

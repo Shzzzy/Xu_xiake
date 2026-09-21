@@ -317,3 +317,35 @@ test("prepareGuidebookDayNarrative 把 AbortSignal 传到 DeepSeek 并取消请�
 
   assert.equal(requestSignal?.aborted, true);
 });
+
+test("history.source 的显示文本也参与未安排景点校验", async () => {
+  const source = plan.days[0];
+  assert.ok(source);
+  const planWithSource: TripPlan = {
+    ...plan,
+    meta: {
+      ...plan.meta,
+      narrativeSource: "butler",
+      allowedAttractions: ["黄山风景区", "故宫"],
+    },
+    days: [
+      {
+        ...source,
+        purpose: "上午游览黄山风景区。",
+        highlights: ["黄山风景区：按当天排程游览"],
+        cautions: ["天气变化注意保暖"],
+        history: [
+          {
+            title: "地方志",
+            background: "记录古村历史。",
+            source: "https://example.com/故宫",
+          },
+        ],
+      },
+    ],
+  };
+
+  const prepared = await prepareGuidebookDayNarrative(planWithSource, 0);
+  assert.equal(prepared.analysisFailed, true);
+  assert.equal(prepared.history?.length ?? 0, 0);
+});
