@@ -638,16 +638,18 @@ test("propagates upstream cancellation through preview and PDF preparation", asy
   assert.equal(counts().routeCalls, 0);
 
   let rendered = false;
-  const result = await exportGuidebookForTest(fixturePlan(), {
-    amapClient: client,
-    signal: controller.signal,
-    renderPdf: async () => {
-      rendered = true;
-      return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
-    },
-  });
-
-  assert.equal(result.status, "ok");
-  assert.equal(rendered, true);
+  await assert.rejects(
+    () =>
+      exportGuidebookForTest(fixturePlan(), {
+        amapClient: client,
+        signal: controller.signal,
+        renderPdf: async () => {
+          rendered = true;
+          return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+        },
+      }),
+    /取消/
+  );
+  assert.equal(rendered, false);
   assert.equal(counts().routeCalls, 0);
 });
