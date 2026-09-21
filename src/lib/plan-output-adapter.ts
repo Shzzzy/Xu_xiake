@@ -490,7 +490,13 @@ function copyMentionsUnscheduledAttraction(
     ...copy.cautions,
     ...copy.history.flatMap((entry) => [entry.title, entry.background, entry.source]),
   ].join("\n");
-  return candidates.some((candidate) => !scheduled.has(candidate.name) && text.includes(candidate.name));
+  return candidates.some((candidate) => {
+    const name = candidate.name.trim();
+    if (!name || scheduled.has(name)) return false;
+    // 候选简称若完整落在已安排景点全称中，不能误判成“提到了未安排景点”。
+    if (scheduledNames.some((scheduledName) => scheduledName.includes(name))) return false;
+    return text.includes(name);
+  });
 }
 /**
  * 把管家生成的骨架、每日文案与路线数据组装为统一的 TripPlan。

@@ -280,6 +280,29 @@ test("骨架转 TripPlan 写入本 run 候选并驱动文案拒绝未安排景�
   assert.doesNotMatch(JSON.stringify(prepared), /故宫/);
 });
 
+test("文案提到已安排景点全称时不会被候选简称误判", async () => {
+  const copy: PlannerDayCopy[] = [
+    {
+      day: 1,
+      purpose: "今天专注游览黄山风景区。",
+      highlights: ["黄山风景区：看奇松云海。"],
+      cautions: ["带好雨具。"],
+      history: [],
+    },
+  ];
+  const plan = buildTripPlanFromSkeleton({
+    ...skeletonInputFixture,
+    dayCopy: copy,
+    candidates: [
+      { name: "黄山风景区", summary: "主景区", source: "https://example.com/huangshan" },
+      { name: "西湖", summary: "候选简称", source: "https://example.com/xihu" },
+    ],
+  });
+
+  const prepared = await prepareGuidebookDayNarrative(plan, 0);
+  assert.notEqual(prepared.analysisFailed, true);
+  assert.match(JSON.stringify(prepared), /黄山风景区/);
+});
 test("确定性预算与交通腿覆盖节点费用并保留路线元数据", () => {
   const budgetPlan = {
     transport: 10_800,
