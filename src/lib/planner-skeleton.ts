@@ -161,6 +161,7 @@ export function buildSkeletonInstruction(input: SkeletonInstructionInput): strin
     "不得输出 URL；来源链接一律由本地补齐",
     `每天全部节点的时间必须落在用户窗口 ${brief.startTime}–${brief.endTime} 内，且当天时间升序、不重叠`,
     "每天必须包含用餐（meal）、住宿（hotel）与收尾休息（rest）节点；夜游（night-activity）可选",
+    "每天必须至少安排 1 个核心景点（attraction 或 night-activity），景点应作为当天时间轴的主轴，交通、用餐、住宿仅作为支撑节点",
     `全部节点 estimatedCost 之和不得超过全团总预算 ${brief.totalBudget} 元`,
     `每天核心景点（attraction 与 night-activity）合计不得超过 ${paceLimits[brief.pace]} 个（${
       paceLabels[brief.pace]

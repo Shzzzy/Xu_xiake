@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import {
@@ -1829,6 +1829,18 @@ function ItineraryScreen({
   const [liveSourceCount, setLiveSourceCount] = useState<number | null>(null);
   const [butlerResult, setButlerResult] = useState<ButlerPlanResult | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
+  const notifiedDiscoveryKeys = useRef(new Set<string>());
+
+  // 同一批地点提示只弹一次，避免目录刷新触发 effect 重跑时反复提示。
+  const notifyDiscoveryOnce = (discoveries: DiscoveryNotice[]) => {
+    const fresh = discoveries.filter((discovery) => {
+      const key = `${discovery.status}|${discovery.inputName}|${discovery.canonicalName ?? ""}|${discovery.message}`;
+      if (notifiedDiscoveryKeys.current.has(key)) return false;
+      notifiedDiscoveryKeys.current.add(key);
+      return true;
+    });
+    notifyDiscoveries(fresh);
+  };
 
   const detailedTrip = brief.days <= 16;
   const today = dateInputValue(new Date());
@@ -1951,7 +1963,7 @@ function ItineraryScreen({
             setLiveClosing(result.closing);
             setLiveSourceCount(result.sources.length);
             setPlannerState("ready");
-            notifyDiscoveries(result.discoveries);
+            notifyDiscoveryOnce(result.discoveries);
             if (result.discoveries.some((discovery) => discovery.status === "published")) {
               void refreshInspirationCatalog();
             }
@@ -1963,7 +1975,7 @@ function ItineraryScreen({
             setLiveClosing(result.closing);
             setLiveSourceCount(result.sources.length);
             setPlannerState("ready");
-            notifyDiscoveries(result.discoveries);
+            notifyDiscoveryOnce(result.discoveries);
             if (result.discoveries.some((discovery) => discovery.status === "published")) {
               void refreshInspirationCatalog();
             }
@@ -2005,7 +2017,7 @@ function ItineraryScreen({
           if (result.status === "ok") {
             setLongPlan(result.plan);
             setPlannerState("ready");
-            notifyDiscoveries(result.discoveries);
+            notifyDiscoveryOnce(result.discoveries);
             if (result.discoveries.some((discovery) => discovery.status === "published")) {
               void refreshInspirationCatalog();
             }

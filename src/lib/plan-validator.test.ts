@@ -360,3 +360,21 @@ test("骨架 day 编号 1..N 连续时不报连续性违规", () => {
     false,
   );
 });
+test("有交通餐饮但全天没有核心景点时仍报 DAY_COVERAGE", () => {
+  const skeleton = skeletonWithNodes([
+    { type: "transport", startTime: "09:00", endTime: "11:00", name: "前往市区", estimatedCost: 100 },
+    { type: "meal", startTime: "12:00", endTime: "13:00", name: "午餐", estimatedCost: 200 },
+    { type: "rest", startTime: "13:00", endTime: "14:00", name: "休息", estimatedCost: 0 },
+  ]);
+  const violations = validateSkeleton({
+    skeleton,
+    brief: balancedBrief({}),
+    candidates: ["黄山风景区"],
+  });
+
+  assert.ok(
+    violations.some(
+      (item) => item.code === "DAY_COVERAGE" && /核心景点/.test(item.message),
+    ),
+  );
+});

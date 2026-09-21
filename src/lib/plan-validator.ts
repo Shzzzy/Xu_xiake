@@ -286,6 +286,17 @@ export function validateSkeleton(input: PlanValidationInput): PlanViolation[] {
         detail: { expected: "至少 1 个非休息节点", actual: "0 个非休息节点" },
       });
     }
+    const hasCoreAttraction = day.nodes.some(
+      (node) => node.type === "attraction" || node.type === "night-activity",
+    );
+    if (!hasCoreAttraction) {
+      violations.push({
+        code: "DAY_COVERAGE",
+        day: day.day,
+        message: `第 ${day.day} 天没有围绕核心景点安排行程`,
+        detail: { expected: "至少 1 个景点或夜游节点", actual: "0 个景点节点" },
+      });
+    }
   }
 
   // 3. MISSING_SLOT：每天必须包含用餐、住宿、休息，缺哪个报哪个。

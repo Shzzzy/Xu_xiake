@@ -118,6 +118,7 @@ test("骨架提示词写明候选、时间窗与必含节点约束", () => {
   assert.match(instruction, /用餐/);
   assert.match(instruction, /住宿/);
   assert.match(instruction, /休息/);
+  assert.match(instruction, /核心景点/);
   assert.match(instruction, /8000/);
 });
 
