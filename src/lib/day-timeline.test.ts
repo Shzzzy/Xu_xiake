@@ -58,11 +58,8 @@ test("通勤时间从可用游玩时间扣除", () => {
     attractions: [attraction],
   });
 
-  assert.equal(
-    nodes.some((node) => node.type === "attraction"),
-    false,
-  );
-  assert.ok(nodes.some((node) => node.type === "rest" && node.name.includes("自由活动")));
+  assert.equal(nodes.find((node) => node.type === "transport")?.transportMinutes, 280);
+  assert.ok(nodes.some((node) => node.type === "attraction" && node.name === attraction.name));
   assertTimelineWindow(nodes, "09:00", "18:00");
 });
 
@@ -148,11 +145,10 @@ test("长景点放不下时跳过并继续尝试后续小景点", () => {
     meals: [30],
     restMinutes: 30,
     attractions: [
-      { name: "放不下的长景点", stayMinutes: 200 },
+      { name: "放不下的长景点", stayMinutes: 250 },
       { name: "可容纳的小景点", stayMinutes: 90 },
     ],
   });
-
   assert.equal(
     nodes.some((node) => node.name === "放不下的长景点"),
     false,
@@ -195,4 +191,37 @@ test("窗口低于最小景点容量时允许降级为休整而不是抛错", ()
   );
   assert.ok(nodes.some((node) => node.type === "rest"));
   assertTimelineWindow(nodes, "08:00", "09:30");
+});
+
+test("260 分钟窗口优先安排 150 分钟景点并只保留必要午餐", () => {
+  const nodes = buildDayTimeline({
+    day,
+    startTime: "08:00",
+    endTime: "12:20",
+    transportMinutes: 0,
+    meals: [60, 60],
+    restMinutes: 30,
+    attractions: [{ name: "150 分钟核心景点", stayMinutes: 150 }],
+  });
+
+  assert.ok(nodes.some((node) => node.type === "attraction" && node.name === "150 分钟核心景点"));
+  assert.equal(nodes.filter((node) => node.type === "meal").length, 1);
+  assert.ok(nodes.some((node) => node.type === "rest"));
+  assertTimelineWindow(nodes, "08:00", "12:20");
+});
+
+test("交通时长超过窗口时明确抛错而不是静默截断", () => {
+  assert.throws(
+    () =>
+      buildDayTimeline({
+        day,
+        startTime: "08:00",
+        endTime: "12:20",
+        transportMinutes: 260,
+        meals: [60],
+        restMinutes: 30,
+        attractions: [],
+      }),
+    /交通时长超出每日时间窗/,
+  );
 });

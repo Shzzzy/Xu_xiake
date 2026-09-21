@@ -20,6 +20,7 @@ export type PlannerSkeletonNode = {
   transportMode?: TransportMode;
   transportMinutes?: number;
   stayMinutes?: number;
+  legId?: string;
   estimatedCost: number;
   tips?: string;
 };
@@ -68,6 +69,7 @@ const nodeSchema = z.object({
     .enum(["economy", "balanced", "speed", "train", "flight", "drive", "bus", "ship"])
     .optional(),
   transportMinutes: z.number().nonnegative().optional(),
+  legId: z.string().optional(),
   stayMinutes: z.number().nonnegative().optional(),
   estimatedCost: z.number().nonnegative(),
   tips: z.string().optional(),

@@ -368,6 +368,7 @@ function toTripTimelineNode(node: PlannerSkeletonNode): TripTimelineNode {
   if (node.location !== undefined) mapped.location = node.location;
   if (node.transportMode !== undefined) mapped.transportMode = node.transportMode;
   if (node.transportMinutes !== undefined) mapped.transportMinutes = node.transportMinutes;
+  if (node.legId !== undefined) mapped.legId = node.legId;
   if (node.stayMinutes !== undefined) mapped.stayMinutes = node.stayMinutes;
   if (node.tips !== undefined) mapped.tips = node.tips;
 
@@ -447,7 +448,26 @@ function allocateDeterministicBudgetToDays(days: TripDay[], plan: BudgetPlan): T
     return matched.length > 0 ? matched : allNodes.slice(-1);
   };
 
-  distributeBudgetToNodes(plan.transport, pick(["transport", "transfer"]));
+  const transportNodes = pick(["transport", "transfer"]);
+  const transportByLeg = new Map(
+    plan.provenance.transport
+      .filter((reference) => reference.legId)
+      .map((reference) => [reference.legId!, Math.round(reference.total)]),
+  );
+  let assignedTransport = 0;
+  const assignedNode = transportNodes.map((node) => {
+    const amount = node.legId ? transportByLeg.get(node.legId) : undefined;
+    if (amount === undefined) return false;
+    node.estimatedCost += amount;
+    assignedTransport += amount;
+    return true;
+  });
+  const remainingTransport = Math.max(0, Math.round(plan.transport) - assignedTransport);
+  const fallbackTransportNodes = transportNodes.filter((_, index) => !assignedNode[index]);
+  distributeBudgetToNodes(
+    remainingTransport,
+    fallbackTransportNodes.length > 0 ? fallbackTransportNodes : transportNodes,
+  );
   distributeBudgetToNodes(plan.lodging, pick(["hotel"]));
   distributeBudgetToNodes(plan.food, pick(["meal"]));
   distributeBudgetToNodes(plan.tickets, pick(["attraction", "night-activity"]));

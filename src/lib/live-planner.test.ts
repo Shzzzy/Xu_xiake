@@ -596,6 +596,7 @@ test("管家阶段失败时 fail closed 而不退回 legacy", async () => {
 test("未设置 BUTLER_PLANNER 时默认走确定性管线", async () => {
   const result = await runLivePlannerWith(buildLiveInput(), {
     env: {
+      BUTLER_PLANNER: "",
       DEEPSEEK_API_KEY: "k",
       TAVILY_API_KEY: "k",
       AMAP_E2E_FIXTURE: "1",

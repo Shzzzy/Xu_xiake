@@ -427,6 +427,7 @@ function mapTransportLegsToDays(
  */
 function validateTransportPlan(input: ButlerPlanInput): TransportPlanLeg[] {
   if (input.transportLegs.length === 0) {
+  if (input.route.legs.length === 0 && input.transportLegs.length === 0) return [];
     throw new Error("缺少确定性交通计划，禁止进入时间轴与预算");
   }
   if (input.transportLegs.length !== input.route.legs.length) {
@@ -575,6 +576,7 @@ function expandTransportNodes(
       location: `${leg.to}交通枢纽`,
       transportMode: leg.mode,
       transportMinutes: minutes,
+      legId: leg.id,
       estimatedCost: 0,
       tips: `抵达后换乘；门到门约 ${leg.doorToDoorMinutes} 分钟，已从当天可游览容量中先行扣除。`,
     };
@@ -658,15 +660,10 @@ function validateDeterministicSkeleton(
     }
     const isMovementDay = (transportByDay.get(day.day)?.length ?? 0) > 0;
     const capacity = attractionCapacityMinutes(input, transportByDay, day.day);
-    const selectedForDay = selection.some(
-      (item) => item.day === day.day && item.candidateId.length > 0,
+    const selectedFits = selection.some(
+      (item) => item.day === day.day && item.stayMinutes <= capacity,
     );
-    if (
-      !isMovementDay &&
-      attractions.length === 0 &&
-      selectedForDay &&
-      capacity >= MIN_ATTRACTION_CAPACITY_MINUTES
-    ) {
+    if (!isMovementDay && attractions.length === 0 && selectedFits) {
       throw new Error(`第 ${day.day} 天容量足够但没有安排已选景点`);
     }
     if (isMovementDay && !day.nodes.some((node) => node.type === "transport")) {

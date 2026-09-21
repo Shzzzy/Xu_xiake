@@ -66,105 +66,138 @@ export function buildDayTimeline(input: TimelineBuildInput): PlannerSkeletonNode
 
   const windowMinutes = end - start;
   const hotelMinutes = Math.min(HOTEL_MINUTES, windowMinutes);
-  const segments: TimelineSegment[] = [];
-  let remainingBeforeHotel = windowMinutes - hotelMinutes;
-
-  const pushFixedSegment = (
-    segment: Omit<TimelineSegment, "minutes">,
-    requestedMinutes: number,
-  ) => {
-    const minutes = Math.min(normalizeMinutes(requestedMinutes), remainingBeforeHotel);
-    if (minutes <= 0) return;
-    segments.push({
-      ...segment,
-      minutes,
-      ...(segment.transportMinutes === undefined ? {} : { transportMinutes: minutes }),
-    });
-    remainingBeforeHotel -= minutes;
-  };
-
+  const availableBeforeHotel = windowMinutes - hotelMinutes;
   const transportMinutes = normalizeMinutes(input.transportMinutes);
+
+  // 交通是硬约束：不能把 260 分钟交通静默截成 230 分钟后继续输出不可能的时间轴。
+  if (transportMinutes > availableBeforeHotel) {
+    throw new Error(
+      `交通时长超出每日时间窗：需要 ${transportMinutes} 分钟，扣除住宿后可用 ${availableBeforeHotel} 分钟`,
+    );
+  }
+
+  const transportSegments: TimelineSegment[] = [];
   if (transportMinutes > 0) {
-    // 换乘属于交通总时长的一部分，单独列出但不会重复扣减容量。
     const transferMinutes = Math.min(TRANSFER_MINUTES, transportMinutes);
     const rideMinutes = transportMinutes - transferMinutes;
-    pushFixedSegment(
-      { type: "transport", name: "交通出行", transportMinutes: rideMinutes },
-      rideMinutes,
-    );
-    pushFixedSegment(
-      {
+    transportSegments.push({
+      type: "transport",
+      name: "交通出行",
+      minutes: rideMinutes,
+      transportMinutes: rideMinutes,
+    });
+    if (transferMinutes > 0) {
+      transportSegments.push({
         type: "transfer",
         name: "抵达后换乘",
+        minutes: transferMinutes,
         transportMinutes: transferMinutes,
-      },
-      transferMinutes,
-    );
+      });
+    }
   }
 
-  const requestedFixedMinutes =
-    input.meals.reduce((total, mealMinutes) => total + normalizeMinutes(mealMinutes), 0) +
-    normalizeMinutes(input.restMinutes);
-  const minimumAttractionMinutes = input.attractions.length > 0 ? MIN_ATTRACTION_MINUTES : 0;
-  const fixedItemsFitWithMinimumAttraction =
-    remainingBeforeHotel >= requestedFixedMinutes + minimumAttractionMinutes;
+  const attractionSegments: TimelineSegment[] = [];
+  const mealSegments: TimelineSegment[] = [];
+  const restSegments: TimelineSegment[] = [];
+  let remaining = availableBeforeHotel - transportMinutes;
 
-  if (fixedItemsFitWithMinimumAttraction) {
-    input.meals.forEach((mealMinutes, index) => {
-      const name = index === 0 ? "午餐" : index === 1 ? "晚餐" : `第 ${index + 1} 餐`;
-      pushFixedSegment({ type: "meal", name }, mealMinutes);
-    });
-
-    pushFixedSegment({ type: "rest", name: "必要休息" }, input.restMinutes);
-  } else {
-    // 短窗口优先保住一个可执行景点：先按“每增加一餐后仍留出最小景点”规则放餐，
-    // 晚餐与前置休息可跳过，剩余容量最后统一作为自由休整。
-    const reserveAfterMeal = Math.max(
-      minimumAttractionMinutes,
-      normalizeMinutes(input.restMinutes),
-    );
-    input.meals.forEach((mealMinutes, index) => {
-      const normalizedMeal = normalizeMinutes(mealMinutes);
-      if (remainingBeforeHotel - normalizedMeal < reserveAfterMeal) return;
-      const name = index === 0 ? "午餐" : index === 1 ? "晚餐" : `第 ${index + 1} 餐`;
-      pushFixedSegment({ type: "meal", name }, normalizedMeal);
-    });
-  }
-
+  // 先按真实停留时长预留景点；放不下的长景点跳过，后置短景点仍可尝试。
   for (const attraction of input.attractions) {
-    // 只有剩余容量本身不足 75 分钟时才停止；景点时长较短仍可安排。
-    if (remainingBeforeHotel < MIN_ATTRACTION_MINUTES) break;
-
     const stayMinutes = normalizeMinutes(attraction.stayMinutes);
-    if (stayMinutes <= 0 || stayMinutes > remainingBeforeHotel) continue;
-
-    segments.push({
+    if (stayMinutes <= 0 || stayMinutes > remaining) continue;
+    attractionSegments.push({
       type: "attraction",
       name: attraction.name,
       minutes: stayMinutes,
       stayMinutes,
     });
-    remainingBeforeHotel -= stayMinutes;
+    remaining -= stayMinutes;
   }
 
-  if (remainingBeforeHotel > 0) {
-    segments.push({
-      type: "rest",
-      name: "自由活动与休整",
-      minutes: remainingBeforeHotel,
-      stayMinutes: remainingBeforeHotel,
+  if (attractionSegments.length === 0 && input.attractions.length > 0) {
+    // 物理容量不足以安排任何完整景点：降级为休整，再尽量保留一顿午餐。
+    const restMinutes = Math.min(normalizeMinutes(input.restMinutes), remaining);
+    if (restMinutes > 0) {
+      restSegments.push({
+        type: "rest",
+        name: "自由活动与休整",
+        minutes: restMinutes,
+        stayMinutes: restMinutes,
+      });
+      remaining -= restMinutes;
+    }
+    input.meals.forEach((mealMinutes, index) => {
+      const normalized = normalizeMinutes(mealMinutes);
+      if (normalized <= 0 || normalized > remaining) return;
+      mealSegments.push({
+        type: "meal",
+        name: index === 0 ? "午餐" : index === 1 ? "晚餐" : `第 ${index + 1} 餐`,
+        minutes: normalized,
+      });
+      remaining -= normalized;
     });
-    remainingBeforeHotel = 0;
+  } else {
+    // 景点优先后，再按顺序保留午餐、晚餐和必要休息；放不下就跳过。
+    input.meals.forEach((mealMinutes, index) => {
+      const normalized = normalizeMinutes(mealMinutes);
+      if (normalized <= 0 || normalized > remaining) return;
+      mealSegments.push({
+        type: "meal",
+        name: index === 0 ? "午餐" : index === 1 ? "晚餐" : `第 ${index + 1} 餐`,
+        minutes: normalized,
+      });
+      remaining -= normalized;
+    });
+
+    const restMinutes = Math.min(normalizeMinutes(input.restMinutes), remaining);
+    if (restMinutes > 0) {
+      restSegments.push({
+        type: "rest",
+        name: "必要休息",
+        minutes: restMinutes,
+        stayMinutes: restMinutes,
+      });
+      remaining -= restMinutes;
+    }
   }
+
+  if (remaining > 0) {
+    const existingRest = restSegments.at(-1);
+    if (existingRest) {
+      existingRest.minutes += remaining;
+      existingRest.stayMinutes = existingRest.minutes;
+    } else {
+      restSegments.push({
+        type: "rest",
+        name: "自由活动与休整",
+        minutes: remaining,
+        stayMinutes: remaining,
+      });
+    }
+    remaining = 0;
+  }
+
+  const hotelSegments: TimelineSegment[] = [];
   if (hotelMinutes > 0) {
     const dayNumber = Number.isFinite(input.day.day) && input.day.day > 0 ? input.day.day : 1;
-    segments.push({
+    hotelSegments.push({
       type: "hotel",
       name: `第 ${dayNumber} 天酒店入住与休整`,
       minutes: hotelMinutes,
       stayMinutes: hotelMinutes,
     });
   }
+
+  const firstMeal = mealSegments[0] ? [mealSegments[0]] : [];
+  const laterMeals = mealSegments.slice(1);
+  const segments = [
+    ...transportSegments,
+    ...firstMeal,
+    ...attractionSegments,
+    ...laterMeals,
+    ...restSegments,
+    ...hotelSegments,
+  ];
 
   let cursor = start;
   return segments.map((segment) => {

@@ -79,6 +79,7 @@ export type TripTimelineNode = {
   coordinates?: Coordinate;
   transportMode?: TransportMode;
   transportMinutes?: number;
+  legId?: string;
   stayMinutes?: number;
   estimatedCost: number;
   tips?: string;
