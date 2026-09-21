@@ -69,30 +69,24 @@
 
 - [ ] **Step 1: 写失败测试**
 
-在 `src/lib/plan-output-adapter.test.ts` 末尾加入：
+在 `src/lib/plan-output-adapter.test.ts` 末尾加入（复用文件里已有的 `fixtureOutput()`，不要新建 fixture）：
 
 ```ts
 test("其他项在兜底路径下按前四类 10% 预留", () => {
-  const plan = buildTripPlanOutput({
-    origin: "北京",
-    destination: destinationFixture,
-    startDate: "2026-09-21",
-    days: 1,
-    pace: "balanced",
-    interests: ["自然山水"],
-    waypoints: [],
-    roundTrip: false,
-    returnMode: null,
-    travelers: { adults: 2, children: 0 },
-    totalBudget: 8000,
-    startTime: "09:00",
-    endTime: "18:00",
-    plannedDays: [{ day: 1, places: [placeFixture], note: "" }],
-    routePlan: routePlanFixture,
-  });
+  const plan = fixtureOutput();
   assert.ok(plan.budget.other.amount >= 200, "杂事开销最低 ¥200");
   assert.ok(plan.budget.other.amount > 0, "不应再恒为 0");
 });
+```
+
+**同时必须修正**同文件里 `reconciles budget categories, daily totals and timeline node costs` 的既有断言——`其他` 现在是节点费用之外的预留，总额要把它算进去：
+
+```ts
+assert.equal(dailyTotal, nodeTotal);                                  // 节点合计不变
+assert.equal(categoryTotal, dailyTotal + plan.budget.other.amount);   // 五类合计 = 节点 + 杂事开销
+assert.equal(plan.budget.estimatedTotal, categoryTotal);
+assert.equal(plan.budget.totalMin, categoryTotal);
+assert.equal(plan.budget.totalMax, categoryTotal);
 ```
 
 在 `plan-output.test.tsx` 的渲染断言里补一行：
@@ -239,13 +233,29 @@ git commit -m "feat: add budget advice service"
 - [ ] **Step 1: 写失败测试**
 
 ```tsx
+// TripBrief = Travelers & { startTime; endTime; totalBudget; vehicleEnergy }
+const briefFixture: TripBrief = {
+  adults: 2,
+  children: 0,
+  totalBudget: 8000,
+  startTime: "09:00",
+  endTime: "18:00",
+  vehicleEnergy: null,
+};
+
 test("全团总预算旁提供 AI 推荐按钮", () => {
   const html = renderToStaticMarkup(
-    <TravelerBudgetFields value={briefFixture} onChange={() => {}} budgetAdvice={{ pending: false, onRequest: () => {} }} />,
+    <TravelerBudgetFields
+      value={briefFixture}
+      onChange={() => {}}
+      budgetAdvice={{ pending: false, onRequest: () => {} }}
+    />,
   );
   assert.match(html, /AI 推荐/);
 });
 ```
+
+记得在该测试文件顶部补上 `import type { TripBrief } from "../../../lib/travel-plan";`（若已存在则复用）。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -515,7 +525,16 @@ git commit -m "feat: add planner day copy parser"
 - Produces:
   ```ts
   export type ButlerPlanResult =
-    | { status: "ok"; skeleton: PlannerSkeleton; violations: PlanViolation[]; dayCopy: PlannerDayCopy[]; closing: TripClosing; attempts: number }
+    | {
+        status: "ok";
+        skeleton: PlannerSkeleton;
+        violations: PlanViolation[];
+        dayCopy: PlannerDayCopy[];
+        closing: TripClosing;
+        attempts: number;
+        /** 本次可用于排程的候选资料，结果页用它展示「N 个候选景区」。 */
+        candidates: { name: string; summary: string; source: string }[];
+      }
     | { status: "needs_configuration"; missing: string[] }
     | { status: "fallback"; reason: string };
   export async function planWithButler(input: ButlerPlanInput, deps?: ButlerDeps): Promise<ButlerPlanResult>;
@@ -683,7 +702,9 @@ Expected: FAIL（没有 mode 字段）
 
 - [ ] **Step 3: 实现**
 
-`generateLiveItinerary` 进入后读取 `process.env.BUTLER_PLANNER === "1"`：为真则调用 `planWithButler`，把结果映射为 `{ status:"ok", mode:"butler", skeleton, dayCopy, violations, attempts, closing, sources: [], discoveries: [] }`，兜底时沿用现有 `needs_configuration` / 本地兜底行为；为假时保持今天的返回结构并补 `mode:"legacy"`。
+`generateLiveItinerary` 进入后读取 `process.env.BUTLER_PLANNER === "1"`：为真则调用 `planWithButler`，把结果映射为
+`{ status:"ok", mode:"butler", skeleton, dayCopy, violations, attempts, closing, sources: candidates.map(({ name, summary, source }) => ({ title: name, url: source, content: summary, score: 1 })), discoveries: [] }`
+——**不要把 sources 写成空数组**，结果页的「N 个候选景区」依赖它。兜底时沿用现有 `needs_configuration` / 本地兜底行为；为假时保持今天的返回结构并补 `mode:"legacy"`。
 
 - [ ] **Step 4: 运行测试确认通过**
 
