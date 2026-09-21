@@ -344,10 +344,16 @@ function buildClosingInput(input: ButlerPlanInput): TripClosingInput {
   };
 }
 
+export type StageHandlerResult = { handled: true };
+
 export type DeterministicPipelineOptions = {
   id?: string;
   onStage?: (stage: PlanningStage, run: PlanningRun) => void;
-  runStage?: (stage: PlanningStage, attempt: number, run: PlanningRun) => Promise<void> | void;
+  runStage?: (
+    stage: PlanningStage,
+    attempt: number,
+    run: PlanningRun,
+  ) => Promise<StageHandlerResult> | StageHandlerResult;
   repairSelection?: (error: unknown) => Promise<void> | void;
   /** 测试与故障边界使用：指定阶段失败后不再启动任何后续阶段。 */
   failAt?: PlanningStage;
@@ -380,7 +386,10 @@ export async function runDeterministicPipeline(
         if (!options.runStage) {
           throw new Error(`缺少阶段处理器：${stage}`);
         }
-        await options.runStage(stage, attempt, run);
+        const result = await options.runStage(stage, attempt, run);
+        if (result?.handled !== true) {
+          throw new Error(`阶段处理器未处理：${stage}`);
+        }
         run = setStageStatus(run, stage, "passed");
         break;
       } catch (error) {

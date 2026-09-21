@@ -271,7 +271,7 @@ test("每一步失败后不会调用下一步", async () => {
   const run = await runDeterministicPipeline({
     id: "run-stop",
     onStage: (stage) => stages.push(stage),
-    runStage: async () => {},
+    runStage: async () => ({ handled: true }),
     failAt: "selection",
   });
 
@@ -290,9 +290,10 @@ test("selection 失败后只修复当前阶段一次", async () => {
     id: "run-repair",
     onStage: (stage) => stages.push(stage),
     runStage: async (stage, attempt) => {
-      if (stage !== "selection") return;
+      if (stage !== "selection") return { handled: true };
       selectionAttempts += 1;
       if (attempt === 0) throw new Error("模型选择了候选之外的景点");
+      return { handled: true };
     },
     repairSelection: async () => {
       repairs += 1;
@@ -314,6 +315,7 @@ test("selection 修复后仍失败时立即停止，不再调用时间轴和预�
     onStage: (stage) => stages.push(stage),
     runStage: async (stage) => {
       if (stage === "selection") throw new Error("候选仍非法");
+      return { handled: true };
     },
     repairSelection: async () => {
       repairs += 1;
@@ -391,5 +393,19 @@ test("缺少阶段处理器时当前阶段失败并停止", async () => {
   assert.deepEqual(stages, ["route"]);
   assert.equal(run.stages.route.status, "failed");
   assert.match(run.stages.route.error ?? "", /处理器/);
+  assert.equal(run.stages.pois.status, "pending");
+});
+
+test("runStage 返回空结果时当前阶段失败并停止", async () => {
+  const stages: PlanningStage[] = [];
+  const run = await runDeterministicPipeline({
+    id: "run-unhandled",
+    onStage: (stage) => stages.push(stage),
+    runStage: async () => ({}) as { handled: true },
+  });
+
+  assert.deepEqual(stages, ["route"]);
+  assert.equal(run.stages.route.status, "failed");
+  assert.match(run.stages.route.error ?? "", /未处理/);
   assert.equal(run.stages.pois.status, "pending");
 });
