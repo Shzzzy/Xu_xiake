@@ -154,3 +154,29 @@ test("preview head avoids third-party CDNs while the PDF head keeps webfonts", (
   assert.match(previewHead, /Songti SC/);
   assert.match(renderGuidebookHead(plan), /fonts\.googleapis\.com/);
 });
+
+test("butler day copy and analysis failure reach every preview page unchanged", async () => {
+  const butlerPlan: TripPlan = {
+    ...plan,
+    meta: { ...plan.meta, narrativeSource: "butler" },
+    days: plan.days.map((day, index) => ({
+      ...day,
+      purpose: `管家第 ${index + 1} 天目的`,
+      highlights: [`管家第 ${index + 1} 天重点`],
+      cautions:
+        index === 0
+          ? ["本页分析未能生成，已改用基础行程与本地提示。"]
+          : day.cautions,
+      analysisFailed: index === 0 ? true : undefined,
+    })),
+  };
+
+  const events = [];
+  for await (const event of streamGuidebookPages(butlerPlan)) events.push(event);
+  const html = events.flatMap((event) => (event.type === "page" ? [event.html] : [])).join("");
+
+  // 逐页预览使用管家原文，失败日的「本页分析未能生成」留痕也保留。
+  assert.match(html, /管家第 1 天目的/);
+  assert.match(html, /管家第 1 天重点/);
+  assert.match(html, /本页分析未能生成/);
+});

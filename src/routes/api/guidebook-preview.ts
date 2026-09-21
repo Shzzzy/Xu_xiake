@@ -2,6 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { encodeGuidebookEvent, streamGuidebookPages } from "@/lib/guidebook-stream.server";
 import { tripPlanSchema } from "@/lib/trip-plan-schema";
 
+// 预览请求体的轻量上限：先于 JSON 解析拦截超大体，和 16 天上限共同约束付费调用面。
+const GUIDEBOOK_PREVIEW_MAX_BODY_BYTES = 2_000_000;
+
 const NDJSON_HEADERS = {
   "content-type": "application/x-ndjson; charset=utf-8",
   "cache-control": "no-store",
@@ -18,6 +21,14 @@ export const Route = createFileRoute("/api/guidebook-preview")({
   server: {
     handlers: {
       POST: async ({ request }) => {
+        const contentLength = Number(request.headers.get("content-length"));
+        if (Number.isFinite(contentLength) && contentLength > GUIDEBOOK_PREVIEW_MAX_BODY_BYTES) {
+          return new Response(
+            encodeGuidebookEvent({ type: "error", message: "行程数据过大，无法预览路书。" }),
+            { status: 413, headers: NDJSON_HEADERS },
+          );
+        }
+
         let plan;
         try {
           plan = tripPlanSchema.parse(await request.json());

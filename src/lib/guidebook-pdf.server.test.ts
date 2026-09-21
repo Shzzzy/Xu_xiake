@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import test from "node:test";
 import { renderGuidebookHtml } from "./guidebook-html.server.ts";
+import { clearNarrativeCache, enrichTripPlanNarrative } from "./guidebook-narrative.server.ts";
 import type { BudgetCategory, TripPlan } from "./travel-plan.ts";
 import {
   exportGuidebookForTest,
@@ -344,4 +345,43 @@ test("falls back to printable html when chromium is unavailable", async () => {
   if (result.status !== "html") return;
   assert.match(result.html, /江南水乡/);
   assert.match(result.message, /PDF/);
+});
+test("PDF export reuses butler narrative instead of legacy enrichment", async () => {
+  clearNarrativeCache();
+  let calls = 0;
+  const butlerPlan: TripPlan = {
+    ...fixturePlan,
+    meta: { ...fixturePlan.meta, narrativeSource: "butler" },
+    days: [
+      {
+        ...fixturePlan.days[0],
+        purpose: "管家原文目的",
+        highlights: ["管家原文重点"],
+        cautions: ["本页分析未能生成，已改用基础行程与本地提示。"],
+        analysisFailed: true,
+      },
+    ],
+  };
+
+  // 导出前与预览共用同一份 enrichment：butler 标记下不允许再发 legacy 总结请求。
+  const prepared = await enrichTripPlanNarrative(butlerPlan, {
+    apiKey: "test-key",
+    fetchImpl: (async () => {
+      calls += 1;
+      throw new Error("legacy enrichment 不应被调用");
+    }) as typeof fetch,
+  });
+  assert.equal(calls, 0);
+
+  let renderedHtml = "";
+  const result = await exportGuidebookForTest(prepared, {
+    renderPdf: async (html) => {
+      renderedHtml = html;
+      return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    },
+  });
+
+  assert.equal(result.status, "ok");
+  assert.match(renderedHtml, /管家原文目的/);
+  assert.match(renderedHtml, /本页分析未能生成/);
 });

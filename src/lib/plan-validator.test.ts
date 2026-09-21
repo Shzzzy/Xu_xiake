@@ -222,3 +222,141 @@ test("候选名加编造后缀仍判为未知地点", () => {
   assert.ok(unknown);
   assert.equal(unknown.nodeIndex, 0);
 });
+
+// 以下用例覆盖终审修复：摘要与排程一致性、骨架 day 编号连续性。
+function twoDaySkeleton(
+  dayNumbers: [number, number],
+  summary = "游览黄山风景区与宏村",
+): PlannerSkeleton {
+  return {
+    title: "黄山两日",
+    summary,
+    days: dayNumbers.map((day) => ({
+      day,
+      theme: `第 ${day} 天`,
+      nodes: [
+        {
+          type: "attraction",
+          startTime: "09:00",
+          endTime: "12:00",
+          name: "黄山风景区",
+          stayMinutes: 120,
+          estimatedCost: 100,
+        },
+        {
+          type: "meal",
+          startTime: "12:00",
+          endTime: "13:00",
+          name: "午餐",
+          estimatedCost: 50,
+        },
+        {
+          type: "attraction",
+          startTime: "13:00",
+          endTime: "16:00",
+          name: "宏村",
+          stayMinutes: 120,
+          estimatedCost: 100,
+        },
+        {
+          type: "hotel",
+          startTime: "16:00",
+          endTime: "16:30",
+          name: "酒店入住",
+          estimatedCost: 300,
+        },
+        {
+          type: "rest",
+          startTime: "17:00",
+          endTime: "17:30",
+          name: "回酒店休息",
+          estimatedCost: 0,
+        },
+      ],
+      radar,
+    })),
+  };
+}
+
+test("摘要提到未排入行程的候选景点会报 SUMMARY_MISMATCH", () => {
+  const violations = validateSkeleton({
+    skeleton: twoDaySkeleton([1, 2], "游览黄山风景区、宏村与屯溪老街"),
+    brief: balancedBrief({ days: 2 }),
+    candidates: ["黄山风景区", "宏村", "屯溪老街"],
+  });
+
+  assert.ok(
+    violations.some(
+      (item) => item.code === "SUMMARY_MISMATCH" && item.message.includes("屯溪老街"),
+    ),
+    "摘要提到但未排程的景点应被确定性校验发现",
+  );
+});
+
+test("摘要漏掉已排景点同样会报 SUMMARY_MISMATCH", () => {
+  const violations = validateSkeleton({
+    skeleton: twoDaySkeleton([1, 2], "游览黄山风景区"),
+    brief: balancedBrief({ days: 2 }),
+    candidates: ["黄山风景区", "宏村"],
+  });
+
+  assert.ok(
+    violations.some(
+      (item) => item.code === "SUMMARY_MISMATCH" && item.message.includes("宏村"),
+    ),
+    "摘要缺失已排景点应被确定性校验发现",
+  );
+});
+
+test("摘要与排程一致时不产生 SUMMARY_MISMATCH", () => {
+  const violations = validateSkeleton({
+    skeleton: twoDaySkeleton([1, 2]),
+    brief: balancedBrief({ days: 2 }),
+    candidates: ["黄山风景区", "宏村"],
+  });
+
+  assert.equal(violations.some((item) => item.code === "SUMMARY_MISMATCH"), false);
+});
+
+test("骨架 day 编号 [1,1] 重复会报 DAY_COVERAGE 连续性违规", () => {
+  const violations = validateSkeleton({
+    skeleton: twoDaySkeleton([1, 1]),
+    brief: balancedBrief({ days: 2 }),
+    candidates: ["黄山风景区", "宏村"],
+  });
+
+  assert.ok(
+    violations.some(
+      (item) => item.code === "DAY_COVERAGE" && /编号/.test(item.message),
+    ),
+    "[1,1] 应被判编号不连续",
+  );
+});
+
+test("骨架 day 编号 [1,3] 跳号会报 DAY_COVERAGE 连续性违规", () => {
+  const violations = validateSkeleton({
+    skeleton: twoDaySkeleton([1, 3]),
+    brief: balancedBrief({ days: 2 }),
+    candidates: ["黄山风景区", "宏村"],
+  });
+
+  assert.ok(
+    violations.some(
+      (item) => item.code === "DAY_COVERAGE" && /编号/.test(item.message),
+    ),
+    "[1,3] 应被判编号不连续",
+  );
+});
+
+test("骨架 day 编号 1..N 连续时不报连续性违规", () => {
+  const violations = validateSkeleton({
+    skeleton: twoDaySkeleton([1, 2]),
+    brief: balancedBrief({ days: 2 }),
+    candidates: ["黄山风景区", "宏村"],
+  });
+
+  assert.equal(
+    violations.some((item) => item.code === "DAY_COVERAGE" && /编号/.test(item.message)),
+    false,
+  );
+});

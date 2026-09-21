@@ -120,11 +120,21 @@ async function mapWithConcurrency<T, R>(
  * 输入是**已经排好的最终时间轴**，所以文案描述的就是用户真正会走的路线；
  * 单日失败只保留该日的本地文案，不影响路书其余部分。
  */
+/**
+ * 判断该计划是否以管家 dayCopy 为叙述权威源。
+ * 管家文案已在骨架定稿后按天生成，legacy enrichment 的任何二次改写都会
+ * 丢弃 dayCopy、违反 token 预算并抹掉 analysisFailed 留痕。
+ */
+export function isButlerNarrativePlan(plan: TripPlan): boolean {
+  return plan.meta.narrativeSource === "butler";
+}
+
 export async function enrichTripPlanNarrative(
   plan: TripPlan,
   deps: DeepSeekTravelDeps = {},
 ): Promise<TripPlan> {
-  if (plan.days.length === 0) return plan;
+  // 管家计划跳过 legacy 二次总结：preview 与 PDF 两条路径都共用这里的守卫。
+  if (isButlerNarrativePlan(plan) || plan.days.length === 0) return plan;
   const summaries = await mapWithConcurrency(plan.days, NARRATIVE_CONCURRENCY, (day, index) =>
     summarizeDay(plan, day, index, deps),
   );

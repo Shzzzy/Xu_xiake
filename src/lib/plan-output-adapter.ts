@@ -426,6 +426,8 @@ export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): Tri
       transportPreference: input.transportPreference,
       pace: input.pace,
       interests: input.interests,
+      // 管家 dayCopy 是每日文案权威源，下游 preview/PDF 的 legacy enrichment 必须跳过。
+      narrativeSource: "butler",
     },
     budget: buildBudgetFromDays(days, input.totalBudget, input.travelers),
     route: buildTripRoute(input.routePlan, input.roundTrip, input.returnMode),

@@ -201,11 +201,14 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
       /\s+/g,
       "",
     );
-    const summaryHighlights = highlightNames.filter((name) => summary.includes(name));
-    assert.ok(
-      summaryHighlights.length > 0,
-      `摘要至少应包含一个核心亮点，亮点：${highlightNames.join("、")}，摘要：${summary}`,
-    );
+
+    // 摘要与排程双向跨源校验：总览核心亮点必须全部出现在摘要里。
+    for (const name of highlightNames) {
+      assert.ok(
+        summary.includes(name),
+        `摘要必须包含核心亮点「${name}」，摘要：${summary}`,
+      );
+    }
 
     const dayPages = guidebookFrame.locator(
       "section.page.day-map-page, section.page.day-timeline-page",
@@ -215,6 +218,29 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
       assert.ok(
         dayTexts.some((text) => text.includes(name)),
         `核心亮点「${name}」应出现在每日页时间轴/内容中`,
+      );
+    }
+
+    // 真实跨源：从每日执行页提取已排景点名，与摘要和总览双向比对。
+    const scheduledNames = [
+      ...new Set(
+        (
+          await guidebookFrame
+            .locator(
+              "section.page.day-timeline-page li.timeline-item.node-attraction .timeline-card-title strong",
+            )
+            .allInnerTexts()
+        )
+          .map((name) => name.replace(/\s+/g, ""))
+          .filter(Boolean),
+      ),
+    ];
+    assert.ok(scheduledNames.length > 0, "每日执行页应包含景点节点");
+    for (const name of scheduledNames) {
+      assert.ok(summary.includes(name), `摘要缺少已排景点「${name}」，摘要：${summary}`);
+      assert.ok(
+        highlightNames.includes(name),
+        `总览核心亮点缺少已排景点「${name}」，亮点：${highlightNames.join("、")}`,
       );
     }
 

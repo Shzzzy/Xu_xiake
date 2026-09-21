@@ -10,7 +10,8 @@ export type ViolationCode =
   | "OVER_CAPACITY"
   | "PACE_EXCEEDED"
   | "UNKNOWN_PLACE"
-  | "TRANSPORT_CONFLICT";
+  | "TRANSPORT_CONFLICT"
+  | "SUMMARY_MISMATCH";
 
 export type PlanViolation = {
   code: ViolationCode;
@@ -45,6 +46,7 @@ const violationLabels: Record<ViolationCode, string> = {
   PACE_EXCEEDED: "节奏",
   UNKNOWN_PLACE: "地点",
   TRANSPORT_CONFLICT: "交通",
+  SUMMARY_MISMATCH: "摘要",
 };
 
 // 把违规清单格式化成逐行中文，同时给出「期望 / 实际」差值供模型重排。
@@ -119,6 +121,65 @@ function isKnownPlace(normalizedName: string, normalizedCandidates: string[]): b
 }
 
 const slotLabels = { meal: "用餐", hotel: "住宿", rest: "休息" } as const;
+
+// 两个已归一化名称是否互为同一景点：完全相等，或只差白名单后缀。
+function namesCompatible(left: string, right: string): boolean {
+  return left === right || isKnownPlace(left, [right]) || isKnownPlace(right, [left]);
+}
+
+/**
+ * 摘要与排程的一致性守卫：只用可确定的候选名/节点名做子串匹配，不做自由中文切词，
+ * 因此能确定性地发现「摘要提到未排景点」与「摘要漏掉已排景点」。
+ */
+export function validateSummaryConsistency(
+  skeleton: PlannerSkeleton,
+  candidates: string[],
+): PlanViolation[] {
+  const violations: PlanViolation[] = [];
+  const summary = normalizeName(skeleton.summary);
+  const normalizedCandidates = candidates.map(normalizeName).filter((name) => name.length > 0);
+  const attractionNodes = skeleton.days.flatMap((day) =>
+    day.nodes.filter((node) => node.type === "attraction" || node.type === "night-activity"),
+  );
+  const scheduledNames = [
+    ...new Set(attractionNodes.map((node) => normalizeName(node.name)).filter((name) => name.length > 0)),
+  ];
+
+  // 摘要中出现的候选名必须有排程景点兜底，否则就是「提到未排景点」。
+  for (const candidate of normalizedCandidates) {
+    if (!summary.includes(candidate)) continue;
+    const scheduled = scheduledNames.some((name) => namesCompatible(name, candidate));
+    if (!scheduled) {
+      violations.push({
+        code: "SUMMARY_MISMATCH",
+        message: `摘要提到未排入行程的景点「${candidate}」`,
+        detail: { expected: "摘要与排程一致", actual: `摘要出现「${candidate}」，排程无此景点` },
+      });
+    }
+  }
+
+  // 每个已排景点都必须能在摘要里按节点名或候选别名找到。
+  const seenScheduled = new Set<string>();
+  for (const node of attractionNodes) {
+    const name = normalizeName(node.name);
+    if (name.length === 0 || seenScheduled.has(name)) continue;
+    seenScheduled.add(name);
+    if (summary.includes(name)) continue;
+    const mentionedByAlias = normalizedCandidates.some(
+      (candidate) => namesCompatible(name, candidate) && summary.includes(candidate),
+    );
+    if (!mentionedByAlias) {
+      violations.push({
+        code: "SUMMARY_MISMATCH",
+        message: `摘要未提及排程景点「${node.name}」`,
+        detail: { expected: `摘要提及「${node.name}」`, actual: "摘要缺失" },
+      });
+    }
+  }
+
+  return violations;
+}
+
 
 export function validateSkeleton(input: PlanValidationInput): PlanViolation[] {
   const violations: PlanViolation[] = [];
@@ -203,6 +264,18 @@ export function validateSkeleton(input: PlanValidationInput): PlanViolation[] {
       detail: { expected: `${brief.days} 天`, actual: `${skeleton.days.length} 天` },
     });
   }
+  // 骨架 day 编号必须按 1..N 连续；下游日期/天气/违规映射都依赖数字编号。
+  skeleton.days.forEach((day, index) => {
+    const expectedDay = index + 1;
+    if (day.day !== expectedDay) {
+      violations.push({
+        code: "DAY_COVERAGE",
+        day: day.day,
+        message: `第 ${expectedDay} 个骨架日的 day 编号为 ${day.day}，应按 1..${skeleton.days.length} 连续编号`,
+        detail: { expected: `day=${expectedDay}`, actual: `day=${day.day}` },
+      });
+    }
+  });
   for (const day of skeleton.days) {
     const hasActiveNode = day.nodes.some((node) => node.type !== "rest");
     if (!hasActiveNode) {
@@ -313,6 +386,9 @@ export function validateSkeleton(input: PlanValidationInput): PlanViolation[] {
       }
     }
   }
+
+  // 摘要一致性放在最后：先让结构/预算等硬违规显形，再判定摘要是否与最终骨架一致。
+  violations.push(...validateSummaryConsistency(skeleton, candidates));
 
   return violations;
 }

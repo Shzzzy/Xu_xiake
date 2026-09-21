@@ -133,6 +133,9 @@ export type TripRoute = {
   returnMode: ReturnMode;
 };
 
+/** 每日叙述文案的权威来源：butler 由管家 dayCopy 产出，legacy 才允许本地 enrichment 二次改写。 */
+export type TripNarrativeSource = "butler" | "legacy";
+
 export type TripMeta = {
   title: string;
   origin: string;
@@ -145,6 +148,8 @@ export type TripMeta = {
   transportPreference: TransportPreference;
   pace: Pace;
   interests: string[];
+  /** 仅管家链路写入；缺失表示 legacy 计划，enrichment 行为保持不变。 */
+  narrativeSource?: TripNarrativeSource;
 };
 
 export type TripClosing = {

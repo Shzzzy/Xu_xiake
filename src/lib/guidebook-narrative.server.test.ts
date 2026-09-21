@@ -138,3 +138,38 @@ test("keeps the local text when DeepSeek is unavailable", async () => {
   assert.equal(enriched.days[0]?.purpose, "本地排程兜底文案");
   assert.deepEqual(enriched.days[1]?.highlights, ["本地亮点"]);
 });
+
+test("butler plan skips legacy enrichment and preserves day copy", async () => {
+  clearNarrativeCache();
+  const calls: unknown[] = [];
+  const butlerPlan: TripPlan = {
+    ...plan,
+    meta: { ...plan.meta, narrativeSource: "butler" },
+    days: plan.days.map((day, index) => ({
+      ...day,
+      purpose: `管家第 ${index + 1} 天目的`,
+      highlights: [`管家第 ${index + 1} 天重点`],
+      cautions:
+        index === 0
+          ? ["本页分析未能生成，已改用基础行程与本地提示。", "管家注意保暖"]
+          : ["管家次日注意"],
+      analysisFailed: index === 0 ? true : undefined,
+    })),
+  };
+
+  const enriched = await enrichTripPlanNarrative(butlerPlan, {
+    apiKey: "test-key",
+    fetchImpl: summaryFetch(
+      { purpose: "不应覆盖", highlights: ["不应覆盖"], cautions: ["不应覆盖"] },
+      calls,
+    ),
+  });
+
+  // 管家文案是权威源：不得再发起 legacy 每日总结调用，也不得覆盖任何字段。
+  assert.equal(calls.length, 0);
+  assert.equal(enriched.days[0]?.purpose, "管家第 1 天目的");
+  assert.deepEqual(enriched.days[0]?.highlights, ["管家第 1 天重点"]);
+  assert.equal(enriched.days[0]?.analysisFailed, true);
+  assert.match(enriched.days[0]?.cautions[0] ?? "", /本页分析未能生成/);
+  assert.equal(enriched.days[1]?.purpose, "管家第 2 天目的");
+});

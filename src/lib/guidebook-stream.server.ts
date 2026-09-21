@@ -1,4 +1,4 @@
-import { enrichTripPlanNarrative } from "./guidebook-narrative.server.ts";
+import { enrichTripPlanNarrative, isButlerNarrativePlan } from "./guidebook-narrative.server.ts";
 import {
   guidebookPageSpecs,
   renderGuidebookHead,
@@ -45,7 +45,10 @@ export async function* streamGuidebookPages(
 
   // 每日旅行信息与分析由 DeepSeek 写，但只依赖最终排程；封面、概览、路线、预算
   // 不等它，先渲染出去，文案到了再补进当天页面。
-  const narrativePromise = enrichTripPlanNarrative(plan);
+  // 管家 dayCopy 已是权威源，preview 不得再触发 legacy enrichment。
+  const narrativePromise = isButlerNarrativePlan(plan)
+    ? Promise.resolve(plan)
+    : enrichTripPlanNarrative(plan);
   let narrativeApplied = false;
 
   const routeMap = prepareGuidebookImage(plan.route.staticMapUrl, "map", options);

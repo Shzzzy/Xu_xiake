@@ -68,6 +68,8 @@ const tripDaySchema = z.object({
   highlights: z.array(z.string()),
   cautions: z.array(z.string()),
   history: z.array(historyNoteSchema).optional(),
+  // 管家文案失败日的留痕必须穿透 JSON 边界，保证「本页分析未能生成」可见。
+  analysisFailed: z.boolean().optional(),
 });
 
 export const tripPlanSchema = z.object({
@@ -86,6 +88,8 @@ export const tripPlanSchema = z.object({
     transportPreference: z.enum(["economy", "balanced", "speed"]),
     pace: z.enum(["relaxed", "balanced", "deep"]),
     interests: z.array(z.string()),
+    // 管家 dayCopy 的权威来源标记；preview/PDF 两侧据此跳过 legacy enrichment。
+    narrativeSource: z.enum(["butler", "legacy"]).optional(),
   }),
   budget: z.object({
     totalBudget: z.number(),
@@ -114,7 +118,8 @@ export const tripPlanSchema = z.object({
     durationMinutes: z.number(),
     returnMode: z.enum(["fast", "scenic"]).nullable(),
   }),
-  days: z.array(tripDaySchema),
+  // 与产品详细路书能力一致：preview 与 exportGuidebook 共用 16 天上限，避免付费调用被无限放大。
+  days: z.array(tripDaySchema).max(16),
   // 骨架校验违规需穿透到路书预览/PDF，保证结果页提示条与路书执行提醒同源。
   violations: z
     .array(
@@ -128,6 +133,7 @@ export const tripPlanSchema = z.object({
           "PACE_EXCEEDED",
           "UNKNOWN_PLACE",
           "TRANSPORT_CONFLICT",
+          "SUMMARY_MISMATCH",
         ]),
         day: z.number().int().positive().optional(),
         nodeIndex: z.number().int().nonnegative().optional(),
