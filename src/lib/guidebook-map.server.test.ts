@@ -233,6 +233,7 @@ function fakeAmapClient() {
     counts: () => ({ geocodeCalls, routeCalls, searchCalls }),
     details: () => ({
       searchCities: searchInputs.map((input) => input.city ?? ""),
+      searchContexts: searchInputs.map((input) => `${input.city ?? ""}:${input.keywords}`),
       routeInputs: [...routeInputs],
     }),
   };
@@ -276,7 +277,7 @@ test("enriches TripPlan with route coordinates, maps and keyless navigation", as
     /^https:\/\/uri\.amap\.com\/navigation/,
   );
 
-  assert.deepEqual(counts(), { geocodeCalls: 3, routeCalls: 3, searchCalls: 3 });
+  assert.deepEqual(counts(), { geocodeCalls: 3, routeCalls: 3, searchCalls: 2 });
 });
 
 test("keeps the Amap key out of public TripPlan URLs and HTML", async () => {
@@ -361,21 +362,25 @@ test("preview and PDF both receive inlined maps from the shared enrichment chain
   assert.doesNotMatch(pdfHtml, /server-only-secret|<img[^>]+src="https?:\/\//i);
 });
 
-test("reuses one immutable enrichment result for the same TripPlan content", async () => {
+test("caches only the map overlay and preserves the current plan's non-map fields", async () => {
   const { client, counts } = fakeAmapClient();
-  const first = await enrichGuidebookPlanWithMaps(fixturePlan(), { amapClient: client });
+  const firstPlan = fixturePlan();
+  const first = await enrichGuidebookPlanWithMaps(firstPlan, { amapClient: client });
   const callsAfterFirst = counts();
-  const second = await enrichGuidebookPlanWithMaps(fixturePlan(), { amapClient: client });
 
-  assert.equal(second, first);
-  assert.equal(Object.isFrozen(first), true);
-  assert.equal(Object.isFrozen(first.days), true);
-  assert.deepEqual(counts(), callsAfterFirst);
+  const changedPlan = fixturePlan();
+  changedPlan.meta.title = "第二份行程标题";
+  changedPlan.meta.travelers = { adults: 1, children: 2 };
+  changedPlan.budget.totalBudget = 9999;
+  changedPlan.days[0]!.purpose = "仅文案变化，不应重新请求地图";
+  const second = await enrichGuidebookPlanWithMaps(changedPlan, { amapClient: client });
 
-  const narrativeOnlyChange = fixturePlan();
-  narrativeOnlyChange.days[0]!.purpose = "仅文案变化，不应重新请求地图";
-  const third = await enrichGuidebookPlanWithMaps(narrativeOnlyChange, { amapClient: client });
-  assert.equal(third, first);
+  assert.deepEqual(second.route, first.route);
+  assert.deepEqual(second.days[0]?.mapUrl, first.days[0]?.mapUrl);
+  assert.equal(second.meta.title, "第二份行程标题");
+  assert.deepEqual(second.meta.travelers, { adults: 1, children: 2 });
+  assert.equal(second.budget.totalBudget, 9999);
+  assert.equal(second.days[0]?.purpose, "仅文案变化，不应重新请求地图");
   assert.deepEqual(counts(), callsAfterFirst);
 });
 
@@ -441,15 +446,34 @@ test("plans supported transport modes explicitly and disables unsupported naviga
   assert.equal(shipSegment?.navigation, "");
 });
 
-test("uses each day's route city when resolving daily POIs", async () => {
+test("derives city context per POI for same-day and same-name cross-city nodes", async () => {
+  const plan = fixturePlan();
+  plan.days = [
+    {
+      ...plan.days[0]!,
+      nodes: [plan.days[0]!.nodes[0]!, plan.days[1]!.nodes[0]!],
+    },
+    {
+      ...plan.days[1]!,
+      nodes: [
+        {
+          ...plan.days[0]!.nodes[0]!,
+          name: "西湖",
+          location: "惠州市西湖风景名胜区",
+        },
+      ],
+    },
+  ];
+
   const { client, details } = fakeAmapClient();
-  const enriched = await enrichGuidebookPlanWithMaps(fixturePlan(), { amapClient: client });
-  const cities = details().searchCities;
+  const enriched = await enrichGuidebookPlanWithMaps(plan, { amapClient: client });
+  const contexts = details().searchContexts;
 
   assert.ok(enriched.days[0]?.nodes[0]?.coordinates);
-  assert.ok(enriched.days[1]?.nodes[0]?.coordinates);
-  assert.ok(cities.includes("杭州"), `杭州缺失：${cities.join(",")}`);
-  assert.ok(cities.includes("黄山"), `黄山缺失：${cities.join(",")}`);
+  assert.ok(enriched.days[0]?.nodes[1]?.coordinates);
+  assert.ok(contexts.includes("杭州:西湖"), `杭州西湖缺失：${contexts.join(",")}`);
+  assert.ok(contexts.includes("黄山:宏村"), `黄山宏村缺失：${contexts.join(",")}`);
+  assert.ok(contexts.includes("惠州:西湖"), `惠州西湖缺失：${contexts.join(",")}`);
 });
 
 test("carries the previous day's endpoint into the next day's navigation", async () => {
@@ -577,4 +601,53 @@ test("merges missing navigation and QR fields into a partially mapped plan", asy
   assert.ok(enriched.days[0]?.nodes[0]?.coordinates);
   assert.match(enriched.days[0]?.nodes[0]?.navigation ?? "", /^https:\/\/uri\.amap\.com/);
   assert.match(enriched.days[0]?.qrCodeUrl ?? "", /^https:\/\/api\.qrserver\.com/);
+});
+
+test("does not cache partial enrichment after a map request failure", async () => {
+  const { client: baseClient } = fakeAmapClient();
+  let attempts = 0;
+  const client: AmapClient = {
+    ...baseClient,
+    async route(input) {
+      attempts += 1;
+      if (attempts === 1) throw new Error("temporary route failure");
+      return baseClient.route(input);
+    },
+  };
+
+  const first = await enrichGuidebookPlanWithMaps(fixturePlan(), { amapClient: client });
+  assert.ok(first.route.staticMapUrl);
+  const firstAttempts = attempts;
+  assert.ok(firstAttempts > 0);
+
+  await enrichGuidebookPlanWithMaps(fixturePlan(), { amapClient: client });
+  assert.equal(attempts, firstAttempts * 2, "失败结果不得进入共享缓存，下一次应重新尝试");
+});
+
+test("propagates upstream cancellation through preview and PDF preparation", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("client disconnected"));
+  const { client, counts } = fakeAmapClient();
+
+  for await (const _event of streamGuidebookPages(fixturePlan(), {
+    amapClient: client,
+    signal: controller.signal,
+  })) {
+    // 只需要确认流会结束并保持降级，不需要逐页断言。
+  }
+  assert.equal(counts().routeCalls, 0);
+
+  let rendered = false;
+  const result = await exportGuidebookForTest(fixturePlan(), {
+    amapClient: client,
+    signal: controller.signal,
+    renderPdf: async () => {
+      rendered = true;
+      return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    },
+  });
+
+  assert.equal(result.status, "ok");
+  assert.equal(rendered, true);
+  assert.equal(counts().routeCalls, 0);
 });

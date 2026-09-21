@@ -43,7 +43,7 @@ export const Route = createFileRoute("/api/guidebook-preview")({
         const stream = new ReadableStream<Uint8Array>({
           async start(controller) {
             try {
-              for await (const event of streamGuidebookPages(plan)) {
+              for await (const event of streamGuidebookPages(plan, { signal: request.signal })) {
                 controller.enqueue(encoder.encode(encodeGuidebookEvent(event)));
               }
             } catch (error) {

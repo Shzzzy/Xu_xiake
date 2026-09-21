@@ -291,9 +291,13 @@ async function fetchGuidebookImageDataUrl(
     if (!nextUrl) return null;
 
     try {
+      const timeoutSignal = AbortSignal.timeout(GUIDEBOOK_IMAGE_TIMEOUT_MS);
+      const requestSignal = options.signal
+        ? AbortSignal.any([options.signal, timeoutSignal])
+        : timeoutSignal;
       const response = await fetchImpl(nextUrl, {
         redirect: "manual",
-        signal: AbortSignal.timeout(GUIDEBOOK_IMAGE_TIMEOUT_MS),
+        signal: requestSignal,
         headers: { accept: "image/*" },
       });
       const location = response.headers.get("location");

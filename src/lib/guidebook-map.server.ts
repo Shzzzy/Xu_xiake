@@ -73,9 +73,41 @@ type OperationDeadline = {
   cleanup: () => void;
 };
 
+type MapSegmentOverlay = Pick<RouteSegment, "distanceKm" | "durationMinutes" | "navigation">;
+
+type MapNodeOverlay = {
+  coordinates?: AmapCoordinate;
+  navigation?: string | null;
+};
+
+type MapDayOverlay = {
+  mapUrl?: string;
+  navigationUrl?: string;
+  qrCodeUrl?: string;
+  nodes: MapNodeOverlay[];
+};
+
+type TripMapOverlay = {
+  route: {
+    outbound: AmapCoordinate[];
+    returnPath: AmapCoordinate[];
+    outboundSegments: MapSegmentOverlay[];
+    returnSegments: MapSegmentOverlay[];
+    distanceKm: number;
+    durationMinutes: number;
+    staticMapUrl?: string;
+  };
+  days: MapDayOverlay[];
+};
+
+type MapEnrichmentAttempt = {
+  overlay: TripMapOverlay;
+  failed: boolean;
+};
+
 type EnrichmentCacheEntry = {
   expiresAt: number;
-  promise: Promise<TripPlan>;
+  promise: Promise<MapEnrichmentAttempt>;
 };
 
 type RouteDecision =
@@ -180,7 +212,7 @@ function enrichmentCacheFor(
 function rememberEnrichment(
   cache: Map<string, EnrichmentCacheEntry>,
   key: string,
-  promise: Promise<TripPlan>,
+  promise: Promise<MapEnrichmentAttempt>,
 ): void {
   if (cache.size >= MAX_ENRICHMENT_CACHE_ENTRIES) {
     const oldest = cache.keys().next().value;
@@ -582,6 +614,7 @@ async function enrichSegment(
   plan: TripPlan,
   resolver: CoordinateResolver,
   routeResolver: RouteResolver,
+  report: ErrorReporter,
 ): Promise<{ segment: RouteSegment; path: AmapCoordinate[] }> {
   const decision = routeDecision(plan, segment);
   const [origin, destination] = await Promise.all([
@@ -613,6 +646,7 @@ async function enrichSegment(
   }
 
   if (!origin || !destination) {
+    report(`路线端点解析失败：${segment.from} → ${segment.to}`);
     return {
       segment: {
         ...segment,
@@ -685,10 +719,10 @@ async function enrichRoute(
 
   const [outboundResults, returnResults] = await Promise.all([
     mapWithConcurrency(outboundSegments, MAP_OPERATION_CONCURRENCY, (segment) =>
-      enrichSegment(segment, plan, resolver, routeResolver),
+      enrichSegment(segment, plan, resolver, routeResolver, report),
     ),
     mapWithConcurrency(returnSegments, MAP_OPERATION_CONCURRENCY, (segment) =>
-      enrichSegment(segment, plan, resolver, routeResolver),
+      enrichSegment(segment, plan, resolver, routeResolver, report),
     ),
   ]);
 
@@ -750,38 +784,16 @@ async function enrichRoute(
   };
 }
 
-type DayCityContext = {
-  name: string;
-  coordinate?: AmapCoordinate;
-  routeIndex: number;
-};
-
-function deriveDayCityContexts(
-  plan: TripPlan,
-  routeStops: Map<string, AmapCoordinate>,
-): DayCityContext[] {
+function cityForNode(plan: TripPlan, node: TripTimelineNode): string {
+  const text = `${node.name} ${node.location ?? ""}`.trim();
   const stops = [plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination].map(cleanText);
-  let lastIndex = 0;
+  const matchedStops = stops.filter((stop) => stop && text.includes(stop));
+  if (matchedStops.length > 0) return matchedStops.at(-1) ?? plan.meta.destination;
 
-  return plan.days.map((day, dayIndex) => {
-    const text = day.nodes
-      .map((node) => `${node.name} ${node.location ?? ""}`)
-      .join(" ")
-      .trim();
-    const matches = stops.flatMap((stop, index) => (stop && text.includes(stop) ? [index] : []));
-    const forwardMatches = matches.filter((index) => index >= lastIndex);
-    const fallbackIndex = dayIndex === 0 ? lastIndex : Math.min(stops.length - 1, lastIndex + 1);
-    const routeIndex = forwardMatches.at(-1) ?? matches.at(-1) ?? fallbackIndex;
-    lastIndex = Math.max(0, routeIndex);
-    const name = stops[lastIndex] ?? plan.meta.destination;
-    return {
-      name,
-      ...(routeStops.get(name) ? { coordinate: routeStops.get(name) } : {}),
-      routeIndex: lastIndex,
-    };
-  });
+  const cityMatch = /([^省自治区]{2,12})市/.exec(node.location ?? "");
+  if (cityMatch?.[1]) return cityMatch[1];
+  return plan.meta.destination;
 }
-
 function dayMapPoints(
   nodes: TripTimelineNode[],
   start: AmapCoordinate | undefined,
@@ -825,7 +837,6 @@ async function enrichDays(
   resolver: CoordinateResolver,
   report: ErrorReporter,
 ): Promise<TripDay[]> {
-  const cityContexts = deriveDayCityContexts(plan, routeStops);
   const candidates: { key: string; node: TripTimelineNode; city: string }[] = [];
   const existing = new Map<string, AmapCoordinate>();
 
@@ -846,7 +857,7 @@ async function enrichDays(
         candidates.push({
           key,
           node,
-          city: cityContexts[dayIndex]?.name ?? plan.meta.destination,
+          city: cityForNode(plan, node),
         });
       }
     });
@@ -858,6 +869,7 @@ async function enrichDays(
     async ({ key, node, city }) => {
       const routeStop = routeStops.get(cleanText(node.name));
       const coordinate = routeStop ?? (await resolver.resolvePlace(node.name, node.location, city));
+      if (!coordinate) report(`地点解析失败：${node.name}`);
       return { key, coordinate };
     },
   );
@@ -871,12 +883,11 @@ async function enrichDays(
   for (let dayIndex = 0; dayIndex < plan.days.length; dayIndex += 1) {
     const day = plan.days[dayIndex];
     if (!day) continue;
-    const context = cityContexts[dayIndex];
     const origin = routeStops.get(plan.meta.origin);
     const dayStart =
       dayIndex === 0
-        ? (origin ?? context?.coordinate ?? route.outbound[0] ?? route.returnPath[0])
-        : (previousDayEnd ?? context?.coordinate ?? route.outbound[0] ?? route.returnPath[0]);
+        ? (origin ?? route.outbound[0] ?? route.returnPath[0])
+        : (previousDayEnd ?? route.outbound[0] ?? route.returnPath[0]);
     let previousCoordinate = dayStart;
 
     const nodes = day.nodes.map((node, nodeIndex) => {
@@ -907,7 +918,7 @@ async function enrichDays(
       .reverse()
       .find((node) => node.type === "hotel" && node.coordinates)?.coordinates;
     const lastNodeEnd = [...nodes].reverse().find((node) => node.coordinates)?.coordinates;
-    const dayEnd = hotelEnd ?? lastNodeEnd ?? context?.coordinate ?? dayStart;
+    const dayEnd = hotelEnd ?? lastNodeEnd ?? routeStops.get(plan.meta.destination) ?? dayStart;
     const points = dayMapPoints(nodes, dayStart, dayEnd, plan, route, routeStops);
     const mapUrl =
       points.length > 0
@@ -952,16 +963,116 @@ async function enrichDays(
 
   return result;
 }
+function segmentOverlay(segment: RouteSegment): MapSegmentOverlay {
+  return {
+    distanceKm: segment.distanceKm,
+    durationMinutes: segment.durationMinutes,
+    navigation: segment.navigation,
+  };
+}
+
+function buildMapOverlay(route: TripRoute, days: TripDay[]): TripMapOverlay {
+  return {
+    route: {
+      outbound: route.outbound,
+      returnPath: route.returnPath,
+      outboundSegments: route.outboundSegments.map(segmentOverlay),
+      returnSegments: route.returnSegments.map(segmentOverlay),
+      distanceKm: route.distanceKm,
+      durationMinutes: route.durationMinutes,
+      staticMapUrl: route.staticMapUrl,
+    },
+    days: days.map((day) => ({
+      mapUrl: day.mapUrl,
+      navigationUrl: day.navigationUrl,
+      qrCodeUrl: day.qrCodeUrl,
+      nodes: day.nodes.map((node) => ({
+        coordinates: node.coordinates,
+        navigation: node.navigation,
+      })),
+    })),
+  };
+}
+
+function emptyMapOverlay(plan: TripPlan): TripMapOverlay {
+  return buildMapOverlay(plan.route, plan.days);
+}
+
+function mergeMapOverlay(plan: TripPlan, overlay: TripMapOverlay): TripPlan {
+  return {
+    ...plan,
+    route: {
+      ...plan.route,
+      outbound: overlay.route.outbound,
+      returnPath: overlay.route.returnPath,
+      distanceKm: overlay.route.distanceKm,
+      durationMinutes: overlay.route.durationMinutes,
+      staticMapUrl: overlay.route.staticMapUrl ?? plan.route.staticMapUrl,
+      outboundSegments: plan.route.outboundSegments.map((segment, index) => ({
+        ...segment,
+        ...(overlay.route.outboundSegments[index] ?? {}),
+      })),
+      returnSegments: plan.route.returnSegments.map((segment, index) => ({
+        ...segment,
+        ...(overlay.route.returnSegments[index] ?? {}),
+      })),
+    },
+    days: plan.days.map((day, dayIndex) => {
+      const dayOverlay = overlay.days[dayIndex];
+      if (!dayOverlay) return day;
+      return {
+        ...day,
+        mapUrl: dayOverlay.mapUrl ?? day.mapUrl,
+        navigationUrl: dayOverlay.navigationUrl ?? day.navigationUrl,
+        qrCodeUrl: dayOverlay.qrCodeUrl ?? day.qrCodeUrl,
+        nodes: day.nodes.map((node, nodeIndex) => {
+          const nodeOverlay = dayOverlay.nodes[nodeIndex];
+          if (!nodeOverlay) return node;
+          return {
+            ...node,
+            ...(nodeOverlay.coordinates ? { coordinates: nodeOverlay.coordinates } : {}),
+            ...(Object.prototype.hasOwnProperty.call(nodeOverlay, "navigation")
+              ? { navigation: nodeOverlay.navigation ?? null }
+              : {}),
+          };
+        }),
+      };
+    }),
+  };
+}
+
+function mapOverlayIsComplete(plan: TripPlan, overlay: TripMapOverlay): boolean {
+  const routeComplete =
+    overlay.route.outbound.length > 0 &&
+    Boolean(overlay.route.staticMapUrl) &&
+    (plan.route.returnMode === null || overlay.route.returnPath.length > 0);
+  if (!routeComplete) return false;
+
+  return plan.days.every((day, dayIndex) => {
+    const dayOverlay = overlay.days[dayIndex];
+    if (!dayOverlay?.mapUrl) return false;
+    const navMode = toNavigationMode(day.nodes.find((node) => node.transportMode)?.transportMode);
+    if (navMode && (!dayOverlay.navigationUrl || !dayOverlay.qrCodeUrl)) return false;
+    return day.nodes.every((node, nodeIndex) => {
+      const nodeOverlay = dayOverlay.nodes[nodeIndex];
+      if (!nodeOverlay?.coordinates) return true;
+      const nodeNavMode = toNavigationMode(node.transportMode);
+      return !nodeNavMode || Boolean(nodeOverlay.navigation);
+    });
+  });
+}
 async function performEnrichment(
   plan: TripPlan,
   options: GuidebookMapEnrichmentOptions,
   amapKey: string,
   client: AmapClient,
   deadline: OperationDeadline,
-): Promise<TripPlan> {
+): Promise<MapEnrichmentAttempt> {
   const observed = Boolean(options.amapClient || amapKey);
   const reported = new Set<string>();
+  let failed = false;
   const report: ErrorReporter = (message) => {
+    failed = true;
     if (reported.has(message)) return;
     reported.add(message);
     if (options.onError) options.onError(message);
@@ -989,19 +1100,21 @@ async function performEnrichment(
     } else if (deadline.signal.aborted) {
       safeReport("地图 enrichment 已取消，已返回已完成字段并继续使用本地降级。");
     }
-    return deepFreeze({ ...plan, route: enrichedRoute.route, days });
+    return {
+      overlay: deepFreeze(buildMapOverlay(enrichedRoute.route, days)),
+      failed,
+    };
   } catch (error) {
     safeReport(`地图 enrichment 失败，已保留本地降级内容：${errorText(error)}`);
-    return deepFreeze(plan);
+    return { overlay: deepFreeze(emptyMapOverlay(plan)), failed: true };
   }
 }
 
 /**
  * 用高德补齐 TripPlan 的地图、路线、坐标与导航数据。
  *
- * 该函数以“永不阻塞路书生成”为约束：缺少 Key、某一项地理服务失败或返回无效数据时，
- * 都只保留原字段或交给现有 schematic / placeholder 降级，不向调用方抛错。
- * 相同地图输入会在服务进程内复用同一份不可变结果，预览与 PDF 不重复请求高德。
+ * 缓存只保存不可变的地图 overlay，绝不保存完整 TripPlan；每次调用都用当前
+ * TripPlan 合并 overlay，因此 travelers、budget、dayCopy 等非地图字段不会被串用。
  */
 export async function enrichGuidebookPlanWithMaps(
   plan: TripPlan,
@@ -1017,7 +1130,10 @@ export async function enrichGuidebookPlanWithMaps(
   const cache = enrichmentCacheFor(options);
   const cacheKey = mapEnrichmentKey(plan, amapKey, timeoutMs);
   const cached = cache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  if (cached && cached.expiresAt > Date.now()) {
+    const attempt = await cached.promise;
+    return mergeMapOverlay(plan, attempt.overlay);
+  }
   if (cached) cache.delete(cacheKey);
 
   if (options.signal?.aborted) return plan;
@@ -1033,9 +1149,13 @@ export async function enrichGuidebookPlanWithMaps(
     return plan;
   }
 
-  const promise = performEnrichment(plan, options, amapKey, client, deadline).finally(
+  const attemptPromise = performEnrichment(plan, options, amapKey, client, deadline).finally(
     deadline.cleanup,
   );
-  rememberEnrichment(cache, cacheKey, promise);
-  return promise;
+  rememberEnrichment(cache, cacheKey, attemptPromise);
+  const attempt = await attemptPromise;
+  if (attempt.failed || !mapOverlayIsComplete(plan, attempt.overlay)) {
+    cache.delete(cacheKey);
+  }
+  return mergeMapOverlay(plan, attempt.overlay);
 }
