@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { BudgetCategory, TimelineNodeType, TripBrief, TripPlan } from "../../../lib/travel-plan";
+import { buildPlannedDaysFromSkeleton } from "../../../lib/plan-output-adapter";
 import { TravelerBudgetFields } from "./TravelerBudgetFields";
 import { requestAndApplyBudget } from "./budget-advice-apply";
 import { TripOverview } from "./TripOverview";
@@ -262,4 +263,36 @@ test("needs_configuration 返回友好提示，failed 保留原始信息", async
     },
   });
   assert.deepEqual(failed, { status: "failed", message: "DeepSeek 预算建议请求超时" });
+});
+
+test("butler 骨架映射为与骨架同源的每日行程，只保留景点节点", () => {
+  const plannedDays = buildPlannedDaysFromSkeleton(
+    {
+      title: "黄山两日",
+      summary: "山岳与古村",
+      days: [
+        {
+          day: 1,
+          theme: "西湖晨光",
+          nodes: [
+            { type: "transport", startTime: "08:30", endTime: "11:00", name: "上海前往杭州", estimatedCost: 260 },
+            { type: "attraction", startTime: "12:10", endTime: "15:00", name: "西湖白堤", location: "杭州西湖", stayMinutes: 170, estimatedCost: 0, tips: "沿湖慢行" },
+            { type: "night-activity", startTime: "20:10", endTime: "21:00", name: "西湖夜游", estimatedCost: 120 },
+            { type: "rest", startTime: "21:10", endTime: "22:00", name: "回酒店休息", estimatedCost: 0 },
+          ],
+          radar: { physical: 48, childFit: 70, weatherSensitivity: 45, timeCost: 50, crowding: 62 },
+        },
+      ],
+    },
+    [{ date: "2026-09-20", code: 1, tempMax: 27, tempMin: 19 }],
+    [{ title: "西湖白堤", url: "https://example.test/xihu", content: "白堤简介" }],
+  );
+
+  assert.equal(plannedDays.length, 1);
+  assert.equal(plannedDays[0].day, 1);
+  assert.equal(plannedDays[0].note, "西湖晨光");
+  assert.deepEqual(plannedDays[0].places.map((place) => place.name), ["西湖白堤", "西湖夜游"]);
+  assert.equal(plannedDays[0].places[0].source, "https://example.test/xihu");
+  assert.equal(plannedDays[0].places[0].duration, 170);
+  assert.equal(plannedDays[0].weather?.code, 1);
 });

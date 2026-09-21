@@ -441,6 +441,40 @@ export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): Tri
   return plan;
 }
 
+/**
+ * 把管家骨架映射为结果页每日行程卡片所需的 PlannedDay。
+ * 仅保留景点类节点（attraction / night-activity），其余交通、用餐、住宿节点不进卡片，
+ * 保证结果页卡片与 executionPlan 同源，避免回退路线与骨架排程并存。
+ */
+export function buildPlannedDaysFromSkeleton(
+  skeleton: PlannerSkeleton,
+  weather: WeatherDay[],
+  sources: { title: string; url: string; content?: string }[],
+): PlannedDay[] {
+  return skeleton.days.map((skeletonDay) => {
+    const places: Place[] = skeletonDay.nodes
+      .filter((node) => node.type === "attraction" || node.type === "night-activity")
+      .map((node, nodeIndex) => {
+        const source = sources.find((item) => item.title === node.name);
+        return {
+          id: `butler-${skeletonDay.day}-${nodeIndex}`,
+          name: node.name,
+          area: node.location ?? "",
+          indoor: false,
+          duration: node.stayMinutes ?? 120,
+          summary: node.tips ?? source?.content ?? node.location ?? "",
+          source: source?.url ?? "",
+        };
+      });
+    return {
+      day: skeletonDay.day,
+      places,
+      weather: weather[skeletonDay.day - 1],
+      note: skeletonDay.theme,
+    };
+  });
+}
+
 export function buildTripPlanOutput(input: PlanOutputBuilderInput): TripPlan {
   const dayCount = Math.max(1, input.days, input.plannedDays.length);
   const plannedDays = Array.from({ length: dayCount }, (_, index) => {

@@ -377,6 +377,13 @@ test("总览页展示未满足约束清单", () => {
   });
   assert.match(html, /未满足/);
   assert.match(html, /18,420/);
+
+  // 跨日/无 day 的违规只出现在总览，不应泄漏到任何一天的执行页。
+  const dayRights = pageFragments(html, "day-right");
+  for (const page of dayRights) {
+    assert.doesNotMatch(page, /未满足条件/);
+    assert.doesNotMatch(page, /18,420/);
+  }
 });
 
 test("受影响日期的执行提醒包含违规项", () => {
@@ -393,6 +400,11 @@ test("受影响日期的执行提醒包含违规项", () => {
   });
   const dayRight = pageFragments(html, "day-right")[1];
   assert.match(dayRight ?? "", /未满足条件/);
+
+  // 第 2 天的违规不应泄漏到第 1 天执行页。
+  const firstDayRight = pageFragments(html, "day-right")[0];
+  assert.doesNotMatch(firstDayRight ?? "", /未满足条件/);
+  assert.doesNotMatch(firstDayRight ?? "", /第 2 天比设定结束时间晚 1 小时 30 分/);
 });
 test("only renders verified closing citations from TripClosing.source", () => {
   const withoutSource: TripPlan = {

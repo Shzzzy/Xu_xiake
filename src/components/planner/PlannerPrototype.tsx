@@ -56,7 +56,7 @@ import {
 } from "@/lib/route-planner";
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
 import { recommendBudget } from "@/lib/budget-advice.functions";
-import { buildTripPlanFromSkeleton, buildTripPlanOutput } from "@/lib/plan-output-adapter";
+import { buildPlannedDaysFromSkeleton, buildTripPlanFromSkeleton, buildTripPlanOutput } from "@/lib/plan-output-adapter";
 import {
   validateTripBrief,
   type TripBrief as TravelerBudgetTripBrief,
@@ -2040,24 +2040,28 @@ function ItineraryScreen({
     weather,
     weatherState,
   ]);
-  const plannedDays = useMemo(
-    () =>
-      livePlan
-        ? livePlan.days.map((day) => ({
-            ...day,
-            weather: weather[day.day - 1],
-          }))
-        : routePlan
-          ? buildRouteFallbackDays({
-              route: routePlan,
-              days: brief.days,
-              destinationPlaces: destination.places,
-              weather,
-              pace: brief.pace,
-            })
-          : splitPlacesAcrossDays(destination.places, weather, brief.pace),
-    [brief.days, brief.pace, destination.places, livePlan, routePlan, weather],
-  );
+  const plannedDays = useMemo(() => {
+    if (butlerResult) {
+      // 管家模式：每日行程卡片直接由骨架映射，保证与 executionPlan 同源。
+      return buildPlannedDaysFromSkeleton(butlerResult.skeleton, weather, butlerResult.sources);
+    }
+    if (livePlan) {
+      return livePlan.days.map((day) => ({
+        ...day,
+        weather: weather[day.day - 1],
+      }));
+    }
+    if (routePlan) {
+      return buildRouteFallbackDays({
+        route: routePlan,
+        days: brief.days,
+        destinationPlaces: destination.places,
+        weather,
+        pace: brief.pace,
+      });
+    }
+    return splitPlacesAcrossDays(destination.places, weather, brief.pace);
+  }, [brief.days, brief.pace, butlerResult, destination.places, livePlan, routePlan, weather]);
 
   const executionPlan = useMemo(() => {
     if (butlerResult && routePlan) {
