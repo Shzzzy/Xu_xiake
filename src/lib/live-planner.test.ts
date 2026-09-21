@@ -8,6 +8,14 @@ import {
 } from "./live-planner.ts";
 import { normalizeTavilyResults } from "./tavily.server.ts";
 import { buildRoutePlan } from "./route-planner.ts";
+import {
+  runLivePlannerWith,
+  type LiveItineraryInput,
+} from "./live-planner.functions.ts";
+import type {
+  DiscoveredPlaceRecord,
+  PlacePersistenceRepository,
+} from "./place-discovery.ts";
 
 test("normalizes Tavily results and drops entries without a URL", () => {
   const results = normalizeTavilyResults({
@@ -282,4 +290,216 @@ test("source selection keeps destination and seed sources ahead of discovery", (
     discoveryByGroup.set(group, (discoveryByGroup.get(group) ?? 0) + 1);
   }
   assert.deepEqual([...discoveryByGroup.values()], [4, 2]);
+});
+
+
+// ---- Task 9：服务端函数接线与 BUTLER_PLANNER 开关的契约测试 ----
+
+type FetchImpl = typeof fetch;
+
+function responseWith(content: string): Response {
+  return Response.json({ choices: [{ message: { content } }] });
+}
+
+function tavilySearchResponse(): Response {
+  return Response.json({
+    results: [
+      { title: "黄山风景区", url: "https://example.com/huangshan", content: "安徽黄山风景区", score: 0.9 },
+      { title: "屯溪老街", url: "https://example.com/tunxi", content: "徽州老街", score: 0.8 },
+    ],
+  });
+}
+
+function requestMessageContent(body: unknown): string {
+  const parsed = body as { messages?: { content?: string }[] };
+  return (parsed.messages ?? []).map((message) => message.content ?? "").join("\n");
+}
+
+function createMemoryPlaceRepository(): PlacePersistenceRepository {
+  const rows = new Map<string, DiscoveredPlaceRecord>();
+  return {
+    async findDiscoveredPlaceByName(normalizedName: string) {
+      return [...rows.values()].filter((record) => record.normalizedName === normalizedName);
+    },
+    async upsertDiscoveredPlace(record: DiscoveredPlaceRecord) {
+      rows.set(record.canonicalKey, record);
+      return record;
+    },
+    async touchDiscoveredPlaceUsage(canonicalKey: string) {
+      return rows.get(canonicalKey) ?? null;
+    },
+  };
+}
+
+function buildLiveInput(overrides: Partial<LiveItineraryInput> = {}): LiveItineraryInput {
+  return {
+    destination: { id: "huangshan", name: "黄山", region: "安徽" },
+    startDate: "2026-10-01",
+    days: 2,
+    dailyHours: 6,
+    pace: "balanced",
+    interests: ["自然山水"],
+    origin: "北京",
+    startTime: "08:00",
+    endTime: "18:00",
+    totalBudget: 8000,
+    travelers: { adults: 2, children: 1 },
+    transport: null,
+    style: "direct",
+    route: {
+      origin: "北京",
+      destination: "黄山",
+      waypoints: [],
+      roundTrip: false,
+      returnMode: null,
+      legs: [
+        { id: "leg-1", from: "北京", to: "黄山", transport: "balanced", style: "direct", kind: "outbound" },
+      ],
+    },
+    weather: [
+      { date: "2026-10-01", code: 0, tempMax: 22, tempMin: 14, precipProb: 10 },
+      { date: "2026-10-02", code: 1, tempMax: 20, tempMin: 12, precipProb: 20 },
+    ],
+    seedPlaces: [
+      { id: "hs", name: "黄山风景区", area: "安徽", indoor: false, duration: 180, summary: "奇峰云海", source: "https://example.com/huangshan" },
+      { id: "tx", name: "屯溪老街", area: "安徽", indoor: false, duration: 90, summary: "徽州老街", source: "https://example.com/tunxi" },
+    ],
+    ...overrides,
+  };
+}
+
+function legacyPlanJson(): string {
+  return JSON.stringify({
+    title: "黄山两日",
+    summary: "游览黄山风景区。",
+    days: [
+      {
+        day: 1,
+        note: "首日游览",
+        places: [
+          {
+            id: "huangshan",
+            name: "黄山风景区",
+            area: "安徽",
+            indoor: false,
+            duration: 180,
+            summary: "奇峰云海",
+            source: "https://example.com/huangshan",
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function fakeLegacyFetch(): FetchImpl {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("tavily")) return tavilySearchResponse();
+    const content = requestMessageContent(JSON.parse(String(init?.body)));
+    if (content.includes("生成旅行回望与结束语")) {
+      return responseWith(JSON.stringify({ quoteId: null, message: "值得回味。" }));
+    }
+    return responseWith(legacyPlanJson());
+  }) as FetchImpl;
+}
+
+function butlerSkeletonJson(): string {
+  const day = (day: number, hotel: number) => ({
+    day,
+    theme: day === 1 ? "黄山核心游览" : "屯溪老街收尾",
+    nodes: [
+      { type: "attraction", startTime: "09:00", endTime: "11:30", name: "黄山风景区", stayMinutes: 150, estimatedCost: 230 },
+      { type: "meal", startTime: "12:00", endTime: "13:00", name: "徽菜午餐", estimatedCost: 120 },
+      { type: "attraction", startTime: "14:00", endTime: "15:30", name: "屯溪老街", stayMinutes: 90, estimatedCost: 60 },
+      { type: "hotel", startTime: "16:00", endTime: "16:30", name: "黄山温泉酒店", estimatedCost: hotel },
+      { type: "rest", startTime: "17:00", endTime: "17:30", name: "返回酒店休息", estimatedCost: 0 },
+    ],
+    radar: { physical: 60, childFit: 55, weatherSensitivity: 65, timeCost: 50, crowding: 70 },
+  });
+  return JSON.stringify({
+    title: "黄山两日徽州山水行",
+    summary: "两天游览黄山风景区与屯溪老街。",
+    days: [day(1, 680), day(2, 680)],
+  });
+}
+
+function fakeButlerFetch(): FetchImpl {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("tavily")) return tavilySearchResponse();
+    const content = requestMessageContent(JSON.parse(String(init?.body)));
+    if (content.includes("每日文案")) {
+      const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
+      return responseWith(
+        JSON.stringify({
+          day,
+          purpose: `第 ${day} 天的旅行目的。`,
+          highlights: ["重点1：说明", "重点2：说明", "重点3：说明"],
+          cautions: ["注意保暖", "带好雨具"],
+          history: [],
+        }),
+      );
+    }
+    if (content.includes("生成旅行回望与结束语")) {
+      return responseWith(JSON.stringify({ quoteId: null, message: "这是一段值得回味的旅程。" }));
+    }
+    return responseWith(butlerSkeletonJson());
+  }) as FetchImpl;
+}
+
+function failingButlerFetch(): FetchImpl {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("tavily")) return tavilySearchResponse();
+    const content = requestMessageContent(JSON.parse(String(init?.body)));
+    if (content.includes("生成逐日排程骨架")) {
+      throw new TypeError("network down");
+    }
+    if (content.includes("生成旅行回望与结束语")) {
+      return responseWith(JSON.stringify({ quoteId: null, message: "值得回味。" }));
+    }
+    return responseWith(legacyPlanJson());
+  }) as FetchImpl;
+}
+
+test("开关关闭时走原链路且 mode 为 legacy", async () => {
+  const result = await runLivePlannerWith(buildLiveInput(), {
+    env: { BUTLER_PLANNER: "0", DEEPSEEK_API_KEY: "k", TAVILY_API_KEY: "k" },
+    fetchImpl: fakeLegacyFetch(),
+    repository: createMemoryPlaceRepository(),
+  });
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  assert.equal(result.mode, "legacy");
+  assert.ok(result.plan.days.length > 0);
+});
+
+test("开关打开时走管家链路并带回违规清单", async () => {
+  const result = await runLivePlannerWith(buildLiveInput(), {
+    env: { BUTLER_PLANNER: "1", DEEPSEEK_API_KEY: "k", TAVILY_API_KEY: "k" },
+    fetchImpl: fakeButlerFetch(),
+    repository: createMemoryPlaceRepository(),
+  });
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  assert.equal(result.mode, "butler");
+  assert.ok(Array.isArray(result.violations));
+  assert.ok(result.skeleton.days.length > 0);
+  assert.ok(result.dayCopy.length > 0);
+  assert.ok(result.sources.length > 0);
+});
+
+test("管家骨架失败时退回 legacy 链路而不抛错", async () => {
+  const result = await runLivePlannerWith(buildLiveInput(), {
+    env: { BUTLER_PLANNER: "1", DEEPSEEK_API_KEY: "k", TAVILY_API_KEY: "k" },
+    fetchImpl: failingButlerFetch(),
+    repository: createMemoryPlaceRepository(),
+  });
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  assert.equal(result.mode, "legacy");
 });

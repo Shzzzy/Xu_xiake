@@ -1913,11 +1913,18 @@ function ItineraryScreen({
           weather,
           seedPlaces: destination.places,
           route: routePlan,
+          origin: brief.origin,
+          startTime: brief.startTime,
+          endTime: brief.endTime,
+          totalBudget: brief.totalBudget,
+          travelers: { adults: brief.adults, children: brief.children },
+          transport: routePlan.legs[0]?.transport ?? null,
+          style: routePlan.legs[0]?.style,
         },
       })
         .then((result) => {
           if (cancelled) return;
-          if (result.status === "ok") {
+          if (result.status === "ok" && result.mode === "legacy") {
             setLivePlan(result.plan);
             setLiveClosing(result.closing);
             setLiveSourceCount(result.sources.length);
@@ -1926,6 +1933,12 @@ function ItineraryScreen({
             if (result.discoveries.some((discovery) => discovery.status === "published")) {
               void refreshInspirationCatalog();
             }
+            return;
+          }
+          if (result.status === "ok") {
+            // 管家模式的结果由 Task 10 接入展示；先落到可理解的占位状态，避免误读旧结构。
+            setPlannerState("fallback");
+            setPlannerMessage("管家排程已生成，结果页展示将在后续版本接入。");
             return;
           }
           setPlannerState("fallback");
