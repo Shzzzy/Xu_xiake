@@ -33,3 +33,14 @@ test("阶段状态更新保持不可变并同步错误信息", () => {
   assert.deepEqual(failed.stages.route, { status: "failed", error: "路线查询失败" });
   assert.deepEqual(passed.stages.route, { status: "passed" });
 });
+
+test("目标阶段只有 pending 时才能启动，重复启动需要显式重置", () => {
+  const run = createPlanningRun("run-repeat");
+  const running = setStageStatus(run, "route", "running");
+  const passed = setStageStatus(run, "route", "passed");
+  const reset = setStageStatus(passed, "route", "pending");
+
+  assert.equal(canStartStage(running, "route"), false);
+  assert.equal(canStartStage(passed, "route"), false);
+  assert.equal(canStartStage(reset, "route"), true);
+});

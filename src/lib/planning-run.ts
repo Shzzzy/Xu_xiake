@@ -32,6 +32,7 @@ export function createPlanningRun(id: string): PlanningRun {
 
 export function canStartStage(run: PlanningRun, stage: PlanningStage): boolean {
   const stageIndex = PLANNING_STAGES.indexOf(stage);
+  if (run.stages[stage].status !== "pending") return false;
 
   return PLANNING_STAGES.slice(0, stageIndex).every((previousStage) =>
     COMPLETED_STAGE_STATUSES.has(run.stages[previousStage].status),
