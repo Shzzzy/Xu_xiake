@@ -22,9 +22,9 @@ export type GuidebookPageEvent = {
 };
 
 export type GuidebookStreamEvent =
-  | { type: "meta"; total: number; title: string; head: string }
+  | { type: "meta"; runId: string; total: number; title: string; head: string }
   | GuidebookPageEvent
-  | { type: "error"; message: string };
+  | { type: "error"; runId: string; message: string };
 
 export type GuidebookStreamOptions = GuidebookImageFetchOptions & {
   runId?: string;
@@ -77,6 +77,7 @@ export async function* streamGuidebookPages(
   const specs = guidebookPageSpecs(plan);
   yield emit({
     type: "meta",
+    runId,
     total: specs.length,
     title: plan.meta.title,
     head: renderGuidebookHead(plan, { forPreview: true }),

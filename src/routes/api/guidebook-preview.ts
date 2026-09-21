@@ -21,10 +21,11 @@ export const Route = createFileRoute("/api/guidebook-preview")({
   server: {
     handlers: {
       POST: async ({ request }) => {
+        const runId = request.headers.get("x-guidebook-run-id")?.trim() || "legacy";
         const contentLength = Number(request.headers.get("content-length"));
         if (Number.isFinite(contentLength) && contentLength > GUIDEBOOK_PREVIEW_MAX_BODY_BYTES) {
           return new Response(
-            encodeGuidebookEvent({ type: "error", message: "行程数据过大，无法预览路书。" }),
+            encodeGuidebookEvent({ type: "error", runId, message: "行程数据过大，无法预览路书。" }),
             { status: 413, headers: NDJSON_HEADERS },
           );
         }
@@ -34,12 +35,11 @@ export const Route = createFileRoute("/api/guidebook-preview")({
           plan = tripPlanSchema.parse(await request.json());
         } catch {
           return new Response(
-            encodeGuidebookEvent({ type: "error", message: "行程数据不合法，无法预览路书。" }),
+            encodeGuidebookEvent({ type: "error", runId, message: "行程数据不合法，无法预览路书。" }),
             { status: 400, headers: NDJSON_HEADERS },
           );
         }
 
-        const runId = request.headers.get("x-guidebook-run-id")?.trim() || "legacy";
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>({
           async start(controller) {
@@ -52,6 +52,7 @@ export const Route = createFileRoute("/api/guidebook-preview")({
                 encoder.encode(
                   encodeGuidebookEvent({
                     type: "error",
+                    runId,
                     message: error instanceof Error ? error.message : "路书预览生成失败。",
                   }),
                 ),

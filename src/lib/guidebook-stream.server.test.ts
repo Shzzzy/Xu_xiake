@@ -131,6 +131,7 @@ test("stream pushes meta first then every page in order", async () => {
 
   const [meta, ...pages] = events;
   assert.equal(meta?.type, "meta");
+  if (meta?.type === "meta") assert.equal(meta.runId, "legacy");
   assert.equal(pages.length, meta && meta.type === "meta" ? meta.total : -1);
   assert.equal(pages[0]?.type, "page");
   const ids = pages.flatMap((event) => (event.type === "page" ? [event.id] : []));
@@ -143,11 +144,18 @@ test("stream pushes meta first then every page in order", async () => {
 });
 
 test("stream events encode as one NDJSON line each", () => {
-  const line = encodeGuidebookEvent({ type: "meta", total: 9, title: "标题", head: "<style></style>" });
+  const line = encodeGuidebookEvent({
+    type: "meta",
+    runId: "run-1",
+    total: 9,
+    title: "标题",
+    head: "<style></style>",
+  });
   assert.equal(line.endsWith("\n"), true);
   assert.equal(line.trimEnd().split("\n").length, 1);
   assert.deepEqual(JSON.parse(line), {
     type: "meta",
+    runId: "run-1",
     total: 9,
     title: "标题",
     head: "<style></style>",
@@ -257,4 +265,20 @@ test("重复 checksum 页面被忽略", () => {
   assert.equal(acceptPage(state, pageEvent), true);
   assert.equal(acceptPage(state, pageEvent), false);
   assert.equal(acceptPage(state, { ...pageEvent, runId: "run-old", checksum: "checksum-b" }), false);
+});
+
+test("meta 和 error 协议都携带 runId", () => {
+  const events: unknown[] = [];
+  const iterator = streamGuidebookPages(plan, {
+    runId: "run-1",
+    onEvent: (event) => events.push(event),
+  });
+  void iterator;
+
+  const errorLine = encodeGuidebookEvent({ type: "error", runId: "run-1", message: "失败" });
+  assert.deepEqual(JSON.parse(errorLine), {
+    type: "error",
+    runId: "run-1",
+    message: "失败",
+  });
 });

@@ -12,9 +12,17 @@ export const GUIDEBOOK_PREVIEW_SCROLLING = "no";
 const PAPER_WIDTH_PX = 900;
 
 type StreamEvent =
-  | { type: "meta"; total: number; title: string; head: string }
+  | { type: "meta"; runId: string; total: number; title: string; head: string }
   | { type: "page"; runId: string; index: number; id: string; label: string; checksum: string; html: string }
-  | { type: "error"; message: string };
+  | { type: "error"; runId: string; message: string };
+
+export function shouldHandleStreamEvent(input: {
+  eventRunId: string;
+  latestRunId: string;
+  cancelled: boolean;
+}): boolean {
+  return !input.cancelled && input.eventRunId === input.latestRunId;
+}
 
 export function shouldAcceptPage(input: {
   runId: string;
@@ -117,6 +125,16 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
     };
 
     const handleEvent = (event: StreamEvent) => {
+      if (
+        !shouldHandleStreamEvent({
+          eventRunId: event.runId,
+          latestRunId: latestRunIdRef.current,
+          cancelled,
+        })
+      ) {
+        return;
+      }
+
       if (event.type === "meta") {
         setTotal(event.total);
         mountShell(event.head);
@@ -163,18 +181,19 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
         const decoder = new TextDecoder();
         let buffer = "";
         for (;;) {
+          if (cancelled) return;
           const { value, done } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
           for (const line of lines) {
+            if (cancelled) return;
             if (!line.trim()) continue;
             handleEvent(JSON.parse(line) as StreamEvent);
           }
-          if (cancelled) return;
         }
-        if (buffer.trim()) handleEvent(JSON.parse(buffer) as StreamEvent);
+        if (!cancelled && buffer.trim()) handleEvent(JSON.parse(buffer) as StreamEvent);
       } catch (cause) {
         if (cancelled || controller.signal.aborted) return;
         setError(cause instanceof Error ? cause.message : "路书预览生成失败");

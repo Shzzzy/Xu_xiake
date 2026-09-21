@@ -8,6 +8,7 @@ import {
   GUIDEBOOK_PREVIEW_SCROLLING,
   GUIDEBOOK_PREVIEW_SHELL_CLASS,
   shouldAcceptPage,
+  shouldHandleStreamEvent,
 } from "./GuidebookPreview";
 import { TravelerBudgetFields } from "./TravelerBudgetFields";
 import { requestAndApplyBudget } from "./budget-advice-apply";
@@ -333,4 +334,19 @@ test("路书预览使用固定高度外滚动壳且 iframe 不出现第二条滚
   assert.match(GUIDEBOOK_PREVIEW_SHELL_CLASS, /overflow-y-auto/);
   assert.match(GUIDEBOOK_PREVIEW_FRAME_CLASS, /overflow-hidden/);
   assert.equal(GUIDEBOOK_PREVIEW_SCROLLING, "no");
+});
+
+test("旧 run 的 meta/error 以及取消后的所有事件都不会处理", () => {
+  assert.equal(
+    shouldHandleStreamEvent({ eventRunId: "old", latestRunId: "current", cancelled: false }),
+    false,
+  );
+  assert.equal(
+    shouldHandleStreamEvent({ eventRunId: "current", latestRunId: "current", cancelled: false }),
+    true,
+  );
+  assert.equal(
+    shouldHandleStreamEvent({ eventRunId: "current", latestRunId: "current", cancelled: true }),
+    false,
+  );
 });
