@@ -25,6 +25,19 @@ export type PlannerCandidate = {
   source: string;
 };
 
+export type DestinationCandidate = {
+  id: string;
+  name: string;
+  address: string;
+  type: string;
+  location: AmapCoordinate;
+  publicUrl: string;
+  areaKey: string;
+};
+
+// 保留现有候选合并所需的摘要和来源字段，同时向新管线暴露结构化目的地信息。
+export type PlannerDestinationCandidate = DestinationCandidate & PlannerCandidate;
+
 export type TransportPlanningInput = {
   client: AmapClient | null;
   route: RoutePlan;
@@ -59,6 +72,7 @@ const LONG_DISTANCE_FLIGHT_KM = 800;
 const AMAP_POI_QUERIES = ["热门景点", "风景名胜", "博物馆", "公园", "地标"];
 const MAX_DESTINATION_CANDIDATES = 16;
 const MAX_TAVILY_SOURCES_PER_LEG = 3;
+const AREA_CLUSTER_RADIUS_KM = 15;
 
 const TRANSPORT_LABELS: Record<TransportMode, string> = {
   economy: "经济交通",
@@ -73,6 +87,20 @@ const TRANSPORT_LABELS: Record<TransportMode, string> = {
 
 function normalizeName(value: string): string {
   return value.trim().replace(/\s+/g, "").toLowerCase();
+}
+
+function buildAreaKey(address: string, location: AmapCoordinate): string {
+  const administrativeAreas = Array.from(
+    address.matchAll(/([\u4e00-\u9fa5]{2,10}?(?:省|自治区|市|区|县|旗))/gu),
+    (match) => match[1],
+  );
+  const area = administrativeAreas.slice(-2).join("-");
+  if (area) return normalizeName(area);
+
+  // 地址无法识别行政区时，按约 20 公里网格生成稳定的坐标区域键。
+  const longitudeCell = Math.floor(location[0] / 0.2);
+  const latitudeCell = Math.floor(location[1] / 0.2);
+  return `coord-${longitudeCell}-${latitudeCell}`;
 }
 
 function appendSummary(prefix: string, supplement: string): string {
@@ -119,42 +147,129 @@ export function mergePlannerCandidates(input: {
   return merged;
 }
 
-export function buildAmapDestinationCandidates(pois: AmapPoi[]): PlannerCandidate[] {
-  const candidates: PlannerCandidate[] = [];
-  const seen = new Set<string>();
+export function buildAmapDestinationCandidates(pois: AmapPoi[]): PlannerDestinationCandidate[] {
+  const candidates: PlannerDestinationCandidate[] = [];
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
 
   for (const poi of pois) {
     const poiType = poi.type.trim();
     if (/住宿服务|餐饮服务|购物服务|生活服务|公司企业/u.test(poiType)) continue;
 
+    const id = poi.id.trim();
     const name = poi.name.trim();
     const key = normalizeName(name);
-    if (!name || seen.has(key)) continue;
-    seen.add(key);
+    if ((id && seenIds.has(id)) || !name || seenNames.has(key)) continue;
+    if (id) seenIds.add(id);
+    seenNames.add(key);
 
-    const location = [poi.type, poi.address].map((value) => value.trim()).filter(Boolean).join("｜");
-    const source = poi.id.trim()
+    const location = [poi.type, poi.address]
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join("｜");
+    const publicUrl = poi.id.trim()
       ? `https://www.amap.com/place/${encodeURIComponent(poi.id.trim())}`
       : `https://www.amap.com/search?query=${encodeURIComponent(name)}`;
     candidates.push({
+      id,
       name,
+      address: poi.address.trim(),
+      type: poiType,
+      location: [...poi.location],
+      publicUrl,
+      areaKey: buildAreaKey(poi.address, poi.location),
       summary: location || "高德地点资料",
-      source,
+      source: publicUrl,
     });
   }
 
   return candidates.slice(0, MAX_DESTINATION_CANDIDATES);
 }
 
+export function clusterCandidates(
+  candidates: DestinationCandidate[],
+  maxPerDay: number,
+): DestinationCandidate[][] {
+  if (candidates.length === 0) return [];
+
+  const dayLimit = Math.max(1, Math.floor(maxPerDay));
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+  const areas: { areaKey: string; centroid: AmapCoordinate; candidates: DestinationCandidate[] }[] =
+    [];
+
+  for (const candidate of candidates) {
+    const id = candidate.id.trim();
+    const nameKey = normalizeName(candidate.name);
+    if ((id && seenIds.has(id)) || !nameKey || seenNames.has(nameKey)) continue;
+    if (id) seenIds.add(id);
+    seenNames.add(nameKey);
+
+    const areaKey = candidate.areaKey.trim() || buildAreaKey(candidate.address, candidate.location);
+    const sameArea = areas.filter((area) => area.areaKey === areaKey);
+    const nearestSameArea = findNearestArea(candidate.location, sameArea);
+    const nearestArea = nearestSameArea ?? findNearestArea(candidate.location, areas);
+
+    if (
+      nearestSameArea ||
+      (nearestArea &&
+        distanceKm(candidate.location, nearestArea.centroid) <= AREA_CLUSTER_RADIUS_KM)
+    ) {
+      const target = nearestSameArea ?? nearestArea;
+      if (!target) continue;
+      target.candidates.push(candidate);
+      const count = target.candidates.length;
+      target.centroid = [
+        (target.centroid[0] * (count - 1) + candidate.location[0]) / count,
+        (target.centroid[1] * (count - 1) + candidate.location[1]) / count,
+      ];
+      continue;
+    }
+
+    areas.push({
+      areaKey,
+      centroid: [...candidate.location],
+      candidates: [candidate],
+    });
+  }
+
+  return areas.flatMap((area) => {
+    const groups: DestinationCandidate[][] = [];
+    for (let index = 0; index < area.candidates.length; index += dayLimit) {
+      groups.push(area.candidates.slice(index, index + dayLimit));
+    }
+    return groups;
+  });
+}
+
+function findNearestArea<T extends { centroid: AmapCoordinate }>(
+  location: AmapCoordinate,
+  areas: T[],
+): T | undefined {
+  let nearest: T | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const area of areas) {
+    const currentDistance = distanceKm(location, area.centroid);
+    if (currentDistance < nearestDistance) {
+      nearest = area;
+      nearestDistance = currentDistance;
+    }
+  }
+
+  return nearest;
+}
+
 export async function searchAmapDestinationCandidates(input: {
   client: AmapClient | null;
   destination: string;
   region?: string;
-}): Promise<PlannerCandidate[]> {
+}): Promise<PlannerDestinationCandidate[]> {
   if (!input.client) return [];
   const destination = input.destination.trim();
   if (!destination) return [];
-  const city = destination || input.region?.trim() || "";
+  const region = input.region?.trim() ?? "";
+  const city = region || destination;
 
   const search = async (keywords: string, scopedCity?: string) => {
     try {
@@ -168,17 +283,20 @@ export async function searchAmapDestinationCandidates(input: {
     }
   };
 
-  const batches = await Promise.all([
-    search(destination, city),
-    search(destination),
+  // 先按用户地区执行精确查询，避免景区名被错误当作城市名解析。
+  const exactBatch = await search(destination, region || undefined);
+  const exactRetryBatch = region ? await search(destination) : [];
+  const genericBatches = await Promise.all([
     ...AMAP_POI_QUERIES.map((keywords) => search(keywords, city)),
     ...AMAP_POI_QUERIES.map((keywords) => search(destination + " " + keywords)),
   ]);
-  const contextTokens = [destination, input.region?.trim() ?? ""].filter(Boolean);
-  const relevant = batches.flatMap((batch) => batch ?? []).filter((poi) => {
-    const text = poi.name + " " + poi.address + " " + poi.type;
-    return contextTokens.some((token) => text.includes(token));
-  });
+  const contextTokens = [destination, region].filter(Boolean);
+  const relevant = [exactBatch, exactRetryBatch, ...genericBatches]
+    .flatMap((batch) => batch ?? [])
+    .filter((poi) => {
+      const text = poi.name + " " + poi.address + " " + poi.type;
+      return contextTokens.some((token) => text.includes(token));
+    });
 
   return buildAmapDestinationCandidates(relevant);
 }

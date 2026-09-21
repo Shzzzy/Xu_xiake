@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import type { AmapClient, AmapCoordinate, AmapPoi } from "./amap.server.ts";
 import {
   buildAmapDestinationCandidates,
+  clusterCandidates,
   mergePlannerCandidates,
   prepareRouteTransportPlan,
   resolvePlannerAmapKey,
+  searchAmapDestinationCandidates,
+  type DestinationCandidate,
 } from "./planner-context.server.ts";
 import type { RoutePlan, TransportMode } from "./route-planner.ts";
 
@@ -42,11 +45,9 @@ function createRoute(transport: TransportMode): RoutePlan {
   };
 }
 
-function createFakeAmapClient(): AmapClient {
+function createFakeAmapClient(searchPoi: AmapClient["searchPoi"] = async () => []): AmapClient {
   return {
-    async searchPoi() {
-      return [];
-    },
+    searchPoi,
     async fetchStaticMap() {
       return new Uint8Array();
     },
@@ -72,6 +73,47 @@ function createFakeAmapClient(): AmapClient {
     },
   };
 }
+
+test("特定景区名称优先按地区精确查询且不会返回北京地标", async () => {
+  const calls: { keywords: string; city?: string }[] = [];
+  const silverBeach: AmapPoi = {
+    id: "B-SILVER-BEACH",
+    name: "北海银滩",
+    type: "风景名胜;风景名胜;海滩",
+    address: "广西壮族自治区北海市银海区银滩中路",
+    location: [109.116, 21.405],
+  };
+  const forbiddenCity: AmapPoi = {
+    id: "B-FORBIDDEN-CITY",
+    name: "故宫博物院",
+    type: "风景名胜;博物馆",
+    address: "北京市东城区景山前街4号",
+    location: [116.397, 39.918],
+  };
+  const client = createFakeAmapClient(async (input) => {
+    calls.push({ keywords: input.keywords, city: input.city });
+    if (input.keywords === "北海银滩" && input.city === "广西") return [silverBeach];
+    return [forbiddenCity];
+  });
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "北海银滩",
+    region: "广西",
+  });
+
+  assert.deepEqual(
+    result.map((candidate) => candidate.name),
+    ["北海银滩"],
+  );
+  const exactIndex = calls.findIndex(
+    (call) => call.keywords === "北海银滩" && call.city === "广西",
+  );
+  const genericIndex = calls.findIndex((call) => call.keywords === "热门景点");
+  assert.ok(exactIndex >= 0);
+  assert.ok(genericIndex >= 0);
+  assert.ok(exactIndex < genericIndex);
+});
 
 test("高德 POI 转为候选景点，来源不含 key 且优先合并", () => {
   const pois: AmapPoi[] = [
@@ -110,6 +152,138 @@ test("高德 POI 转为候选景点，来源不含 key 且优先合并", () => {
     ["故宫博物院", "天坛公园"],
   );
   assert.match(merged[0]?.source ?? "", /amap\.com/);
+});
+
+test("高德候选过滤非景点并按名称稳定去重", () => {
+  const pois: AmapPoi[] = [
+    {
+      id: "B-WEST-LAKE",
+      name: "西湖风景名胜区",
+      type: "风景名胜;公园广场;公园",
+      address: "浙江省杭州市西湖区龙井路1号",
+      location: [120.15, 30.27],
+    },
+    {
+      id: "B-WEST-LAKE-DUPLICATE",
+      name: " 西湖风景名胜区 ",
+      type: "风景名胜;风景名胜",
+      address: "浙江省杭州市西湖区北山街",
+      location: [120.16, 30.28],
+    },
+    {
+      id: "B-WEST-LAKE",
+      name: "西湖景区",
+      type: "风景名胜;风景名胜",
+      address: "浙江省杭州市西湖区孤山路",
+      location: [120.14, 30.25],
+    },
+    {
+      id: "B-HOTEL",
+      name: "西湖国宾馆",
+      type: "住宿服务;宾馆酒店",
+      address: "浙江省杭州市西湖区杨公堤18号",
+      location: [120.13, 30.24],
+    },
+    {
+      id: "B-RESTAURANT",
+      name: "楼外楼",
+      type: "餐饮服务;中餐厅",
+      address: "浙江省杭州市西湖区孤山路30号",
+      location: [120.14, 30.25],
+    },
+    {
+      id: "B-SHOPPING",
+      name: "湖滨银泰",
+      type: "购物服务;商场",
+      address: "浙江省杭州市上城区延安路",
+      location: [120.17, 30.26],
+    },
+    {
+      id: "B-LIFE-SERVICE",
+      name: "西湖游客服务中心",
+      type: "生活服务;生活服务场所",
+      address: "浙江省杭州市西湖区龙井路",
+      location: [120.15, 30.27],
+    },
+  ];
+
+  const candidates = buildAmapDestinationCandidates(pois);
+
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.name),
+    ["西湖风景名胜区"],
+  );
+  assert.equal(candidates[0]?.id, "B-WEST-LAKE");
+  assert.deepEqual(candidates[0]?.location, [120.15, 30.27]);
+  assert.match(candidates[0]?.publicUrl ?? "", /^https:\/\/www\.amap\.com\/place\//);
+  assert.ok(candidates[0]?.areaKey);
+});
+
+test("同区域景点优先聚到同一天且不同城市不混组", () => {
+  const candidates: DestinationCandidate[] = [
+    {
+      id: "west-lake",
+      name: "西湖",
+      type: "风景名胜;湖泊",
+      address: "浙江省杭州市西湖区龙井路1号",
+      location: [120.15, 30.25],
+      publicUrl: "https://www.amap.com/place/west-lake",
+      areaKey: "杭州市-西湖区",
+    },
+    {
+      id: "sudi",
+      name: "苏堤春晓",
+      type: "风景名胜;风景名胜",
+      address: "浙江省杭州市西湖区苏堤",
+      location: [120.14, 30.24],
+      publicUrl: "https://www.amap.com/place/sudi",
+      areaKey: "杭州市-西湖区",
+    },
+    {
+      id: "lingyin",
+      name: "灵隐寺",
+      type: "风景名胜;寺庙道观",
+      address: "浙江省杭州市西湖区法云弄1号",
+      location: [120.1, 30.24],
+      publicUrl: "https://www.amap.com/place/lingyin",
+      areaKey: "杭州市-西湖区",
+    },
+    {
+      id: "forbidden-city",
+      name: "故宫博物院",
+      type: "风景名胜;博物馆",
+      address: "北京市东城区景山前街4号",
+      location: [116.397, 39.918],
+      publicUrl: "https://www.amap.com/place/forbidden-city",
+      areaKey: "北京市-东城区",
+    },
+    {
+      id: "temple-of-heaven",
+      name: "天坛公园",
+      type: "风景名胜;公园",
+      address: "北京市东城区天坛东里甲1号",
+      location: [116.407, 39.883],
+      publicUrl: "https://www.amap.com/place/temple-of-heaven",
+      areaKey: "北京市-东城区",
+    },
+  ];
+
+  const groups = clusterCandidates(candidates, 3);
+  const westLakeGroup = groups.find((group) =>
+    group.some((candidate) => candidate.name === "西湖"),
+  );
+  const beijingGroup = groups.find((group) =>
+    group.some((candidate) => candidate.name === "故宫博物院"),
+  );
+
+  assert.deepEqual(
+    westLakeGroup?.map((candidate) => candidate.name),
+    ["西湖", "苏堤春晓", "灵隐寺"],
+  );
+  assert.deepEqual(
+    beijingGroup?.map((candidate) => candidate.name),
+    ["故宫博物院", "天坛公园"],
+  );
 });
 
 test("高德 key 按现有环境变量优先级读取并跳过空值", () => {
