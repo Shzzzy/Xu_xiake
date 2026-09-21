@@ -360,7 +360,7 @@ test("骨架 day 编号 1..N 连续时不报连续性违规", () => {
     false,
   );
 });
-test("有交通餐饮但全天没有核心景点时仍报 DAY_COVERAGE", () => {
+test("直达模式允许无核心景点，边走边玩模式才强制核心景点", () => {
   const skeleton = skeletonWithNodes([
     { type: "transport", startTime: "09:00", endTime: "11:00", name: "前往市区", estimatedCost: 100 },
     { type: "meal", startTime: "12:00", endTime: "13:00", name: "午餐", estimatedCost: 200 },
@@ -368,13 +368,22 @@ test("有交通餐饮但全天没有核心景点时仍报 DAY_COVERAGE", () => {
   ]);
   const violations = validateSkeleton({
     skeleton,
-    brief: balancedBrief({}),
+    brief: balancedBrief({ style: "direct" }),
     candidates: ["黄山风景区"],
   });
+  assert.equal(
+    violations.some((item) => item.code === "DAY_COVERAGE" && /核心景点/.test(item.message)),
+    false,
+  );
 
+  const wanderViolations = validateSkeleton({
+    skeleton,
+    brief: balancedBrief({ style: "wander" }),
+    candidates: ["黄山风景区"],
+  });
   assert.ok(
-    violations.some(
-      (item) => item.code === "DAY_COVERAGE" && /核心景点/.test(item.message),
+    wanderViolations.some(
+      (item) => item.code === "DAY_COVERAGE" && /边走边玩/.test(item.message),
     ),
   );
 });

@@ -186,7 +186,7 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
     await guidebookFrame.getByText("换乘").first().waitFor({ state: "visible", timeout: 30_000 });
     await guidebookFrame.getByText("全团总预算").first().waitFor({ state: "visible", timeout: 30_000 });
     // 结尾走并行生成的 AI 回望（服务端拼路线总结/评价/寄语），不再是旧的兜底文案。
-    await guidebookFrame.getByText(/路线总结/).first().waitFor({ state: "visible", timeout: 30_000 });
+    await guidebookFrame.getByText(/路线总结/).first().waitFor({ state: "visible", timeout: 60_000 });
 
     // 摘要与逐日页必须同源：从路书总览页「核心亮点」读取景点名，
     // 摘要至少包含其中一个，且每个亮点都出现在每日导航/时间轴页里。

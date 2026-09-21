@@ -186,6 +186,7 @@ function buildValidationBrief(input: ButlerPlanInput): {
   totalBudget: number;
   pace: Pace;
   transport: TransportMode | null;
+  style?: TravelStyle;
   waypoints: string[];
   destination: string;
 } {
@@ -196,6 +197,7 @@ function buildValidationBrief(input: ButlerPlanInput): {
     totalBudget: input.totalBudget,
     pace: input.pace,
     transport: input.transport,
+    style: input.style,
     waypoints: input.route.waypoints,
     destination: input.destination,
   };

@@ -1,6 +1,6 @@
 import type { PlannerSkeleton } from "./planner-skeleton";
 import type { Pace } from "./planner";
-import type { TransportMode } from "./route-planner";
+import type { TransportMode, TravelStyle } from "./route-planner";
 
 export type ViolationCode =
   | "TIME_WINDOW"
@@ -30,6 +30,7 @@ export type PlanValidationInput = {
     totalBudget: number;
     pace: Pace;
     transport: TransportMode | null;
+    style?: TravelStyle;
     waypoints: string[];
     destination: string;
   };
@@ -289,11 +290,12 @@ export function validateSkeleton(input: PlanValidationInput): PlanViolation[] {
     const hasCoreAttraction = day.nodes.some(
       (node) => node.type === "attraction" || node.type === "night-activity",
     );
-    if (!hasCoreAttraction) {
+    // 只有“边走边玩”要求每天有景点；“直达”由模型按到达后的剩余时间决定。
+    if (brief.style === "wander" && !hasCoreAttraction) {
       violations.push({
         code: "DAY_COVERAGE",
         day: day.day,
-        message: `第 ${day.day} 天没有围绕核心景点安排行程`,
+        message: `第 ${day.day} 天未按边走边玩安排核心景点`,
         detail: { expected: "至少 1 个景点或夜游节点", actual: "0 个景点节点" },
       });
     }
