@@ -22,7 +22,6 @@ type TimelineSegment = {
   stayMinutes?: number;
 };
 
-const MIN_ATTRACTION_MINUTES = 75;
 const HOTEL_MINUTES = 30;
 const TRANSFER_MINUTES = 20;
 

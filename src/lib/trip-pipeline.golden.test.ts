@@ -8,6 +8,7 @@ import type { PlanningStage } from "./planning-run.ts";
 import type { TransportPlanLeg } from "./transport-planner.server.ts";
 import { destinations } from "../data/planner-destinations.ts";
 import { buildTripPlanFromSkeleton } from "./plan-output-adapter.ts";
+import { renderGuidebookHtml } from "./guidebook-html.server.ts";
 
 const sichuanPois: AmapPoi[] = [
   {
@@ -561,14 +562,31 @@ test("Golden：同日多条交通 leg 都进入时间轴与预算引用", async 
 
 });
 test("Golden：短窗口非移动日可降级休整且不阻断整单", async () => {
-  const result = await planWithButler(buildShortWindowButlerInput(), {
-    apiKey: "k",
-    fetchImpl: buildSimpleButlerFetch({
-      selections: [
-        { day: 1, candidateId: "sc-kuanzhai", sequence: 1, stayMinutes: 150, reason: "测试物理容量不足" },
-      ],
-    }),
-  });
+  const input = buildShortWindowButlerInput();
+  const fetchImpl = (async (_request: RequestInfo | URL, init?: RequestInit) => {
+    const content = requestText(init);
+    if (content.includes("景点选择")) {
+      return responseWithJson({
+        selections: [
+          { day: 1, candidateId: "sc-kuanzhai", sequence: 1, stayMinutes: 150, reason: "测试物理容量不足" },
+        ],
+      });
+    }
+    if (content.includes("每日文案")) {
+      return responseWithJson({
+        day: 1,
+        purpose: "宽窄巷子深度游。",
+        highlights: ["宽窄巷子：历史街区", "当地体验：按节点安排", "机动休息：保留体力"],
+        cautions: ["关注天气变化", "按现场开放时间调整"],
+        history: [],
+      });
+    }
+    if (content.includes("生成旅行回望与结束语")) {
+      return responseWithJson({ quoteId: null, message: "这是一段值得回味的旅程。" });
+    }
+    return responseWithJson([]);
+  }) as typeof fetch;
+  const result = await planWithButler(input, { apiKey: "k", fetchImpl });
 
   if (result.status === "failed") {
     assert.fail(`短窗口计划不应失败：${result.stage} / ${result.reason}`);
@@ -579,6 +597,39 @@ test("Golden：短窗口非移动日可降级休整且不阻断整单", async ()
   assert.ok(onlyDay);
   assert.equal(onlyDay.nodes.some((node) => node.type === "attraction"), false);
   assert.ok(onlyDay.nodes.some((node) => node.type === "rest"));
+  assert.equal(onlyDay.theme.includes("宽窄巷子"), false);
+
+  const destination = {
+    ...(destinations.find((item) => item.id === "huangshan") ?? destinations[0]),
+    id: "short-window",
+    name: "成都",
+    region: "四川省",
+  };
+  const plan = buildTripPlanFromSkeleton({
+    skeleton: result.skeleton,
+    dayCopy: result.dayCopy,
+    candidates: result.candidates,
+    failedDays: result.failedDays,
+    budgetPlan: result.budget,
+    transportLegs: result.transportLegs,
+    violations: result.violations,
+    origin: input.origin,
+    destination,
+    startDate: input.startDate,
+    travelers: input.travelers,
+    totalBudget: input.totalBudget,
+    pace: input.pace,
+    interests: input.interests,
+    roundTrip: false,
+    returnMode: "fast",
+    routePlan: input.route,
+    weather: input.weather,
+    closing: result.closing,
+    transportPreference: "balanced",
+  });
+  assert.equal(plan.days[0]?.theme.includes("宽窄巷子"), false);
+  assert.equal(plan.days[0]?.purpose.includes("宽窄巷子"), false);
+  assert.doesNotMatch(renderGuidebookHtml(plan), /宽窄巷子/);
 });
 
 test("Golden：260 分钟窗口可完整安排 150 分钟已选景点", async () => {

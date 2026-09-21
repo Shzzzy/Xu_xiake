@@ -699,17 +699,10 @@ function buildSkeletonFromSelection(
         stayMinutes: Math.max(45, Math.min(480, Math.round(selection.stayMinutes))),
       };
     });
-    const theme =
-      attractions.length > 0
-        ? attractions.map((attraction) => attraction.name).join(" · ")
-        : transportLegs.length > 0
-          ? `长途移动：${transportLegs.map((leg) => `${leg.from}至${leg.to}`).join("，")}`
-          : "城市自由休整";
-
     const nodes = buildDayTimeline({
       day: {
         day,
-        theme,
+        theme: "行程安排",
         nodes: [],
         radar: buildDayRadar(input.pace),
       },
@@ -720,11 +713,21 @@ function buildSkeletonFromSelection(
       restMinutes: transportMinutes > 0 ? 20 : 30,
       attractions,
     });
+    const plannedNodes = expandTransportNodes(nodes, transportLegs);
+    const scheduledAttractions = plannedNodes.filter(
+      (node) => node.type === "attraction" || node.type === "night-activity",
+    );
+    const theme =
+      scheduledAttractions.length > 0
+        ? scheduledAttractions.map((node) => node.name).join(" · ")
+        : transportLegs.length > 0
+          ? `交通移动：${transportLegs.map((leg) => `${leg.from}至${leg.to}`).join("，")}`
+          : "周边漫步 / 自由活动与休整";
 
     return {
       day,
       theme,
-      nodes: expandTransportNodes(nodes, transportLegs),
+      nodes: plannedNodes,
       radar: buildDayRadar(input.pace),
     };
   });

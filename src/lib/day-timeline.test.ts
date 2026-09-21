@@ -206,6 +206,7 @@ test("260 分钟窗口优先安排 150 分钟景点并只保留必要午餐", ()
 
   assert.ok(nodes.some((node) => node.type === "attraction" && node.name === "150 分钟核心景点"));
   assert.equal(nodes.filter((node) => node.type === "meal").length, 1);
+  assert.equal(nodes.find((node) => node.type === "meal")?.name, "午餐");
   assert.ok(nodes.some((node) => node.type === "rest"));
   assertTimelineWindow(nodes, "08:00", "12:20");
 });

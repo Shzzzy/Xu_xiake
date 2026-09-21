@@ -102,3 +102,21 @@ test("16 天详细路书可通过共享 schema", () => {
 test("超过 16 天的行程被共享 schema 拒绝", () => {
   assert.throws(() => tripPlanSchema.parse(makePlan(17)), /too_big|最多|16/);
 });
+test("共享 schema 往返保留时间轴节点 legId", () => {
+  const plan = makePlan(1);
+  plan.days[0]!.nodes[0] = {
+    startTime: "08:00",
+    endTime: "12:20",
+    timeLabel: "08:00–12:20",
+    type: "transport",
+    name: "北京前往成都 · 飞机",
+    transportMode: "flight",
+    transportMinutes: 260,
+    legId: "leg-1",
+    estimatedCost: 5_000,
+    navigation: null,
+  };
+
+  const parsed = tripPlanSchema.parse(JSON.parse(JSON.stringify(plan)));
+  assert.equal(parsed.days[0]?.nodes[0]?.legId, "leg-1");
+});

@@ -38,6 +38,7 @@ const timelineNodeSchema = z.object({
     .enum(["economy", "balanced", "speed", "train", "flight", "drive", "bus", "ship"])
     .optional(),
   transportMinutes: z.number().optional(),
+  legId: z.string().optional(),
   stayMinutes: z.number().optional(),
   estimatedCost: z.number(),
   tips: z.string().optional(),

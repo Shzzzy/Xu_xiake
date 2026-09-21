@@ -478,6 +478,20 @@ function allocateDeterministicBudgetToDays(days: TripDay[], plan: BudgetPlan): T
     estimatedCost: day.nodes.reduce((total, node) => total + node.estimatedCost, 0),
   }));
 }
+function copyMentionsUnscheduledAttraction(
+  copy: PlannerDayCopy,
+  scheduledNames: string[],
+  candidates: readonly { name: string }[],
+): boolean {
+  const scheduled = new Set(scheduledNames);
+  const text = [
+    copy.purpose,
+    ...copy.highlights,
+    ...copy.cautions,
+    ...copy.history.flatMap((entry) => [entry.title, entry.background, entry.source]),
+  ].join("\n");
+  return candidates.some((candidate) => !scheduled.has(candidate.name) && text.includes(candidate.name));
+}
 /**
  * 把管家生成的骨架、每日文案与路线数据组装为统一的 TripPlan。
  * 文案失败只降级对应日期，不改变骨架中已经冻结的时间、节点与费用。
@@ -490,8 +504,15 @@ export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): Tri
     ? normalizeDeterministicBudget(input.budgetPlan)
     : null;
   const days = input.skeleton.days.map((skeletonDay, index) => {
-    const analysisFailed = failedDays.has(skeletonDay.day);
-    const copy = analysisFailed ? undefined : copyByDay.get(skeletonDay.day);
+    const scheduledNames = skeletonDay.nodes
+      .filter((node) => node.type === "attraction" || node.type === "night-activity")
+      .map((node) => node.name);
+    const rawCopy = failedDays.has(skeletonDay.day) ? undefined : copyByDay.get(skeletonDay.day);
+    const rejectedCopy =
+      rawCopy !== undefined &&
+      copyMentionsUnscheduledAttraction(rawCopy, scheduledNames, input.candidates ?? []);
+    const analysisFailed = failedDays.has(skeletonDay.day) || rejectedCopy;
+    const copy = rejectedCopy ? undefined : rawCopy;
     const fallback = buildFallbackDayCopy(skeletonDay, input.pace);
     const nodes = skeletonDay.nodes.map(toTripTimelineNode);
     const estimatedCost = nodes.reduce((sum, node) => sum + node.estimatedCost, 0);
