@@ -566,7 +566,7 @@ test("重排后仍不合规则带违规清单返回", async () => {
   const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: fakeFetchOverBudgetAlways() });
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
-  assert.equal(result.attempts, 3);           // 1 正常 + 1 技术重试额度未用 + 1 重排
+  assert.equal(result.attempts, 2);           // 实际发起 2 次骨架调用（首次 + 重排），上限仍是 3
   assert.ok(result.violations.some((item) => item.code === "OVER_BUDGET"));
 });
 
@@ -621,6 +621,8 @@ git commit -m "feat: orchestrate butler plan with validation and repair"
     travelers: Travelers; totalBudget: number; pace: Pace; interests: string[];
     roundTrip: boolean; returnMode: ReturnMode; routePlan: RoutePlan;
     weather: WeatherDay[]; closing?: TripClosing; violations?: PlanViolation[];
+    /** 文案生成失败的日期（day 序号），用于在路书上标注「本页分析未能生成」。 */
+    failedDays?: number[];
     transportPreference: "economy" | "balanced" | "speed";
   }): TripPlan;
   ```
