@@ -22,6 +22,12 @@ type StreamEvent =
   | { type: "page"; runId: string; index: number; id: string; label: string; checksum: string; html: string }
   | { type: "error"; runId: string; message: string };
 
+export async function assertGuidebookPageChecksum(html: string, checksum: string): Promise<void> {
+  if (!(await verifyGuidebookPageChecksum(html, checksum))) {
+    throw new Error("路书页面 checksum 校验失败，已停止预览。");
+  }
+}
+
 export function shouldHandleStreamEvent(input: {
   eventRunId: string;
   latestRunId: string;
@@ -153,7 +159,7 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
         return;
       }
       if (event.type === "page") {
-        if (!(await verifyGuidebookPageChecksum(event.html, event.checksum))) return;
+        await assertGuidebookPageChecksum(event.html, event.checksum);
         const accepted = shouldAcceptPage({
           runId: event.runId,
           latestRunId: latestRunIdRef.current,
