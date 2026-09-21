@@ -54,6 +54,7 @@ import {
   type TravelStyle,
 } from "@/lib/route-planner";
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
+import { recommendBudget } from "@/lib/budget-advice.functions";
 import { buildTripPlanOutput } from "@/lib/plan-output-adapter";
 import { validateTripBrief, type TripBrief as TravelerBudgetTripBrief } from "@/lib/travel-plan";
 import {
@@ -705,6 +706,40 @@ function KnownPlanScreen({
       (leg) => (brief.legPreferences[leg.id]?.transport ?? leg.transport) === "drive",
     ) ?? false;
 
+  const recommendBudgetFn = useServerFn(recommendBudget);
+  const [budgetAdvicePending, setBudgetAdvicePending] = useState(false);
+
+  // AI 推荐预算：点击一次请求一次，成功后回填总预算，失败或未配置时只提示、不改动预算。
+  const requestBudgetAdvice = async () => {
+    setBudgetAdvicePending(true);
+    try {
+      const destination = resolveTripDestination(brief, inspirationCatalog);
+      const primaryTransport =
+        routePlan?.legs.find((leg) => leg.kind === "outbound")?.transport ?? "balanced";
+      const result = await recommendBudgetFn({
+        data: {
+          destination: destination.name,
+          region: destination.region,
+          days: brief.days,
+          travelers: { adults: brief.adults, children: brief.children },
+          transportPreference: transportLabels[primaryTransport],
+          pace: brief.pace,
+          interests: brief.interests,
+        },
+      });
+      if (result.status === "ok") {
+        onBrief({ ...brief, totalBudget: result.advice.total });
+        toast.success(`建议预算 ¥${result.advice.total}`);
+      } else {
+        toast.error(result.message);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "预算建议失败");
+    } finally {
+      setBudgetAdvicePending(false);
+    }
+  };
+
   const submitBrief = () => {
     const errors = validateTripBrief(brief, { selfDrive: usesDrive });
     setBriefErrors(errors);
@@ -914,6 +949,11 @@ function KnownPlanScreen({
                 setBriefErrors([]);
               }}
               showVehicleEnergy={usesDrive}
+              budgetAdvice={{
+                pending: budgetAdvicePending,
+                hint: "按人数、天数与交通方式估算",
+                onRequest: requestBudgetAdvice,
+              }}
             />
           </div>
 

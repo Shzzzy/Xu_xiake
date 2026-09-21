@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { BudgetCategory, TimelineNodeType, TripPlan } from "../../../lib/travel-plan";
+import type { BudgetCategory, TimelineNodeType, TripBrief, TripPlan } from "../../../lib/travel-plan";
+import { TravelerBudgetFields } from "./TravelerBudgetFields";
 import { TripOverview } from "./TripOverview";
 
 function category(amount: number, ratio: number): BudgetCategory {
@@ -170,4 +171,24 @@ test("renders every formal execution node type", () => {
   for (const label of Object.values(labels)) {
     assert.match(html, new RegExp(label));
   }
+});
+
+test("全团总预算旁提供 AI 推荐按钮", () => {
+  const briefFixture: TripBrief = {
+    adults: 2,
+    children: 0,
+    totalBudget: 8000,
+    startTime: "09:00",
+    endTime: "18:00",
+    vehicleEnergy: null,
+  };
+
+  const html = renderToStaticMarkup(
+    <TravelerBudgetFields
+      value={briefFixture}
+      onChange={() => {}}
+      budgetAdvice={{ pending: false, onRequest: () => {} }}
+    />,
+  );
+  assert.match(html, /AI 推荐/);
 });

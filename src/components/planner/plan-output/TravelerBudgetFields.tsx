@@ -11,10 +11,13 @@ export function TravelerBudgetFields({
   value,
   onChange,
   showVehicleEnergy = false,
+  budgetAdvice,
 }: {
   value: TripBrief;
   onChange: (value: TripBrief) => void;
   showVehicleEnergy?: boolean;
+  // AI 推荐由调用方注入：没有该 prop 时按钮不渲染（未知目的地向导里不出现）。
+  budgetAdvice?: { pending: boolean; hint?: string; onRequest: () => void };
 }) {
   const update = (patch: Partial<TripBrief>) => onChange({ ...value, ...patch });
 
@@ -71,6 +74,22 @@ export function TravelerBudgetFields({
               元
             </span>
           </div>
+          {budgetAdvice ? (
+            <span className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                aria-label="AI 推荐预算"
+                disabled={budgetAdvice.pending}
+                onClick={budgetAdvice.onRequest}
+                className="rounded-md border border-[var(--v-line)] bg-[var(--v-soft)] px-3 py-1 text-xs font-medium text-[var(--v-accent)] hover:bg-[var(--v-line)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {budgetAdvice.pending ? "正在估算…" : "AI 推荐"}
+              </button>
+              {budgetAdvice.hint ? (
+                <span className="text-xs text-[var(--v-muted)]">{budgetAdvice.hint}</span>
+              ) : null}
+            </span>
+          ) : null}
         </label>
       </div>
 
