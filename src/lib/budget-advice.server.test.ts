@@ -118,3 +118,21 @@ test("预算建议把总额校正为分类合计", () => {
 
   assert.equal(advice.total, 9350);
 });
+
+test("预算建议忽略模型 JSON 外层包装字段", () => {
+  const advice = parseBudgetAdvice(JSON.stringify({
+    type: "json_object",
+    total: 10800,
+    categories: {
+      transport: 7200,
+      lodging: 800,
+      food: 1500,
+      tickets: 800,
+      other: 500,
+    },
+    note: "含往返交通与 1 晚住宿",
+  }));
+
+  assert.equal(advice.total, 10800);
+  assert.equal(advice.categories.transport, 7200);
+});

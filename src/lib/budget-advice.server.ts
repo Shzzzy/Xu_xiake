@@ -16,8 +16,7 @@ const budgetAdviceSchema = z
       })
       .strict(),
     note: z.string().min(1),
-  })
-  .strict();
+  });
 
 export type BudgetAdvice = {
   total: number;
