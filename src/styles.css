@@ -2491,3 +2491,18 @@
   background: color-mix(in oklab, var(--v-accent) 38%, transparent);
   background-clip: padding-box;
 }
+/* 预览壳独占外滚动；iframe 只承载整张连续纸张，不产生第二条滚动条。 */
+.guidebook-preview-shell {
+  overscroll-behavior: contain;
+  contain: layout paint;
+}
+
+.guidebook-preview-frame {
+  display: block;
+  overflow: hidden;
+  scrollbar-width: none;
+}
+
+.guidebook-preview-frame::-webkit-scrollbar {
+  display: none;
+}

@@ -3,6 +3,12 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { BudgetCategory, TimelineNodeType, TripBrief, TripPlan } from "../../../lib/travel-plan";
 import { buildPlannedDaysFromSkeleton } from "../../../lib/plan-output-adapter";
+import {
+  GUIDEBOOK_PREVIEW_FRAME_CLASS,
+  GUIDEBOOK_PREVIEW_SCROLLING,
+  GUIDEBOOK_PREVIEW_SHELL_CLASS,
+  shouldAcceptPage,
+} from "./GuidebookPreview";
 import { TravelerBudgetFields } from "./TravelerBudgetFields";
 import { requestAndApplyBudget } from "./budget-advice-apply";
 import { TripOverview } from "./TripOverview";
@@ -305,4 +311,26 @@ test("butler 骨架映射为与骨架同源的每日行程，只保留景点节�
   assert.equal(plannedDays[0].places[0].source, "https://example.test/xihu");
   assert.equal(plannedDays[0].places[0].duration, 170);
   assert.equal(plannedDays[0].weather?.code, 1);
+});
+
+test("旧 runId 和重复 checksum 的页面不会写入当前预览", () => {
+  const seen = new Set<string>();
+  assert.equal(
+    shouldAcceptPage({ runId: "new", latestRunId: "current", checksum: "a", seen }),
+    false,
+  );
+  assert.equal(
+    shouldAcceptPage({ runId: "current", latestRunId: "current", checksum: "a", seen }),
+    true,
+  );
+  assert.equal(
+    shouldAcceptPage({ runId: "current", latestRunId: "current", checksum: "a", seen }),
+    false,
+  );
+});
+
+test("路书预览使用固定高度外滚动壳且 iframe 不出现第二条滚动条", () => {
+  assert.match(GUIDEBOOK_PREVIEW_SHELL_CLASS, /overflow-y-auto/);
+  assert.match(GUIDEBOOK_PREVIEW_FRAME_CLASS, /overflow-hidden/);
+  assert.equal(GUIDEBOOK_PREVIEW_SCROLLING, "no");
 });

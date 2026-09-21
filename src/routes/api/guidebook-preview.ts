@@ -39,11 +39,12 @@ export const Route = createFileRoute("/api/guidebook-preview")({
           );
         }
 
+        const runId = request.headers.get("x-guidebook-run-id")?.trim() || "legacy";
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>({
           async start(controller) {
             try {
-              for await (const event of streamGuidebookPages(plan, { signal: request.signal })) {
+              for await (const event of streamGuidebookPages(plan, { signal: request.signal, runId })) {
                 controller.enqueue(encoder.encode(encodeGuidebookEvent(event)));
               }
             } catch (error) {

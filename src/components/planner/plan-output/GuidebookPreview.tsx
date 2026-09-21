@@ -3,13 +3,30 @@ import { AlertCircle, LoaderCircle } from "lucide-react";
 import type { TripPlan } from "@/lib/travel-plan";
 import { ExportGuidebookButton } from "./ExportGuidebookButton";
 
+export const GUIDEBOOK_PREVIEW_SHELL_CLASS =
+  "guidebook-preview-scroll guidebook-preview-shell relative w-full overflow-y-auto";
+export const GUIDEBOOK_PREVIEW_FRAME_CLASS =
+  "guidebook-preview-frame overflow-hidden border-0 bg-transparent shadow-none";
+export const GUIDEBOOK_PREVIEW_SCROLLING = "no";
 /** 预览纸张宽度：与 A4 的 210mm 等宽，保证屏幕预览和 PDF 排版一致。 */
 const PAPER_WIDTH_PX = 900;
 
 type StreamEvent =
   | { type: "meta"; total: number; title: string; head: string }
-  | { type: "page"; index: number; id: string; label: string; html: string }
+  | { type: "page"; runId: string; index: number; id: string; label: string; checksum: string; html: string }
   | { type: "error"; message: string };
+
+export function shouldAcceptPage(input: {
+  runId: string;
+  latestRunId: string;
+  checksum: string;
+  seen: Set<string>;
+}): boolean {
+  if (input.runId !== input.latestRunId) return false;
+  if (!input.checksum || input.seen.has(input.checksum)) return false;
+  input.seen.add(input.checksum);
+  return true;
+}
 
 /**
  * 路书逐页预览。
@@ -17,9 +34,11 @@ type StreamEvent =
  * 服务端按页推送 NDJSON，每收到一页就追加进同源 iframe，因此用户能一页页看到
  * 路书成形；全部页面到齐后才允许导出 PDF。
  */
-export function GuidebookPreview({ plan }: { plan: TripPlan }) {
+export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: string }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const latestRunIdRef = useRef("");
+  const seenChecksumsRef = useRef<Set<string>>(new Set());
   const [total, setTotal] = useState(0);
   const [received, setReceived] = useState(0);
   const [label, setLabel] = useState<string | null>(null);
@@ -32,6 +51,12 @@ export function GuidebookPreview({ plan }: { plan: TripPlan }) {
     if (!frame || !shell) return;
 
     let cancelled = false;
+    const requestRunId =
+      runId?.trim() ||
+      globalThis.crypto?.randomUUID?.() ||
+      `guidebook-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    latestRunIdRef.current = requestRunId;
+    seenChecksumsRef.current = new Set();
     const controller = new AbortController();
     let bodyObserver: ResizeObserver | null = null;
     let shellObserver: ResizeObserver | null = null;
@@ -99,6 +124,13 @@ export function GuidebookPreview({ plan }: { plan: TripPlan }) {
         return;
       }
       if (event.type === "page") {
+        const accepted = shouldAcceptPage({
+          runId: event.runId,
+          latestRunId: latestRunIdRef.current,
+          checksum: event.checksum,
+          seen: seenChecksumsRef.current,
+        });
+        if (!accepted) return;
         appendPage(event.html);
         setLabel(event.label);
         setReceived((value) => value + 1);
@@ -116,7 +148,10 @@ export function GuidebookPreview({ plan }: { plan: TripPlan }) {
       try {
         const response = await fetch("/api/guidebook-preview", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            "x-guidebook-run-id": requestRunId,
+          },
           body: JSON.stringify(plan),
           signal: controller.signal,
         });
@@ -152,7 +187,7 @@ export function GuidebookPreview({ plan }: { plan: TripPlan }) {
       bodyObserver?.disconnect();
       shellObserver?.disconnect();
     };
-  }, [planKey]);
+  }, [planKey, runId]);
 
   const ready = total > 0 && received >= total && !error;
   const progress = total > 0 ? Math.round((received / total) * 100) : 0;
@@ -201,13 +236,13 @@ export function GuidebookPreview({ plan }: { plan: TripPlan }) {
         />
       </div>
 
-      <div ref={shellRef} className="guidebook-preview-scroll relative w-full overflow-y-auto" style={{ height: "min(78vh, 900px)", overflowAnchor: "none" }}>
+      <div ref={shellRef} className={GUIDEBOOK_PREVIEW_SHELL_CLASS} style={{ height: "clamp(420px, 78vh, 900px)", overflowAnchor: "none" }}>
         <iframe
           ref={frameRef}
           title="路书预览"
           sandbox="allow-same-origin"
-          scrolling="no"
-          className="border-0 bg-transparent shadow-none"
+          scrolling={GUIDEBOOK_PREVIEW_SCROLLING}
+          className={GUIDEBOOK_PREVIEW_FRAME_CLASS}
           style={{ width: PAPER_WIDTH_PX, height: 0 }}
         />
       </div>

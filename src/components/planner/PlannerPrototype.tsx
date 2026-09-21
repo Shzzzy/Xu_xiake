@@ -2132,6 +2132,13 @@ function ItineraryScreen({
       closing: liveClosing ?? undefined,
     });
   }, [brief, butlerResult, destination, liveClosing, livePlan?.title, plannedDays, resolvedRoutePlan, weather]);
+  // 每次执行计划变化都分配新的预览 runId，旧流即使晚到也无法写入当前纸张。
+  const previewRunId = useMemo(
+    () =>
+      globalThis.crypto?.randomUUID?.() ||
+      `guidebook-preview-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    [executionPlan],
+  );
   const rainDays = weather.filter((day) => {
     const tone = classifyWeather(day.code).tone;
     return tone === "rain" || tone === "storm";
@@ -2279,7 +2286,7 @@ function ItineraryScreen({
               </div>
             }
           >
-            <GuidebookPreview plan={executionPlan} />
+            <GuidebookPreview plan={executionPlan} runId={previewRunId} />
           </Suspense>
         </div>
       ) : null}
