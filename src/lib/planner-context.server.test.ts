@@ -106,15 +106,16 @@ test("特定景区名称优先按地区精确查询且不会返回北京地标",
     result.map((candidate) => candidate.name),
     ["北海银滩"],
   );
-  const exactIndex = calls.findIndex(
-    (call) => call.keywords === "北海银滩",
-  );
+  const exactIndex = calls.findIndex((call) => call.keywords === "北海银滩");
   const genericIndex = calls.findIndex((call) => call.keywords === "热门景点");
   assert.ok(exactIndex >= 0);
   assert.ok(genericIndex >= 0);
   assert.ok(exactIndex < genericIndex);
   assert.equal(calls[exactIndex]?.city, undefined);
-  assert.equal(calls.some((call) => call.city === "广西"), false);
+  assert.equal(
+    calls.some((call) => call.city === "广西"),
+    false,
+  );
 });
 
 test("AMap city 只接受可识别城市或 adcode", async () => {
@@ -154,7 +155,10 @@ test("AMap city 只接受可识别城市或 adcode", async () => {
     const exactCall = calls.find((call) => call.keywords === scenario.destination);
     assert.equal(exactCall?.city, scenario.expectedCity);
     if (scenario.expectedCity === undefined) {
-      assert.equal(calls.some((call) => call.city === scenario.region), false);
+      assert.equal(
+        calls.some((call) => call.city === scenario.region),
+        false,
+      );
     }
   }
 });
@@ -188,6 +192,311 @@ test("无城市重试丢弃目的地同名但地区冲突的异地结果", async
     result.map((candidate) => candidate.id),
     ["B-BEIHai-SILVER-BEACH"],
   );
+});
+
+test("adcode 目标按行政前缀过滤同省异市同名 POI", async () => {
+  const jinhuaWestLake: AmapPoi = {
+    id: "JH-WEST-LAKE",
+    name: "西湖风景名胜区",
+    type: "风景名胜;风景名胜",
+    address: "浙江省金华市婺城区",
+    location: [119.65, 29.08],
+    province: "浙江省",
+    city: "金华市",
+    district: "婺城区",
+    adcode: "330700",
+  };
+  const hangzhouWestLake: AmapPoi = {
+    id: "HZ-WEST-LAKE",
+    name: "西湖风景名胜区",
+    type: "风景名胜;风景名胜",
+    address: "浙江省杭州市西湖区",
+    location: [120.15, 30.25],
+    province: "浙江省",
+    city: "杭州市",
+    district: "西湖区",
+    adcode: "330106",
+  };
+  const client = createFakeAmapClient(async (input) =>
+    input.keywords === "西湖风景名胜区" ? [jinhuaWestLake, hangzhouWestLake] : [],
+  );
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "西湖风景名胜区",
+    region: "330100",
+  });
+
+  assert.deepEqual(
+    result.map((candidate) => candidate.id),
+    ["HZ-WEST-LAKE"],
+  );
+});
+
+test("省级 region 无法唯一判城时保留同名异市候选，避免错误首条挤掉正确城市", async () => {
+  const jinhuaWestLake: AmapPoi = {
+    id: "JH-WEST-LAKE",
+    name: "西湖风景名胜区",
+    type: "风景名胜;风景名胜",
+    address: "浙江省金华市婺城区",
+    location: [119.65, 29.08],
+    province: "浙江省",
+    city: "金华市",
+    district: "婺城区",
+    adcode: "330700",
+  };
+  const hangzhouWestLake: AmapPoi = {
+    id: "HZ-WEST-LAKE",
+    name: "西湖风景名胜区",
+    type: "风景名胜;风景名胜",
+    address: "浙江省杭州市西湖区",
+    location: [120.15, 30.25],
+    province: "浙江省",
+    city: "杭州市",
+    district: "西湖区",
+    adcode: "330106",
+  };
+  const client = createFakeAmapClient(async (input) =>
+    input.keywords === "西湖风景名胜区" ? [jinhuaWestLake, hangzhouWestLake] : [],
+  );
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "西湖风景名胜区",
+    region: "浙江省",
+  });
+
+  // 省级信息不能唯一判定城市，必须保留同名异市候选，不能按名称先到先得。
+  assert.deepEqual(result.map((candidate) => candidate.id).sort(), [
+    "HZ-WEST-LAKE",
+    "JH-WEST-LAKE",
+  ]);
+});
+
+test("短地址 POI 使用结构化城市字段通过，不因文本缺城市名被误杀", async () => {
+  const lingyinTemple: AmapPoi = {
+    id: "HZ-LINGYIN-TEMPLE",
+    name: "灵隐寺",
+    type: "风景名胜;寺庙道观",
+    address: "法云弄1号",
+    location: [120.1, 30.24],
+    province: "浙江省",
+    city: "杭州市",
+    district: "西湖区",
+    adcode: "330106",
+  };
+  const client = createFakeAmapClient(async (input) =>
+    input.keywords === "灵隐寺" ? [lingyinTemple] : [],
+  );
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "灵隐寺",
+    region: "浙江省杭州市",
+  });
+
+  assert.deepEqual(
+    result.map((candidate) => candidate.id),
+    ["HZ-LINGYIN-TEMPLE"],
+  );
+});
+
+test("直辖市简称会作为城市查询上下文", async () => {
+  const calls: { keywords: string; city?: string }[] = [];
+  const forbiddenCity: AmapPoi = {
+    id: "BJ-FORBIDDEN-CITY",
+    name: "故宫博物院",
+    type: "风景名胜;博物馆",
+    address: "景山前街4号",
+    location: [116.397, 39.918],
+    province: "北京市",
+    city: "北京市",
+    district: "东城区",
+    adcode: "110101",
+  };
+  const client = createFakeAmapClient(async (input) => {
+    calls.push({ keywords: input.keywords, city: input.city });
+    return input.keywords === "故宫博物院" ? [forbiddenCity] : [];
+  });
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "故宫博物院",
+    region: "北京",
+  });
+
+  assert.equal(calls.find((call) => call.keywords === "故宫博物院")?.city, "北京");
+  assert.deepEqual(
+    result.map((candidate) => candidate.id),
+    ["BJ-FORBIDDEN-CITY"],
+  );
+});
+
+test("多城市目的地支持任一结构化城市或文本地点匹配", async () => {
+  const makePoi = (input: {
+    id: string;
+    city: string;
+    district: string;
+    adcode: string;
+    address: string;
+    location: AmapCoordinate;
+  }): AmapPoi => ({
+    id: input.id,
+    name: "水乡古镇",
+    type: "风景名胜;古镇",
+    address: input.address,
+    location: input.location,
+    province: "浙江省",
+    city: input.city,
+    district: input.district,
+    adcode: input.adcode,
+  });
+  const hangzhou = makePoi({
+    id: "HZ-ANCIENT-TOWN",
+    city: "杭州市",
+    district: "西湖区",
+    adcode: "330106",
+    address: "浙江省杭州市西湖区",
+    location: [120.15, 30.25],
+  });
+  const shaoxing = makePoi({
+    id: "SX-ANCIENT-TOWN",
+    city: "绍兴市",
+    district: "越城区",
+    adcode: "330602",
+    address: "浙江省绍兴市越城区",
+    location: [120.58, 30.03],
+  });
+  const wuzhen = makePoi({
+    id: "WZ-ANCIENT-TOWN",
+    city: "嘉兴市",
+    district: "桐乡市",
+    adcode: "330483",
+    address: "浙江省嘉兴市桐乡市乌镇",
+    location: [120.49, 30.74],
+  });
+  const ningbo = makePoi({
+    id: "NB-ANCIENT-TOWN",
+    city: "宁波市",
+    district: "海曙区",
+    adcode: "330203",
+    address: "浙江省宁波市海曙区",
+    location: [121.55, 29.87],
+  });
+  const client = createFakeAmapClient(async (input) =>
+    input.keywords === "水乡古镇" ? [hangzhou, shaoxing, wuzhen, ningbo] : [],
+  );
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "水乡古镇",
+    region: "杭州 · 绍兴 · 乌镇",
+  });
+
+  assert.deepEqual(result.map((candidate) => candidate.id).sort(), [
+    "HZ-ANCIENT-TOWN",
+    "SX-ANCIENT-TOWN",
+    "WZ-ANCIENT-TOWN",
+  ]);
+});
+
+test("区县和县级市目标按结构化行政字段过滤", async () => {
+  const westLakeTemple: AmapPoi = {
+    id: "HZ-XIHU-TEMPLE",
+    name: "灵隐寺",
+    type: "风景名胜;寺庙道观",
+    address: "法云弄1号",
+    location: [120.1, 30.24],
+    province: "浙江省",
+    city: "杭州市",
+    district: "西湖区",
+    adcode: "330106",
+  };
+  const yuhangTemple: AmapPoi = {
+    id: "HZ-YUHANG-TEMPLE",
+    name: "灵隐寺",
+    type: "风景名胜;寺庙道观",
+    address: "余杭塘路1号",
+    location: [120.0, 30.3],
+    province: "浙江省",
+    city: "杭州市",
+    district: "余杭区",
+    adcode: "330110",
+  };
+  const districtClient = createFakeAmapClient(async (input) =>
+    input.keywords === "灵隐寺" ? [westLakeTemple, yuhangTemple] : [],
+  );
+
+  const districtResult = await searchAmapDestinationCandidates({
+    client: districtClient,
+    destination: "灵隐寺",
+    region: "浙江省杭州市西湖区",
+  });
+
+  assert.deepEqual(
+    districtResult.map((candidate) => candidate.id),
+    ["HZ-XIHU-TEMPLE"],
+  );
+
+  const yiwuOldStreet: AmapPoi = {
+    id: "YW-OLD-STREET",
+    name: "老街",
+    type: "风景名胜;特色街区",
+    address: "稠城街道",
+    location: [120.08, 29.31],
+    province: "浙江省",
+    city: "义乌市",
+    district: "",
+    adcode: "330782",
+  };
+  const jinhuaOldStreet: AmapPoi = {
+    id: "JH-OLD-STREET",
+    name: "老街",
+    type: "风景名胜;特色街区",
+    address: "婺城区",
+    location: [119.65, 29.08],
+    province: "浙江省",
+    city: "金华市",
+    district: "婺城区",
+    adcode: "330702",
+  };
+  const countyClient = createFakeAmapClient(async (input) =>
+    input.keywords === "老街" ? [yiwuOldStreet, jinhuaOldStreet] : [],
+  );
+
+  const countyResult = await searchAmapDestinationCandidates({
+    client: countyClient,
+    destination: "老街",
+    region: "浙江省义乌市",
+  });
+
+  assert.deepEqual(
+    countyResult.map((candidate) => candidate.id),
+    ["YW-OLD-STREET"],
+  );
+});
+
+test("同名不同 areaKey 的候选在合并阶段不会互相去重", () => {
+  const merged = mergePlannerCandidates({
+    primary: [
+      {
+        name: "西湖风景名胜区",
+        summary: "杭州西湖",
+        source: "https://www.amap.com/place/hz-west-lake",
+        areaKey: "杭州-西湖",
+      },
+      {
+        name: "西湖风景名胜区",
+        summary: "金华同名地点",
+        source: "https://www.amap.com/place/jh-west-lake",
+        areaKey: "金华-婺城",
+      },
+    ],
+    fallback: [],
+  });
+
+  assert.equal(merged.length, 2);
+  assert.deepEqual(merged.map((candidate) => candidate.areaKey).sort(), ["杭州-西湖", "金华-婺城"]);
 });
 
 test("高德 POI 转为候选景点，来源不含 key 且优先合并", () => {
@@ -392,17 +701,15 @@ test("相同 areaKey 超过聚类距离时仍会拆分大型区县", () => {
 });
 
 test("maxPerDay 非有限值时回退为每个候选一天", () => {
-  const candidates: DestinationCandidate[] = ["清风园", "明月湖", "望江亭"].map(
-    (name, index) => ({
-      id: `candidate-${index}`,
-      name,
-      type: "风景名胜;风景名胜",
-      address: "浙江省杭州市西湖区",
-      location: [120.14 + index * 0.01, 30.24 + index * 0.01],
-      publicUrl: `https://www.amap.com/place/candidate-${index}`,
-      areaKey: "杭州市-西湖区",
-    }),
-  );
+  const candidates: DestinationCandidate[] = ["清风园", "明月湖", "望江亭"].map((name, index) => ({
+    id: `candidate-${index}`,
+    name,
+    type: "风景名胜;风景名胜",
+    address: "浙江省杭州市西湖区",
+    location: [120.14 + index * 0.01, 30.24 + index * 0.01],
+    publicUrl: `https://www.amap.com/place/candidate-${index}`,
+    areaKey: "杭州市-西湖区",
+  }));
 
   for (const maxPerDay of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
     const groups = clusterCandidates(candidates, maxPerDay);

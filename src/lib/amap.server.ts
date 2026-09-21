@@ -160,6 +160,10 @@ export type AmapPoi = {
   type: string;
   address: string;
   location: AmapCoordinate;
+  province?: string;
+  city?: string;
+  district?: string;
+  adcode?: string;
   tel?: string;
   distanceMeters?: number;
 };
@@ -394,12 +398,20 @@ function normalizePoi(value: unknown): AmapPoi | null {
   const name = asText(poi.name);
   if (!location || !name) return null;
   const distanceMeters = asNumber(poi.distance);
+  const province = asOptionalText(poi.pname);
+  const city = asOptionalText(poi.cityname);
+  const district = asOptionalText(poi.adname);
+  const adcode = asOptionalText(poi.adcode);
   return {
     id: asText(poi.id),
     name,
     type: asText(poi.type),
     address: asText(poi.address),
     location,
+    ...(province ? { province } : {}),
+    ...(city ? { city } : {}),
+    ...(district ? { district } : {}),
+    ...(adcode ? { adcode } : {}),
     ...(asOptionalText(poi.tel) ? { tel: asText(poi.tel) } : {}),
     ...(distanceMeters !== undefined ? { distanceMeters } : {}),
   };

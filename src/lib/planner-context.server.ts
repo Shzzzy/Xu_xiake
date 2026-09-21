@@ -23,6 +23,7 @@ export type PlannerCandidate = {
   name: string;
   summary: string;
   source: string;
+  areaKey?: string;
 };
 
 export type DestinationCandidate = {
@@ -126,6 +127,98 @@ function normalizeName(value: string): string {
   return value.trim().replace(/\s+/g, "").toLowerCase();
 }
 
+const ADMIN_SUFFIX_PATTERN =
+  /(?:特别行政区|壮族自治区|回族自治区|维吾尔自治区|自治区|自治州|地区|盟|省|市|区|县|旗)$/u;
+const GENERIC_REGION_TOKENS = new Set([
+  "自由输入",
+  "不限",
+  "任意",
+  "不知道",
+  "待定",
+  "其他",
+  "其他地区",
+]);
+const DIRECT_ADMIN_PROVINCE_KEYS = new Set(["北京", "天津", "上海", "重庆"]);
+
+function normalizeAdminName(value: string): string {
+  let normalized = normalizeName(value);
+  let previous = "";
+  while (normalized && normalized !== previous) {
+    previous = normalized;
+    normalized = normalized.replace(ADMIN_SUFFIX_PATTERN, "");
+  }
+  return normalized;
+}
+
+function stripProvincePrefix(value: string): string {
+  let normalized = normalizeAdminName(value);
+  for (const province of PROVINCE_ALIASES) {
+    for (const alias of province.aliases) {
+      const aliasKey = normalizeName(alias);
+      if (aliasKey && normalized.startsWith(aliasKey) && normalized.length > aliasKey.length) {
+        normalized = normalized.slice(aliasKey.length);
+        break;
+      }
+    }
+  }
+  return normalized;
+}
+
+function stripAdministrativePrefix(value: string): string {
+  let normalized = normalizeName(value);
+  for (const province of PROVINCE_ALIASES) {
+    for (const alias of province.aliases) {
+      const aliasKey = normalizeName(alias);
+      if (aliasKey && normalized.startsWith(aliasKey) && normalized.length > aliasKey.length) {
+        normalized = normalized.slice(aliasKey.length);
+        break;
+      }
+    }
+  }
+  normalized = normalized.replace(/^.*?市/u, "");
+  normalized = normalized.replace(/^.*?(?:自治州|地区|盟)/u, "");
+  return normalized;
+}
+
+function extractAdcodes(value: string): string[] {
+  return Array.from(value.matchAll(/(?:^|\D)(\d{6})(?=\D|$)/gu), (match) => match[1]);
+}
+
+function extractExplicitCityNames(value: string): string[] {
+  return Array.from(normalizeName(value).matchAll(/[\u4e00-\u9fa5]{2,12}?市/gu), (match) =>
+    stripProvincePrefix(match[0]),
+  ).filter(Boolean);
+}
+
+function extractDirectAdminCityNames(value: string): string[] {
+  const normalized = normalizeName(value);
+  return PROVINCE_ALIASES.filter(
+    (province) =>
+      DIRECT_ADMIN_PROVINCE_KEYS.has(province.key) &&
+      province.aliases.some((alias) => normalized.includes(normalizeName(alias))),
+  ).map((province) => province.key);
+}
+
+function extractExplicitDistrictNames(value: string): string[] {
+  return Array.from(
+    normalizeName(value).matchAll(/[\u4e00-\u9fa5]{2,14}?(?:区|县|旗)/gu),
+    (match) => normalizeAdminName(stripAdministrativePrefix(match[0])),
+  ).filter(Boolean);
+}
+
+function extractLocalityTokens(value: string): string[] {
+  const tokens = normalizeName(value).split(/[·,，;；/|、\s]+/u);
+  const names = new Set<string>();
+  for (const token of tokens) {
+    if (!token || /^\d{6}$/u.test(token) || GENERIC_REGION_TOKENS.has(token)) continue;
+    if (findProvinces(token).length > 0) continue;
+    const name = normalizeAdminName(token);
+    if (name.length < 2 || name.length > 4) continue;
+    names.add(name);
+  }
+  return [...names];
+}
+
 function extractAmapCityQuery(...values: (string | undefined)[]): string | undefined {
   for (const value of values) {
     const adcode = value?.match(/(?:^|\D)(\d{6})(?:\D|$)/u)?.[1];
@@ -147,6 +240,11 @@ function extractAmapCityQuery(...values: (string | undefined)[]): string | undef
     if (normalizedCity.endsWith("市")) return normalizedCity;
   }
 
+  for (const value of values) {
+    const directAdmin = extractDirectAdminCityNames(value ?? "")[0];
+    if (directAdmin) return directAdmin;
+  }
+
   return undefined;
 }
 
@@ -157,31 +255,161 @@ function findProvinces(value: string): string[] {
   ).map((province) => province.key);
 }
 
-function isRelevantAmapPoi(poi: AmapPoi, destination: string, region: string): boolean {
-  const poiText = normalizeName([poi.name, poi.address, poi.type].join(" "));
+type AmapAdministrativeTarget = {
+  provinceKeys: Set<string>;
+  cityNames: Set<string>;
+  districtNames: Set<string>;
+  localityHints: Set<string>;
+  adcodes: string[];
+};
+
+function buildAmapAdministrativeTarget(
+  destination: string,
+  region: string,
+): AmapAdministrativeTarget {
+  const cityNames = new Set([
+    ...extractExplicitCityNames(region),
+    ...extractDirectAdminCityNames(region),
+    ...extractExplicitCityNames(destination),
+    ...extractDirectAdminCityNames(destination),
+  ]);
+  const districtNames = new Set([
+    ...extractExplicitDistrictNames(region),
+    ...extractExplicitDistrictNames(destination),
+  ]);
+  const localityHints = new Set([...cityNames, ...districtNames, ...extractLocalityTokens(region)]);
+  return {
+    provinceKeys: new Set([...findProvinces(region), ...findProvinces(destination)]),
+    cityNames,
+    districtNames,
+    localityHints,
+    adcodes: [...new Set([...extractAdcodes(region), ...extractAdcodes(destination)])],
+  };
+}
+
+function isAdcodeCompatible(expected: string, actual: string): boolean {
+  if (!/^\d{6}$/u.test(expected) || !/^\d{6}$/u.test(actual)) return false;
+  if (expected === actual) return true;
+  if (expected.slice(2) === "0000" || actual.slice(2) === "0000") {
+    return expected.slice(0, 2) === actual.slice(0, 2);
+  }
+  if (expected.endsWith("00") || actual.endsWith("00")) {
+    return expected.slice(0, 4) === actual.slice(0, 4);
+  }
+  return false;
+}
+
+function isTrustedAmapQuery(
+  queryCity: string | undefined,
+  target: AmapAdministrativeTarget,
+): boolean {
+  const normalizedQuery = queryCity?.trim();
+  if (!normalizedQuery) return false;
+  const queryAdcode = extractAdcodes(normalizedQuery)[0];
+  if (queryAdcode && target.adcodes.some((expected) => isAdcodeCompatible(expected, queryAdcode))) {
+    return true;
+  }
+  const normalizedCity = normalizeAdminName(normalizedQuery);
+  return target.cityNames.has(normalizedCity) || target.localityHints.has(normalizedCity);
+}
+
+function textHasAnyTargetToken(text: string, tokens: Iterable<string>): boolean {
+  for (const token of tokens) {
+    if (token && text.includes(token)) return true;
+  }
+  return false;
+}
+
+function isRelevantAmapPoi(
+  poi: AmapPoi,
+  destination: string,
+  region: string,
+  searchContext: { queryCity?: string } = {},
+): boolean {
+  const poiText = normalizeName(
+    [poi.name, poi.address, poi.type, poi.province, poi.city, poi.district, poi.adcode]
+      .filter((value): value is string => Boolean(value))
+      .join(" "),
+  );
   const destinationText = normalizeName(destination);
   if (!destinationText || !poiText.includes(destinationText)) return false;
 
-  const expectedProvince = findProvinces(region)[0] ?? findProvinces(destination)[0];
-  const mentionedProvinces = findProvinces(poiText);
-  if (
-    expectedProvince &&
-    mentionedProvinces.length > 0 &&
-    !mentionedProvinces.includes(expectedProvince)
-  ) {
-    return false;
+  const target = buildAmapAdministrativeTarget(destination, region);
+  if (target.provinceKeys.size > 0) {
+    const mentionedProvinces = new Set([
+      ...findProvinces(poi.province ?? ""),
+      ...findProvinces(poi.address),
+      ...findProvinces(poiText),
+    ]);
+    if (
+      mentionedProvinces.size > 0 &&
+      ![...mentionedProvinces].some((province) => target.provinceKeys.has(province))
+    ) {
+      return false;
+    }
   }
 
-  const expectedCity = extractAmapCityQuery(region, destination);
-  if (expectedCity && !/^\d{6}$/u.test(expectedCity)) {
-    const cityToken = normalizeName(expectedCity.replace(/市$/u, ""));
-    if (cityToken && !poiText.includes(cityToken)) return false;
+  const trustedQuery = isTrustedAmapQuery(searchContext.queryCity, target);
+  const poiAdcode = extractAdcodes(poi.adcode ?? "")[0] ?? extractAdcodes(poi.address)[0];
+  if (target.adcodes.length > 0) {
+    if (poiAdcode) {
+      if (!target.adcodes.some((expected) => isAdcodeCompatible(expected, poiAdcode))) {
+        return false;
+      }
+    } else if (!trustedQuery) {
+      // 目标只给 adcode 时，没有 POI adcode 就无从核对；无城市查询上下文则拒绝。
+      return false;
+    }
+  }
+
+  if (target.localityHints.size > 0) {
+    const poiCity = normalizeAdminName(poi.city ?? "");
+    const poiDistrict = normalizeAdminName(poi.district ?? "");
+    const cityMatches = Boolean(poiCity && target.localityHints.has(poiCity));
+    const districtMatches = Boolean(poiDistrict && target.localityHints.has(poiDistrict));
+    const textMatchesTarget = textHasAnyTargetToken(poiText, target.localityHints);
+    const textMatchesCity = textHasAnyTargetToken(poiText, target.cityNames);
+    const textMatchesDistrict = textHasAnyTargetToken(poiText, target.districtNames);
+    const hasStructuredLocality = Boolean(poiCity || poiDistrict);
+
+    if (hasStructuredLocality) {
+      if (!cityMatches && !districtMatches && !textMatchesTarget) return false;
+      if (
+        target.cityNames.size > 0 &&
+        poiCity &&
+        !target.cityNames.has(poiCity) &&
+        !textMatchesCity
+      ) {
+        return false;
+      }
+      if (
+        target.districtNames.size > 0 &&
+        poiDistrict &&
+        !target.districtNames.has(poiDistrict) &&
+        !textMatchesDistrict
+      ) {
+        return false;
+      }
+    } else if (!textMatchesTarget && !trustedQuery) {
+      // 结构化字段缺失时保守放行，避免短地址合法 POI 因文本信息不足被误杀。
+    }
   }
 
   return true;
 }
 
-function buildAreaKey(address: string, location: AmapCoordinate): string {
+function buildAreaKey(
+  address: string,
+  location: AmapCoordinate,
+  admin?: Pick<AmapPoi, "city" | "district">,
+): string {
+  const structuredAreas = [admin?.city, admin?.district]
+    .map((value) => normalizeAdminName(value ?? ""))
+    .filter(Boolean);
+  if (structuredAreas.length > 0) {
+    return normalizeName(structuredAreas.slice(-2).join("-"));
+  }
+
   const administrativeAreas = Array.from(
     address.matchAll(/([\u4e00-\u9fa5]{2,10}?(?:省|自治区|市|区|县|旗))/gu),
     (match) => match[1],
@@ -221,19 +449,33 @@ export function mergePlannerCandidates(input: {
   supplements?: SearchResult[];
 }): PlannerCandidate[] {
   const merged: PlannerCandidate[] = [];
-  const seenNames = new Set<string>();
+  const seenKeys = new Set<string>();
+  const primaryNames = new Set(input.primary.map((candidate) => normalizeName(candidate.name)));
 
-  for (const candidate of [...input.primary, ...input.fallback]) {
-    const key = normalizeName(candidate.name);
-    if (!key || seenNames.has(key)) continue;
-    seenNames.add(key);
+  for (const candidate of input.primary) {
+    const nameKey = normalizeName(candidate.name);
+    const key = `${nameKey}|${candidate.areaKey ?? ""}`;
+    if (!nameKey || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    merged.push({ ...candidate });
+  }
+
+  for (const candidate of input.fallback) {
+    const nameKey = normalizeName(candidate.name);
+    const key = `${nameKey}|${candidate.areaKey ?? ""}`;
+    if (!nameKey || primaryNames.has(nameKey) || seenKeys.has(key)) continue;
+    seenKeys.add(key);
     merged.push({ ...candidate });
   }
 
   for (const supplement of input.supplements ?? []) {
-    const target = merged.find((candidate) => isSameCandidateName(candidate.name, supplement.title));
-    if (!target || !supplement.content.trim()) continue;
-    target.summary = appendSummary(target.summary, supplement.content);
+    if (!supplement.content.trim()) continue;
+    const targets = merged.filter((candidate) =>
+      isSameCandidateName(candidate.name, supplement.title),
+    );
+    for (const target of targets) {
+      target.summary = appendSummary(target.summary, supplement.content);
+    }
   }
 
   return merged;
@@ -242,7 +484,7 @@ export function mergePlannerCandidates(input: {
 export function buildAmapDestinationCandidates(pois: AmapPoi[]): PlannerDestinationCandidate[] {
   const candidates: PlannerDestinationCandidate[] = [];
   const seenIds = new Set<string>();
-  const seenNames = new Set<string>();
+  const seenKeys = new Set<string>();
 
   for (const poi of pois) {
     const poiType = poi.type.trim();
@@ -250,10 +492,11 @@ export function buildAmapDestinationCandidates(pois: AmapPoi[]): PlannerDestinat
 
     const id = poi.id.trim();
     const name = poi.name.trim();
-    const key = normalizeName(name);
-    if ((id && seenIds.has(id)) || !name || seenNames.has(key)) continue;
+    const areaKey = buildAreaKey(poi.address, poi.location, poi);
+    const key = `${normalizeName(name)}|${areaKey}`;
+    if ((id && seenIds.has(id)) || !name || seenKeys.has(key)) continue;
     if (id) seenIds.add(id);
-    seenNames.add(key);
+    seenKeys.add(key);
 
     const location = [poi.type, poi.address]
       .map((value) => value.trim())
@@ -269,7 +512,7 @@ export function buildAmapDestinationCandidates(pois: AmapPoi[]): PlannerDestinat
       type: poiType,
       location: [...poi.location],
       publicUrl,
-      areaKey: buildAreaKey(poi.address, poi.location),
+      areaKey,
       summary: location || "高德地点资料",
       source: publicUrl,
     });
@@ -286,18 +529,19 @@ export function clusterCandidates(
 
   const dayLimit = Number.isFinite(maxPerDay) ? Math.max(1, Math.floor(maxPerDay)) : 1;
   const seenIds = new Set<string>();
-  const seenNames = new Set<string>();
+  const seenKeys = new Set<string>();
   const areas: { areaKey: string; centroid: AmapCoordinate; candidates: DestinationCandidate[] }[] =
     [];
 
   for (const candidate of candidates) {
     const id = candidate.id.trim();
     const nameKey = normalizeName(candidate.name);
-    if ((id && seenIds.has(id)) || !nameKey || seenNames.has(nameKey)) continue;
-    if (id) seenIds.add(id);
-    seenNames.add(nameKey);
-
     const areaKey = candidate.areaKey.trim() || buildAreaKey(candidate.address, candidate.location);
+    const key = `${nameKey}|${areaKey}`;
+    if ((id && seenIds.has(id)) || !nameKey || seenKeys.has(key)) continue;
+    if (id) seenIds.add(id);
+    seenKeys.add(key);
+
     const sameArea = areas.filter((area) => area.areaKey === areaKey);
     const nearestSameArea = findNearestArea(candidate.location, sameArea);
     const nearestArea = findNearestArea(candidate.location, areas);
@@ -388,9 +632,14 @@ export async function searchAmapDestinationCandidates(input: {
     ...AMAP_POI_QUERIES.map((keywords) => search(keywords, city)),
     ...AMAP_POI_QUERIES.map((keywords) => search(destination + " " + keywords, city)),
   ]);
-  const relevant = [exactBatch, exactRetryBatch, ...genericBatches]
-    .flatMap((batch) => batch ?? [])
-    .filter((poi) => isRelevantAmapPoi(poi, destination, region));
+  const relevant = [
+    { pois: exactBatch, queryCity: city },
+    { pois: exactRetryBatch },
+    ...genericBatches.map((pois) => ({ pois, queryCity: city })),
+  ]
+    .flatMap(({ pois, queryCity }) => (pois ?? []).map((poi) => ({ poi, queryCity })))
+    .filter(({ poi, queryCity }) => isRelevantAmapPoi(poi, destination, region, { queryCity }))
+    .map(({ poi }) => poi);
 
   return buildAmapDestinationCandidates(relevant);
 }
@@ -458,8 +707,7 @@ function resolveTransportMode(
   const genericPreference = GENERIC_TRANSPORT_MODES.has(mode);
   return chooseLongDistanceMode({
     explicit: genericPreference ? null : mode,
-    crossProvince:
-      isCrossProvince(from, to) && legDistanceKm >= LONG_DISTANCE_FLIGHT_KM,
+    crossProvince: isCrossProvince(from, to) && legDistanceKm >= LONG_DISTANCE_FLIGHT_KM,
     distanceKm: legDistanceKm,
   });
 }
@@ -602,15 +850,13 @@ export async function prepareRouteTransportPlan(
       }
 
       if (!(legDistanceKm > 0)) {
-        return { status: "degraded", reason: "无法计算 " + leg.from + " 到 " + leg.to + " 的有效距离" };
+        return {
+          status: "degraded",
+          reason: "无法计算 " + leg.from + " 到 " + leg.to + " 的有效距离",
+        };
       }
 
-      const mode = resolveTransportMode(
-        leg.transport,
-        legDistanceKm,
-        fromGeocode,
-        toGeocode,
-      );
+      const mode = resolveTransportMode(leg.transport, legDistanceKm, fromGeocode, toGeocode);
       const calculation = calculateTransportLeg({
         mode,
         distanceKm: legDistanceKm,
@@ -648,9 +894,7 @@ export async function prepareRouteTransportPlan(
   const references = await Promise.all(
     resolvedLegs
       .filter(({ planLeg }) => planLeg.mode !== "drive")
-      .map(({ routeLeg, planLeg }) =>
-        buildPriceReference(routeLeg, input, planLeg, headcount),
-      ),
+      .map(({ routeLeg, planLeg }) => buildPriceReference(routeLeg, input, planLeg, headcount)),
   );
 
   return {
@@ -658,10 +902,7 @@ export async function prepareRouteTransportPlan(
     route,
     legs,
     references,
-    minimumTotal: legs.reduce(
-      (total, leg) => total + leg.minimumPerPersonCost * headcount,
-      0,
-    ),
+    minimumTotal: legs.reduce((total, leg) => total + leg.minimumPerPersonCost * headcount, 0),
   };
 }
 
