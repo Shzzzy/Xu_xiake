@@ -4,9 +4,10 @@ import {
   buildSkeletonInstruction,
   buildSkeletonRepairInstruction,
   enforceTransportPriceFloors,
+  parseAttractionSelection,
   parsePlannerSkeleton,
 } from "./planner-skeleton.ts";
-import type { PlanViolation } from "./plan-validator.ts";
+import { validateAttractionSelection, type PlanViolation } from "./plan-validator.ts";
 import type { TransportPriceReference } from "./route-planner.ts";
 
 // 一份合法的骨架样例，供解析与拒绝用例复用。
@@ -238,4 +239,42 @@ test("重排指令包含违规清单与两条硬约束", () => {
   assert.match(instruction, /只改/);
   assert.match(instruction, /不得引入/);
   assert.match(instruction, /9000/);
+});
+
+test("景点选择只接受 day、candidateId、sequence、stayMinutes、reason", () => {
+  const content = JSON.stringify([
+    { day: 1, candidateId: "poi-1", sequence: 1, stayMinutes: 120, reason: "上午体力最好" },
+  ]);
+
+  const selection = parseAttractionSelection(content, new Set(["poi-1"]));
+  assert.deepEqual(selection, [
+    { day: 1, candidateId: "poi-1", sequence: 1, stayMinutes: 120, reason: "上午体力最好" },
+  ]);
+
+  assert.throws(() =>
+    parseAttractionSelection(
+      JSON.stringify([
+        {
+          day: 1,
+          candidateId: "poi-1",
+          sequence: 1,
+          stayMinutes: 120,
+          reason: "上午体力最好",
+          estimatedCost: 80,
+        },
+      ]),
+      new Set(["poi-1"]),
+    ),
+  );
+});
+
+test("模型不能在候选之外新增景点", () => {
+  const selection = parseAttractionSelection(
+    JSON.stringify([
+      { day: 1, candidateId: "missing", sequence: 1, stayMinutes: 120, reason: "测试" },
+    ]),
+    new Set(["poi-1"]),
+  );
+
+  assert.throws(() => validateAttractionSelection(selection, new Set(["poi-1"])), /候选/);
 });

@@ -23,6 +23,14 @@ import type {
   TravelStyle,
 } from "./route-planner.ts";
 
+import {
+  PLANNING_STAGES,
+  canStartStage,
+  createPlanningRun,
+  setStageStatus,
+  type PlanningRun,
+  type PlanningStage,
+} from "./planning-run.ts";
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-chat";
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -322,6 +330,62 @@ function buildClosingInput(input: ButlerPlanInput): TripClosingInput {
   };
 }
 
+export type DeterministicPipelineOptions = {
+  id?: string;
+  onStage?: (stage: PlanningStage, run: PlanningRun) => void;
+  runStage?: (stage: PlanningStage, attempt: number, run: PlanningRun) => Promise<void> | void;
+  repairSelection?: (error: unknown) => Promise<void> | void;
+  /** 测试与故障边界使用：指定阶段失败后不再启动任何后续阶段。 */
+  failAt?: PlanningStage;
+};
+
+function stageErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 顺序推进确定性管线；selection 是唯一允许原地修复一次的阶段。
+ * 任一步最终失败都会立即返回，时间轴与预算只能在前置阶段完成后启动。
+ */
+export async function runDeterministicPipeline(
+  options: DeterministicPipelineOptions = {},
+): Promise<PlanningRun> {
+  let run = createPlanningRun(options.id ?? `run-${Date.now()}`);
+
+  for (const stage of PLANNING_STAGES) {
+    if (!canStartStage(run, stage)) break;
+    options.onStage?.(stage, run);
+    run = setStageStatus(run, stage, "running");
+
+    let attempt = 0;
+    for (;;) {
+      try {
+        if (options.failAt === stage) {
+          throw new Error(`阶段 ${stage} 按测试要求失败`);
+        }
+        await options.runStage?.(stage, attempt, run);
+        run = setStageStatus(run, stage, "passed");
+        break;
+      } catch (error) {
+        if (stage === "selection" && attempt === 0 && options.repairSelection) {
+          try {
+            await options.repairSelection(error);
+            attempt += 1;
+            continue;
+          } catch (repairError) {
+            run = setStageStatus(run, stage, "failed", stageErrorMessage(repairError));
+            return run;
+          }
+        }
+
+        run = setStageStatus(run, stage, "failed", stageErrorMessage(error));
+        return run;
+      }
+    }
+  }
+
+  return run;
+}
 export async function planWithButler(
   input: ButlerPlanInput,
   deps: ButlerDeps = {},

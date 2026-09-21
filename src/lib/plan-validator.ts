@@ -1,4 +1,4 @@
-import type { PlannerSkeleton } from "./planner-skeleton";
+import type { AttractionSelection, PlannerSkeleton } from "./planner-skeleton";
 import type { Pace } from "./planner";
 import type { TransportMode, TravelStyle } from "./route-planner";
 
@@ -37,6 +37,17 @@ export type PlanValidationInput = {
   candidates: string[];
 };
 
+// 模型只能引用当前运行候选集合中的 ID，名称联想和即时编造一律拒绝。
+export function validateAttractionSelection(
+  selection: readonly AttractionSelection[],
+  candidateIds: ReadonlySet<string>,
+): void {
+  for (const item of selection) {
+    if (!candidateIds.has(item.candidateId)) {
+      throw new Error(`景点选择包含候选集合之外的 candidateId：${item.candidateId}`);
+    }
+  }
+}
 // 违规代号对应的中文标签，供提示条与重排指令复用。
 const violationLabels: Record<ViolationCode, string> = {
   TIME_WINDOW: "时间",

@@ -96,6 +96,37 @@ export function parsePlannerSkeleton(content: string): PlannerSkeleton {
   return skeletonSchema.parse(JSON.parse(cleaned));
 }
 
+export type AttractionSelection = {
+  day: number;
+  candidateId: string;
+  sequence: number;
+  stayMinutes: number;
+  reason: string;
+};
+
+// 景点选择只允许这五个字段；预算、价格和最终时间均由本地阶段计算。
+const attractionSelectionSchema = z
+  .object({
+    day: z.number().int().positive(),
+    candidateId: z.string().trim().min(1),
+    sequence: z.number().int().positive(),
+    stayMinutes: z.number().int().positive(),
+    reason: z.string().trim().min(1),
+  })
+  .strict();
+
+export function parseAttractionSelection(
+  content: string,
+  _candidateIds: ReadonlySet<string>,
+): AttractionSelection[] {
+  void _candidateIds;
+  const cleaned = content
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+  return z.array(attractionSelectionSchema).min(1).parse(JSON.parse(cleaned));
+}
 export type SkeletonCandidate = { name: string; summary: string; source: string };
 
 export type SkeletonInstructionBrief = {

@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   planWithButler,
+  runDeterministicPipeline,
   type ButlerPlanInput,
 } from "./planner-orchestrator.server.ts";
+import type { PlanningStage } from "./planning-run.ts";
 
 // 两条候选资料，供骨架指令与校验器使用。
 const candidates = [
@@ -262,4 +264,64 @@ test("第 2 天文案失败时降级为空文案并记录 failedDays", async () 
   assert.ok((result.dayCopy[0]?.purpose ?? "").length > 0);
   assert.equal(result.dayCopy[1]?.purpose, "");
   assert.deepEqual(result.dayCopy[1]?.highlights, []);
+});
+
+test("每一步失败后不会调用下一步", async () => {
+  const stages: PlanningStage[] = [];
+  const run = await runDeterministicPipeline({
+    id: "run-stop",
+    onStage: (stage) => stages.push(stage),
+    failAt: "selection",
+  });
+
+  assert.deepEqual(stages, ["route", "pois", "selection"]);
+  assert.equal(run.stages.selection.status, "failed");
+  assert.equal(run.stages.timeline.status, "pending");
+  assert.equal(run.stages.budget.status, "pending");
+});
+
+test("selection 失败后只修复当前阶段一次", async () => {
+  const stages: PlanningStage[] = [];
+  let selectionAttempts = 0;
+  let repairs = 0;
+
+  const run = await runDeterministicPipeline({
+    id: "run-repair",
+    onStage: (stage) => stages.push(stage),
+    runStage: async (stage, attempt) => {
+      if (stage !== "selection") return;
+      selectionAttempts += 1;
+      if (attempt === 0) throw new Error("模型选择了候选之外的景点");
+    },
+    repairSelection: async () => {
+      repairs += 1;
+    },
+  });
+
+  assert.equal(selectionAttempts, 2);
+  assert.equal(repairs, 1);
+  assert.equal(run.stages.selection.status, "passed");
+  assert.ok(stages.includes("timeline"));
+});
+
+test("selection 修复后仍失败时立即停止，不再调用时间轴和预算", async () => {
+  const stages: PlanningStage[] = [];
+  let repairs = 0;
+
+  const run = await runDeterministicPipeline({
+    id: "run-repair-failed",
+    onStage: (stage) => stages.push(stage),
+    runStage: async (stage) => {
+      if (stage === "selection") throw new Error("候选仍非法");
+    },
+    repairSelection: async () => {
+      repairs += 1;
+    },
+  });
+
+  assert.equal(repairs, 1);
+  assert.deepEqual(stages, ["route", "pois", "selection"]);
+  assert.equal(run.stages.selection.status, "failed");
+  assert.equal(run.stages.timeline.status, "pending");
+  assert.equal(run.stages.budget.status, "pending");
 });
