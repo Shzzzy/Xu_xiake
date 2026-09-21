@@ -2300,8 +2300,12 @@ function ItineraryScreen({
       {detailedTrip ? (
         <div className="space-y-4">
           {plannerState === "fallback" ? (
-            <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-soft)] px-4 py-3 text-xs leading-6 text-[var(--v-muted)]">
-              当前展示开发期精选数据；实时搜索与 DeepSeek 可用后会自动更新路书内容。
+            <div
+              role={plannerMessage ? "alert" : "status"}
+              className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-soft)] px-4 py-3 text-xs leading-6 text-[var(--v-muted)]"
+            >
+              {plannerMessage ||
+                "当前展示开发期精选数据；实时搜索与 DeepSeek 可用后会自动更新路书内容。"}
             </div>
           ) : null}
           <Suspense
