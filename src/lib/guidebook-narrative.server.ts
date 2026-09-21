@@ -129,6 +129,96 @@ export function isButlerNarrativePlan(plan: TripPlan): boolean {
   return plan.meta.narrativeSource === "butler";
 }
 
+const FAILED_DAY_CAUTION = "本页分析未能生成，已改用基础行程与本地提示。";
+const GENERIC_HIGHLIGHT_LABELS = new Set(["交通", "用餐", "午餐", "晚餐", "住宿", "酒店", "休息", "路线", "天气", "预算", "体力", "节奏", "自由活动"]);
+
+function normalizeNarrativeLabel(value: string): string {
+  return value.trim().replace(/\s+/g, "").toLowerCase();
+}
+
+export function validateDayNarrative(
+  day: TripDay,
+  index: number,
+  options: { allowAnalysisFailure?: boolean } = {},
+): void {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error("每日文案索引非法");
+  }
+  if (!day.purpose.trim()) {
+    throw new Error(`第 ${index + 1} 天文案缺少今日目的`);
+  }
+  if (day.analysisFailed && !options.allowAnalysisFailure) {
+    throw new Error(`第 ${index + 1} 天文案已标记失败`);
+  }
+
+  const attractions = new Set(
+    day.nodes
+      .filter((node) => node.type === "attraction" || node.type === "night-activity")
+      .map((node) => normalizeNarrativeLabel(node.name)),
+  );
+
+  for (const text of [...day.highlights, ...day.cautions, day.purpose]) {
+    if (/https?:\/\/|<[^>]+>/i.test(text)) {
+      throw new Error(`第 ${index + 1} 天文案包含 URL 或 HTML`);
+    }
+  }
+
+  for (const highlight of day.highlights) {
+    if (!/[：:]/u.test(highlight)) continue;
+    const label = highlight.split(/[：:]/u, 1)[0]?.trim();
+    if (!label) continue;
+    const normalized = normalizeNarrativeLabel(label);
+    const generic = GENERIC_HIGHLIGHT_LABELS.has(normalized) || /^第\d+天$/u.test(normalized);
+    if (!generic && !attractions.has(normalized)) {
+      throw new Error(`第 ${index + 1} 天摘要包含当天未安排的景点：${label}`);
+    }
+  }
+}
+
+export function buildFallbackDayNarrative(day: TripDay, index: number): TripDay {
+  // 已经带失败留痕的本地安全文案原样保留，避免预览第二次改写用户已看到的说明。
+  if (day.analysisFailed) {
+    return {
+      ...day,
+      cautions: day.cautions.includes(FAILED_DAY_CAUTION)
+        ? day.cautions
+        : [FAILED_DAY_CAUTION, ...day.cautions],
+    };
+  }
+
+  const attractionNames = day.nodes
+    .filter((node) => node.type === "attraction" || node.type === "night-activity")
+    .map((node) => node.name);
+  return {
+    ...day,
+    purpose: `第 ${index + 1} 天：${day.theme || "按已冻结排程继续行程"}`,
+    highlights:
+      attractionNames.length > 0
+        ? attractionNames.slice(0, 3).map((name) => `${name}：按当天排程游览`)
+        : ["自由活动：按冻结排程保留休息与机动时间"],
+    cautions: [FAILED_DAY_CAUTION, "所有时间与费用以现场情况为准。"],
+    analysisFailed: true,
+  };
+}
+
+/** 逐日生成并校验文案；单日失败只生成经过校验的 fallback，不阻塞后续日期。 */
+export async function enrichTripPlanNarrativeForDay(
+  plan: TripPlan,
+  index: number,
+  deps: DeepSeekTravelDeps = {},
+): Promise<TripDay> {
+  const day = plan.days[index];
+  if (!day) throw new Error(`第 ${index + 1} 天不存在`);
+
+  const summary = await summarizeDay(plan, day, index, deps);
+  const candidate = applySummary(day, summary);
+  try {
+    validateDayNarrative(candidate, index);
+    return candidate;
+  } catch {
+    return buildFallbackDayNarrative(day, index);
+  }
+}
 export async function enrichTripPlanNarrative(
   plan: TripPlan,
   deps: DeepSeekTravelDeps = {},

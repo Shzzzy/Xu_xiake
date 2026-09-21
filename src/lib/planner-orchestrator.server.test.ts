@@ -182,7 +182,7 @@ function failingFetch(): FetchImpl {
   }) as FetchImpl;
 }
 
-test("正常路径：骨架一次、文案按天并行、结尾一次", async () => {
+test("正常路径：骨架一次、文案按天顺序、结尾一次", async () => {
   const calls: string[] = [];
   const bodies: RequestBody[] = [];
   const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: fakeFetch(calls, bodies) });
@@ -324,4 +324,58 @@ test("selection 修复后仍失败时立即停止，不再调用时间轴和预�
   assert.equal(run.stages.selection.status, "failed");
   assert.equal(run.stages.timeline.status, "pending");
   assert.equal(run.stages.budget.status, "pending");
+});
+
+test("每日文案逐日生成，前一天完成前不会请求下一天", async () => {
+  let releaseFirstDay: ((response: Response) => void) | undefined;
+  let dayTwoCalled = false;
+
+  const fetchImpl = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as RequestBody;
+    const content = messageContent(body);
+    if (content.includes("每日文案")) {
+      const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
+      if (day === 1) {
+        return await new Promise<Response>((resolve) => {
+          releaseFirstDay = resolve;
+        });
+      }
+      if (day === 2) {
+        dayTwoCalled = true;
+        return responseWith(dayCopyJson(2));
+      }
+    }
+    if (content.includes("生成旅行回望与结束语")) return responseWith(closingJson());
+    return responseWith(skeletonJson(false));
+  }) as FetchImpl;
+
+  const pending = planWithButler(butlerInput, { apiKey: "k", fetchImpl });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const requestedDayTwoEarly = dayTwoCalled;
+  releaseFirstDay?.(responseWith(dayCopyJson(1)));
+  const result = await pending;
+
+  assert.equal(requestedDayTwoEarly, false);
+  assert.equal(result.status, "ok");
+});
+
+test("每日文案 day 与请求日期不一致时只降级当天", async () => {
+  const fetchImpl = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as RequestBody;
+    const content = messageContent(body);
+    if (content.includes("每日文案")) {
+      const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
+      return responseWith(dayCopyJson(day === 2 ? 1 : day));
+    }
+    if (content.includes("生成旅行回望与结束语")) return responseWith(closingJson());
+    return responseWith(skeletonJson(false));
+  }) as FetchImpl;
+
+  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl });
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  assert.ok((result.dayCopy[0]?.purpose ?? "").length > 0);
+  assert.equal(result.dayCopy[1]?.purpose, "");
+  assert.deepEqual(result.failedDays, [2]);
 });

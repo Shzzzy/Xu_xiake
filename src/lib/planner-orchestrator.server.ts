@@ -316,6 +316,20 @@ function buildDayCopyInstructionForDay(day: PlannerSkeletonDay): string {
   });
 }
 
+function validateDayCopyForSchedule(copy: PlannerDayCopy, day: PlannerSkeletonDay): void {
+  if (copy.day !== day.day) {
+    throw new Error(`每日文案 day ${copy.day} 与请求第 ${day.day} 天不一致`);
+  }
+  if (!copy.purpose.trim()) {
+    throw new Error(`第 ${day.day} 天缺少今日目的`);
+  }
+  for (const text of [...copy.highlights, ...copy.cautions, copy.purpose]) {
+    if (/https?:\/\/|<[^>]+>/i.test(text)) {
+      throw new Error(`第 ${day.day} 天文案包含 URL 或 HTML`);
+    }
+  }
+}
+
 function buildClosingInput(input: ButlerPlanInput): TripClosingInput {
   return {
     origin: input.origin,
@@ -402,29 +416,30 @@ export async function planWithButler(
 
   const { skeleton, violations, attempts } = skeletonOutcome;
 
-  // 骨架定稿后，每天文案与结尾并行发出；单个失败只降级该份内容，不影响整体。
-  const dayCopyJobs = skeleton.days.map(
-    async (day): Promise<{ day: number; copy: PlannerDayCopy; failed: boolean }> => {
-      try {
-        const content = await requestChatCompletion(
-          buildDayCopyInstructionForDay(day),
-          deps,
-          apiKey,
-          DAY_COPY_MAX_TOKENS,
-        );
-        return { day: day.day, copy: parsePlannerDayCopy(content), failed: false };
-      } catch {
-        // 某天文案失败时退回空文案并记录 failedDays，Task 8 组装器会用本地默认文案补齐并留痕。
-        return {
-          day: day.day,
-          copy: { day: day.day, purpose: "", highlights: [], cautions: [], history: [] },
-          failed: true,
-        };
-      }
-    },
-  );
+  // 骨架定稿后逐日生成、逐日校验；当天通过后才会开始下一天，单个失败只降级当天。
+  const dayCopyResults: { day: number; copy: PlannerDayCopy; failed: boolean }[] = [];
+  for (const day of skeleton.days) {
+    try {
+      const content = await requestChatCompletion(
+        buildDayCopyInstructionForDay(day),
+        deps,
+        apiKey,
+        DAY_COPY_MAX_TOKENS,
+      );
+      const copy = parsePlannerDayCopy(content);
+      validateDayCopyForSchedule(copy, day);
+      dayCopyResults.push({ day: day.day, copy, failed: false });
+    } catch {
+      // 某天文案失败时退回空文案并记录 failedDays，Task 8 组装器会用本地默认文案补齐并留痕。
+      dayCopyResults.push({
+        day: day.day,
+        copy: { day: day.day, purpose: "", highlights: [], cautions: [], history: [] },
+        failed: true,
+      });
+    }
+  }
 
-  const closingJob = (async (): Promise<TripClosing> => {
+  const closing = await (async (): Promise<TripClosing> => {
     try {
       return await buildTripClosingWithDeepSeek(buildClosingInput(input), {
         apiKey,
@@ -438,8 +453,6 @@ export async function planWithButler(
       return { quote: null, source: null, message: FALLBACK_CLOSING_MESSAGE };
     }
   })();
-
-  const [dayCopyResults, closing] = await Promise.all([Promise.all(dayCopyJobs), closingJob]);
   const dayCopy = dayCopyResults.map((result) => result.copy);
   const failedDays = dayCopyResults.filter((result) => result.failed).map((result) => result.day);
 

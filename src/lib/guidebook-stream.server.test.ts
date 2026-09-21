@@ -7,7 +7,13 @@ import {
   renderGuidebookHtml,
   renderGuidebookPages,
 } from "./guidebook-html.server.ts";
-import { encodeGuidebookEvent, streamGuidebookPages } from "./guidebook-stream.server.ts";
+import {
+  acceptPage,
+  createPreviewState,
+  encodeGuidebookEvent,
+  streamGuidebookPages,
+  type GuidebookPageEvent,
+} from "./guidebook-stream.server.ts";
 
 /** 最小可用路书行程：不带远程地图，测试不需要联网。 */
 const plan: TripPlan = {
@@ -179,4 +185,76 @@ test("butler day copy and analysis failure reach every preview page unchanged", 
   assert.match(html, /管家第 1 天目的/);
   assert.match(html, /管家第 1 天重点/);
   assert.match(html, /本页分析未能生成/);
+});
+
+test("每日文案校验通过后才推送该日页面，失败日降级后继续", async () => {
+  const order: string[] = [];
+  const events: unknown[] = [];
+  const butlerPlan: TripPlan = {
+    ...plan,
+    meta: { ...plan.meta, narrativeSource: "butler" },
+    days: plan.days.map((day, index) => ({
+      ...day,
+      purpose: index === 1 ? "未校验的旧文案" : `待校验第 ${index + 1} 天`,
+    })),
+  };
+
+  for await (const event of streamGuidebookPages(butlerPlan, {
+    runId: "run-1",
+    onEvent: (streamEvent) => {
+      events.push(streamEvent);
+      if (streamEvent.type === "page") order.push(streamEvent.id);
+    },
+    loadDayNarrative: async (_day, index) => {
+      order.push(`load-day-${index + 1}`);
+      if (index === 1) throw new Error("第 2 天文案未通过校验");
+      const source = butlerPlan.days[index];
+      if (!source) throw new Error("缺少测试日期");
+      return {
+        ...source,
+        purpose: `校验通过第 ${index + 1} 天`,
+        highlights: [`第 ${index + 1} 天：按冻结排程游览`],
+        cautions: ["遵守集合时间"],
+      };
+    },
+  })) {
+    // 消费生成器；事件顺序由 onEvent 记录。
+  }
+
+  assert.ok(order.indexOf("load-day-1") < order.indexOf("day-1-map"));
+  assert.ok(order.indexOf("day-1-summary") < order.indexOf("load-day-2"));
+  assert.ok(order.indexOf("load-day-2") < order.indexOf("day-2-map"));
+
+  const pageEvents = events.filter(
+    (event): event is GuidebookPageEvent =>
+      typeof event === "object" && event !== null && "type" in event && event.type === "page",
+  );
+  assert.ok(pageEvents.length > 0);
+  assert.ok(pageEvents.every((event) => event.runId === "run-1"));
+  assert.ok(pageEvents.every((event) => event.checksum.length > 0));
+  assert.equal(new Set(pageEvents.map((event) => event.checksum)).size, pageEvents.length);
+
+  const dayTwoHtml = pageEvents
+    .filter((event) => event.id === "day-2-map" || event.id === "day-2-summary")
+    .map((event) => event.html)
+    .join("");
+  assert.match(dayTwoHtml, /本页分析未能生成/);
+  assert.doesNotMatch(dayTwoHtml, /未校验的旧文案/);
+});
+
+test("重复 checksum 页面被忽略", () => {
+  const state = createPreviewState("run-1");
+  const pageEvent: GuidebookPageEvent = {
+    type: "page",
+    runId: "run-1",
+    index: 0,
+    id: "cover",
+    label: "封面",
+    checksum: "checksum-a",
+    html: "<article>封面</article>",
+  };
+
+  assert.equal(acceptPage(state, pageEvent), true);
+  assert.equal(acceptPage(state, pageEvent), false);
+  assert.equal(acceptPage(state, { ...pageEvent, runId: "run-old", checksum: "checksum-b" }), false);
 });
