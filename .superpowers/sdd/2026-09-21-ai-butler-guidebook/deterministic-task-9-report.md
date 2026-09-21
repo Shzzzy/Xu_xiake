@@ -101,3 +101,12 @@
 - 短窗口优先安排可容纳景点；容量确实不足时允许当天降级为休整，不阻断整单。
 - 增加北京→四川预算、legId、短窗口、默认开关和 fallback UI 行为测试。
 - 最终验证：`npm run typecheck`、`npm test`、`npm run build:dev`、`git diff --check` 全部通过。
+
+## 二次复审修复（8a40625）
+
+- `fix: honor real timeline capacity and leg costs`
+- timeline 改为按已选景点真实 `stayMinutes` 优先分配，再动态裁减晚餐和休息；260 分钟 + 150 分钟景点可成功安排。
+- 交通门到门时长不再静默截断；超出窗口时 timeline fail closed 并给出明确原因。
+- 每日交通费用按 legId 和对应 party total 绑定到具体交通节点，多 leg 不再平均分。
+- 增加 260 分钟成功、真实容量不足降级、交通超窗 fail closed、不同价格多 leg 节点金额回归测试。
+- 最终验证：typecheck、npm test、build:dev、git diff --check 全部通过。
