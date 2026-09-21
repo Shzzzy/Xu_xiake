@@ -5,6 +5,11 @@ import {
   type AmapGeocode,
   type AmapPoi,
 } from "./amap.server.ts";
+import {
+  calculateTransportLeg,
+  chooseLongDistanceMode,
+  type TransportPlanLeg,
+} from "./transport-planner.server.ts";
 import type { SearchResult } from "./live-planner.ts";
 import type {
   RouteLeg,
@@ -32,6 +37,7 @@ export type TransportPlanningInput = {
 
 export type TransportPlanningResult = {
   route: RoutePlan;
+  legs: TransportPlanLeg[];
   references: TransportPriceReference[];
   minimumTotal: number;
 };
@@ -219,31 +225,54 @@ async function geocodeRouteNodes(
   );
 }
 
-function shouldUpgradeToFlight(
+function resolveTransportMode(
   mode: TransportMode,
   legDistanceKm: number,
   from: AmapGeocode | undefined,
   to: AmapGeocode | undefined,
-): boolean {
-  return (
-    GENERIC_TRANSPORT_MODES.has(mode) &&
-    legDistanceKm >= LONG_DISTANCE_FLIGHT_KM &&
-    isCrossProvince(from, to)
-  );
+): TransportPlanLeg["mode"] {
+  const genericPreference = GENERIC_TRANSPORT_MODES.has(mode);
+  return chooseLongDistanceMode({
+    explicit: genericPreference ? null : mode,
+    crossProvince:
+      isCrossProvince(from, to) && legDistanceKm >= LONG_DISTANCE_FLIGHT_KM,
+    distanceKm: legDistanceKm,
+  });
 }
 
 function minimumUnitPrice(mode: TransportMode, legDistanceKm: number): number {
-  switch (mode) {
-    case "flight":
-      return Math.ceil(Math.max(500, 0.55 * legDistanceKm));
-    case "train":
-      return Math.ceil(Math.max(150, 0.35 * legDistanceKm));
-    case "bus":
-      return Math.ceil(Math.max(80, 0.22 * legDistanceKm));
-    case "ship":
-      return Math.ceil(Math.max(100, 0.3 * legDistanceKm));
-    default:
-      return Math.ceil(Math.max(150, 0.35 * legDistanceKm));
+  return calculateTransportLeg({
+    mode: mode as TransportPlanLeg["mode"],
+    distanceKm: legDistanceKm,
+    travelers: 1,
+  }).minimumPerPersonCost;
+}
+
+async function resolveDriveRoute(input: {
+  client: AmapClient | null;
+  from: AmapGeocode | undefined;
+  to: AmapGeocode | undefined;
+  fallbackDistanceKm: number;
+}): Promise<{ distanceKm: number; durationMinutes?: number }> {
+  if (!input.client || !input.from || !input.to) {
+    return { distanceKm: input.fallbackDistanceKm };
+  }
+
+  try {
+    const route = await input.client.route({
+      origin: input.from.location,
+      destination: input.to.location,
+      mode: "car",
+    });
+    const distanceKm =
+      route.distanceMeters > 0 ? route.distanceMeters / 1000 : input.fallbackDistanceKm;
+    return {
+      distanceKm,
+      ...(route.durationSeconds > 0 ? { durationMinutes: route.durationSeconds / 60 } : {}),
+    };
+  } catch {
+    // 高德限流或道路不可达时保留直线距离，交给确定性时长公式兜底。
+    return { distanceKm: input.fallbackDistanceKm };
   }
 }
 
@@ -297,32 +326,67 @@ export async function prepareRouteTransportPlan(
   input: TransportPlanningInput,
 ): Promise<TransportPlanningResult> {
   const geocoded = await geocodeRouteNodes(input.client, input.route);
-  const legDistances = new Map<string, number>();
-  const routeLegs = input.route.legs.map((leg) => {
-    const fromGeocode = geocoded.get(leg.from);
-    const toGeocode = geocoded.get(leg.to);
-    const estimatedDistance =
-      fromGeocode && toGeocode ? distanceKm(fromGeocode.location, toGeocode.location) : 0;
-    legDistances.set(leg.id, estimatedDistance);
-    return shouldUpgradeToFlight(leg.transport, estimatedDistance, fromGeocode, toGeocode)
-      ? { ...leg, transport: "flight" as const }
-      : leg;
-  });
-  const route: RoutePlan = { ...input.route, legs: routeLegs };
   const headcount = travelerCount(input.travelers);
+  const resolvedLegs = await Promise.all(
+    input.route.legs.map(async (leg) => {
+      const fromGeocode = geocoded.get(leg.from);
+      const toGeocode = geocoded.get(leg.to);
+      const straightLineDistance =
+        fromGeocode && toGeocode ? distanceKm(fromGeocode.location, toGeocode.location) : 0;
+      const driveRoute =
+        leg.transport === "drive"
+          ? await resolveDriveRoute({
+              client: input.client,
+              from: fromGeocode,
+              to: toGeocode,
+              fallbackDistanceKm: straightLineDistance,
+            })
+          : { distanceKm: straightLineDistance };
+      const legDistanceKm = Math.round(driveRoute.distanceKm * 10) / 10;
+      const mode = resolveTransportMode(
+        leg.transport,
+        legDistanceKm,
+        fromGeocode,
+        toGeocode,
+      );
+      const calculation = calculateTransportLeg({
+        mode,
+        distanceKm: legDistanceKm,
+        travelers: headcount,
+        routeDurationMinutes: driveRoute.durationMinutes,
+      });
+
+      return {
+        routeLeg: { ...leg, transport: mode },
+        planLeg: {
+          id: leg.id,
+          kind: leg.kind,
+          from: leg.from,
+          to: leg.to,
+          distanceKm: legDistanceKm,
+          mode,
+          ...calculation,
+        } satisfies TransportPlanLeg,
+      };
+    }),
+  );
+  const routeLegs = resolvedLegs.map(({ routeLeg }) => routeLeg);
+  const route: RoutePlan = { ...input.route, legs: routeLegs };
+  const legs = resolvedLegs.map(({ planLeg }) => planLeg);
   const references = await Promise.all(
-    routeLegs
-      .filter((leg) => leg.transport !== "drive")
-      .map((leg) =>
-        buildPriceReference(leg, input, legDistances.get(leg.id) ?? 0, headcount),
+    resolvedLegs
+      .filter(({ planLeg }) => planLeg.mode !== "drive")
+      .map(({ routeLeg, planLeg }) =>
+        buildPriceReference(routeLeg, input, planLeg.distanceKm, headcount),
       ),
   );
 
   return {
     route,
+    legs,
     references,
-    minimumTotal: references.reduce(
-      (total, reference) => total + reference.minimumPartyTotal,
+    minimumTotal: legs.reduce(
+      (total, leg) => total + leg.minimumPerPersonCost * headcount,
       0,
     ),
   };
