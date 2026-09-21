@@ -6,6 +6,7 @@
 已完成并提交。
 
 - 实现提交：`58ec775` `feat: wire deterministic trip pipeline`
+- 失败提示修复：`545ff60` `fix: surface butler pipeline errors`
 - 分支：`codex/ai-butler-guidebook`
 - `BUTLER_PLANNER=1` 走确定性管线；`BUTLER_PLANNER=0` 保持 legacy。
 - 确定性阶段失败时服务端 fail closed，不再静默切回 legacy。
