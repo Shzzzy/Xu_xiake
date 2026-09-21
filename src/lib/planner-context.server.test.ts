@@ -447,8 +447,30 @@ test("安徽 · 徽州软别名不会误杀黄山市和黄山区候选", async (
     address: "安徽省黄山市黄山区汤泉路",
     location: [118.16, 30.08],
   });
+  const hefeiPark = createAmapAttraction({
+    id: "HF-HUANGSHAN-PARK",
+    name: "黄山公园",
+    type: "风景名胜;公园",
+    province: "安徽省",
+    city: "合肥市",
+    district: "蜀山区",
+    adcode: "340104",
+    address: "安徽省合肥市蜀山区",
+    location: [117.23, 31.82],
+  });
+  const tonglingPark = createAmapAttraction({
+    id: "TL-HUANGSHAN-PARK",
+    name: "黄山公园",
+    type: "风景名胜;公园",
+    province: "安徽省",
+    city: "铜陵市",
+    district: "铜官区",
+    adcode: "340705",
+    address: "安徽省铜陵市铜官区",
+    location: [117.82, 30.94],
+  });
   const client = createFakeAmapClient(async (input) =>
-    input.keywords === "黄山" ? [scenicArea, hotSpring] : [],
+    input.keywords === "黄山" ? [hefeiPark, tonglingPark, scenicArea, hotSpring] : [],
   );
 
   const result = await searchAmapDestinationCandidates({
@@ -580,6 +602,82 @@ test("长自治区名称可提取城市并过滤同自治区异地同名", async
   assert.deepEqual(
     result.map((candidate) => candidate.id),
     ["URUMQI-WATER-TOWN"],
+  );
+});
+
+test("吉林市本身是地级市，不会被吉林省前缀剥离", async () => {
+  const calls: { keywords: string; city?: string }[] = [];
+  const jilin = createAmapAttraction({
+    id: "JL-WATER-TOWN",
+    province: "吉林省",
+    city: "吉林市",
+    district: "船营区",
+    adcode: "220204",
+    address: "吉林省吉林市船营区",
+    location: [126.55, 43.84],
+  });
+  const changchun = createAmapAttraction({
+    id: "CC-WATER-TOWN",
+    province: "吉林省",
+    city: "长春市",
+    district: "南关区",
+    adcode: "220102",
+    address: "吉林省长春市南关区",
+    location: [125.35, 43.86],
+  });
+  const client = createFakeAmapClient(async (input) => {
+    calls.push({ keywords: input.keywords, city: input.city });
+    return input.keywords === "水乡古镇" ? [changchun, jilin] : [];
+  });
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "水乡古镇",
+    region: "吉林市",
+  });
+
+  assert.equal(calls.find((call) => call.keywords === "水乡古镇")?.city, "吉林市");
+  assert.deepEqual(
+    result.map((candidate) => candidate.id),
+    ["JL-WATER-TOWN"],
+  );
+});
+
+test("自治州加城市组合可解析伊宁市并过滤其他城市", async () => {
+  const calls: { keywords: string; city?: string }[] = [];
+  const yining = createAmapAttraction({
+    id: "YN-WATER-TOWN",
+    province: "新疆维吾尔自治区",
+    city: "伊宁市",
+    district: "伊宁市",
+    adcode: "654002",
+    address: "新疆维吾尔自治区伊犁哈萨克自治州伊宁市",
+    location: [81.32, 43.92],
+  });
+  const urumqi = createAmapAttraction({
+    id: "URUMQI-WATER-TOWN",
+    province: "新疆维吾尔自治区",
+    city: "乌鲁木齐市",
+    district: "天山区",
+    adcode: "650102",
+    address: "新疆维吾尔自治区乌鲁木齐市天山区",
+    location: [87.62, 43.83],
+  });
+  const client = createFakeAmapClient(async (input) => {
+    calls.push({ keywords: input.keywords, city: input.city });
+    return input.keywords === "水乡古镇" ? [urumqi, yining] : [];
+  });
+
+  const result = await searchAmapDestinationCandidates({
+    client,
+    destination: "水乡古镇",
+    region: "新疆维吾尔自治区伊犁哈萨克自治州伊宁市",
+  });
+
+  assert.equal(calls.find((call) => call.keywords === "水乡古镇")?.city, "伊宁市");
+  assert.deepEqual(
+    result.map((candidate) => candidate.id),
+    ["YN-WATER-TOWN"],
   );
 });
 

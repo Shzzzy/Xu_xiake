@@ -139,6 +139,14 @@ const GENERIC_REGION_TOKENS = new Set([
   "其他地区",
 ]);
 const DIRECT_ADMIN_PROVINCE_KEYS = new Set(["北京", "天津", "上海", "重庆"]);
+const ADMIN_SUFFIX_ONLY_PATTERN = /^(?:省|市|自治区|自治州|地区|盟|区|县|旗)$/u;
+const LOCALITY_ALIAS_TARGETS: Record<
+  string,
+  { cityNames?: readonly string[]; districtNames?: readonly string[] }
+> = {
+  徽州: { cityNames: ["黄山市"] },
+  黄山: { cityNames: ["黄山市"] },
+};
 
 function normalizeAdminName(value: string): string {
   let normalized = normalizeName(value);
@@ -155,13 +163,26 @@ function stripProvinceAliasPrefix(value: string): string {
   const aliases = PROVINCE_ALIASES.flatMap((province) => province.aliases)
     .map((alias) => normalizeName(alias))
     .sort((left, right) => right.length - left.length);
+  if (aliases.includes(normalized)) return normalized;
   for (const alias of aliases) {
     if (alias && normalized.startsWith(alias) && normalized.length > alias.length) {
-      normalized = normalized.slice(alias.length);
+      const remainder = normalized.slice(alias.length);
+      if (
+        !remainder ||
+        ADMIN_SUFFIX_ONLY_PATTERN.test(remainder) ||
+        /^(?:市|州|地区|盟|区|县|旗)/u.test(remainder)
+      ) {
+        continue;
+      }
+      normalized = remainder;
       break;
     }
   }
   return normalized;
+}
+
+function stripPrefecturePrefix(value: string): string {
+  return normalizeName(value).replace(/^.*?(?:自治州|地区|盟)/u, "");
 }
 
 function stripAdministrativePrefix(value: string): string {
@@ -179,7 +200,8 @@ function extractExplicitCityNames(value: string): string[] {
   const names = new Set<string>();
   for (const segment of normalizeName(value).split(/[·,，;；/|、\s]+/u)) {
     const withoutProvince = stripProvinceAliasPrefix(segment);
-    for (const match of withoutProvince.matchAll(/[\u4e00-\u9fa5]{2,12}?市/gu)) {
+    const withoutPrefecture = stripPrefecturePrefix(withoutProvince);
+    for (const match of withoutPrefecture.matchAll(/[\u4e00-\u9fa5]{2,12}?市/gu)) {
       const city = normalizeAdminName(match[0]);
       if (city) names.add(city);
     }
@@ -197,10 +219,16 @@ function extractDirectAdminCityNames(value: string): string[] {
 }
 
 function extractExplicitDistrictNames(value: string): string[] {
-  return Array.from(
-    normalizeName(value).matchAll(/[\u4e00-\u9fa5]{2,14}?(?:区|县|旗)/gu),
-    (match) => normalizeAdminName(stripAdministrativePrefix(match[0])),
-  ).filter(Boolean);
+  const names = new Set<string>();
+  for (const match of normalizeName(value).matchAll(/[\u4e00-\u9fa5]{2,14}?(?:区|县|旗)/gu)) {
+    const raw = match[0];
+    if (stripProvinceAliasPrefix(raw) === raw && findProvinces(raw).length > 0) {
+      continue;
+    }
+    const district = normalizeAdminName(stripAdministrativePrefix(raw));
+    if (district) names.add(district);
+  }
+  return [...names];
 }
 
 function extractLocalityTokens(value: string): string[] {
@@ -231,7 +259,8 @@ function extractAmapCityQuery(...values: (string | undefined)[]): string | undef
 
   for (const value of values) {
     const withoutProvince = stripProvinceAliasPrefix(value ?? "");
-    const city = withoutProvince.match(/[\u4e00-\u9fa5]{2,10}?市/u)?.[0];
+    const withoutPrefecture = stripPrefecturePrefix(withoutProvince);
+    const city = withoutPrefecture.match(/[\u4e00-\u9fa5]{2,10}?市/u)?.[0];
     if (city) return normalizeName(city);
   }
 
@@ -268,11 +297,19 @@ function buildAmapAdministrativeTarget(
     ...extractExplicitCityNames(destination),
     ...extractDirectAdminCityNames(destination),
   ]);
-  const districtNames = new Set([
-    ...extractExplicitDistrictNames(region),
-    ...extractExplicitDistrictNames(destination),
-  ]);
+  const districtNames = new Set(extractExplicitDistrictNames(region));
   const softLocalityHints = new Set(extractLocalityTokens(region));
+  for (const hint of [...softLocalityHints]) {
+    const aliasTarget = LOCALITY_ALIAS_TARGETS[hint];
+    if (!aliasTarget) continue;
+    for (const city of aliasTarget.cityNames ?? []) {
+      cityNames.add(normalizeAdminName(city));
+    }
+    for (const district of aliasTarget.districtNames ?? []) {
+      districtNames.add(normalizeAdminName(district));
+    }
+    softLocalityHints.delete(hint);
+  }
   return {
     provinceKeys: new Set([...findProvinces(region), ...findProvinces(destination)]),
     cityNames,
@@ -384,8 +421,13 @@ function isRelevantAmapPoi(
   const textMatchesSoft = textHasAnyTargetToken(poiText, target.softLocalityHints);
   if (softStructuredMatch || textMatchesSoft) return true;
 
-  const textMatchesTrustedCity = textHasAnyTargetToken(poiText, target.cityNames);
-  const textMatchesTrustedDistrict = textHasAnyTargetToken(poiText, target.districtNames);
+  const poiAdminText = normalizeName(
+    [poi.address, poi.province, poi.city, poi.district, poi.adcode]
+      .filter((value): value is string => Boolean(value))
+      .join(" "),
+  );
+  const textMatchesTrustedCity = textHasAnyTargetToken(poiAdminText, target.cityNames);
+  const textMatchesTrustedDistrict = textHasAnyTargetToken(poiAdminText, target.districtNames);
   const hasTrustedLocality = target.cityNames.size > 0 || target.districtNames.size > 0;
   if (!hasTrustedLocality) return true;
 
@@ -395,17 +437,16 @@ function isRelevantAmapPoi(
     return true;
   }
 
-  if (
-    target.districtNames.size > 0 &&
-    poiDistrict &&
-    !districtMatches &&
-    !textMatchesTrustedDistrict
-  ) {
+  if (target.districtNames.size > 0 && poiDistrict && !districtMatches) {
     return false;
   }
-  if (target.cityNames.size > 0 && poiCity && !cityMatches && !textMatchesTrustedCity) {
+  if (target.cityNames.size > 0 && poiCity && !cityMatches) {
     return false;
   }
+  if (cityMatches || districtMatches) return true;
+  if (!poiCity && textMatchesTrustedCity) return true;
+  if (!poiDistrict && textMatchesTrustedDistrict) return true;
+  // 结构化字段缺失时保守放行，避免短地址合法 POI 因文本信息不足被误杀。
   return true;
 }
 
