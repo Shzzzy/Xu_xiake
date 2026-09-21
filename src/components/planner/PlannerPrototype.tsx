@@ -740,11 +740,21 @@ function KnownPlanScreen({
         routePlan?.legs.find((leg) => leg.kind === "outbound")?.transport ?? "balanced";
       const outcome = await requestAndApplyBudget<TripBrief>({
         payload: {
+          origin: brief.origin,
           destination: destination.name,
           region: destination.region,
           days: brief.days,
           travelers: { adults: brief.adults, children: brief.children },
           transportPreference: transportLabels[primaryTransport],
+          roundTrip: brief.roundTrip,
+          returnMode: brief.roundTrip ? brief.returnMode : null,
+          routeLegs: (routePlan?.legs ?? []).map((leg) => ({
+            from: leg.from,
+            to: leg.to,
+            transport: leg.transport,
+            kind: leg.kind,
+            style: leg.style,
+          })),
           pace: brief.pace,
           interests: brief.interests,
         },
@@ -977,7 +987,7 @@ function KnownPlanScreen({
               showVehicleEnergy={usesDrive}
               budgetAdvice={{
                 pending: budgetAdvicePending,
-                hint: "按人数、天数与交通方式估算",
+                hint: "按出发地、往返交通与人数估算",
                 onRequest: requestBudgetAdvice,
               }}
             />

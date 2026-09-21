@@ -3,11 +3,21 @@ import type { TripBrief } from "@/lib/travel-plan";
 
 // 传给预算建议服务的请求体；只描述用到的字段，避免把服务端类型带到客户端。
 export type BudgetAdviceInputLike = {
+  origin: string;
   destination: string;
   region: string;
   days: number;
   travelers: { adults: number; children: number };
   transportPreference: string;
+  roundTrip: boolean;
+  returnMode: "scenic" | "fast" | null;
+  routeLegs: {
+    from: string;
+    to: string;
+    transport: string;
+    kind: "outbound" | "return";
+    style: "direct" | "wander";
+  }[];
   pace: string;
   interests: string[];
 };

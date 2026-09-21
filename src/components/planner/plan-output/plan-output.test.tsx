@@ -204,11 +204,18 @@ test("全团总预算旁提供 AI 推荐按钮", () => {
 });
 
 const budgetAdvicePayload = {
+  origin: "上海",
   destination: "杭州",
   region: "浙江",
   days: 2,
   travelers: { adults: 2, children: 0 },
   transportPreference: "均衡推荐",
+  roundTrip: true,
+  returnMode: "fast" as const,
+  routeLegs: [
+    { from: "上海", to: "杭州", transport: "balanced", kind: "outbound" as const, style: "direct" as const },
+    { from: "杭州", to: "上海", transport: "balanced", kind: "return" as const, style: "direct" as const },
+  ],
   pace: "balanced",
   interests: ["自然山水"],
 };

@@ -4,6 +4,7 @@ import { requestBudgetAdvice } from "./budget-advice.server";
 
 const budgetAdviceInputSchema = z
   .object({
+    origin: z.string().trim().min(1),
     destination: z.string().trim().min(1),
     region: z.string().trim().min(1),
     days: z.number().int().positive(),
@@ -14,6 +15,21 @@ const budgetAdviceInputSchema = z
       })
       .strict(),
     transportPreference: z.string().trim().min(1),
+    roundTrip: z.boolean(),
+    returnMode: z.enum(["scenic", "fast"]).nullable(),
+    routeLegs: z
+      .array(
+        z
+          .object({
+            from: z.string().trim().min(1),
+            to: z.string().trim().min(1),
+            transport: z.string().trim().min(1),
+            kind: z.enum(["outbound", "return"]),
+            style: z.enum(["direct", "wander"]),
+          })
+          .strict(),
+      )
+      .max(14),
     pace: z.string().trim().min(1),
     interests: z.array(z.string().trim().min(1)),
   })

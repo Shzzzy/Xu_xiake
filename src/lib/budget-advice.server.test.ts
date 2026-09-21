@@ -8,13 +8,20 @@ import {
 } from "./budget-advice.server.ts";
 
 const input: BudgetAdviceInput = {
-  destination: "黄山",
-  region: "安徽",
-  days: 4,
-  travelers: { adults: 2, children: 1 },
-  transportPreference: "高铁 + 当地包车",
+  origin: "上海",
+  destination: "北京",
+  region: "北京",
+  days: 2,
+  travelers: { adults: 3, children: 0 },
+  transportPreference: "高铁 / 飞机",
+  roundTrip: true,
+  returnMode: "fast",
+  routeLegs: [
+    { from: "上海", to: "北京", transport: "flight", kind: "outbound", style: "direct" },
+    { from: "北京", to: "上海", transport: "flight", kind: "return", style: "direct" },
+  ],
   pace: "balanced",
-  interests: ["自然风光", "摄影"],
+  interests: ["人文建筑"],
 };
 
 test("预算建议解析合法 JSON 并保留分类", () => {
@@ -47,7 +54,13 @@ test("预算建议提示词要求全团中值并解释杂事开销", () => {
   assert.match(messages, /全团/);
   assert.match(messages, /区间中值/);
   assert.match(messages, /杂事开销/);
-  assert.match(messages, /黄山/);
+  assert.match(messages, /上海/);
+  assert.match(messages, /北京/);
+  assert.match(messages, /往返/);
+  assert.match(messages, /返程/);
+  assert.match(messages, /flight/);
+  assert.match(messages, /1 晚/);
+  assert.match(messages, /分类合计.*total|total.*分类合计/);
 });
 
 test("预算建议请求使用 DeepSeek JSON 合同并解析结果", async () => {
@@ -88,4 +101,20 @@ test("预算建议请求使用 DeepSeek JSON 合同并解析结果", async () =>
   assert.equal(body.max_tokens, 800);
   assert.equal(body.temperature, 0.2);
   assert.deepEqual(body.messages, buildBudgetAdviceMessages(input));
+});
+
+test("预算建议把总额校正为分类合计", () => {
+  const advice = parseBudgetAdvice(JSON.stringify({
+    total: 4200,
+    categories: {
+      transport: 6600,
+      lodging: 900,
+      food: 900,
+      tickets: 300,
+      other: 650,
+    },
+    note: "往返高铁、2 晚住宿与门票餐饮",
+  }));
+
+  assert.equal(advice.total, 9350);
 });
