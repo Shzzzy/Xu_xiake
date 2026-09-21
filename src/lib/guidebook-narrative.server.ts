@@ -139,7 +139,7 @@ function normalizeNarrativeLabel(value: string): string {
 export function validateDayNarrative(
   day: TripDay,
   index: number,
-  options: { allowAnalysisFailure?: boolean } = {},
+  options: { allowAnalysisFailure?: boolean; knownAttractions?: readonly string[] } = {},
 ): void {
   if (!Number.isInteger(index) || index < 0) {
     throw new Error("每日文案索引非法");
@@ -160,6 +160,21 @@ export function validateDayNarrative(
   for (const text of [...day.highlights, ...day.cautions, day.purpose]) {
     if (/https?:\/\/|<[^>]+>/i.test(text)) {
       throw new Error(`第 ${index + 1} 天文案包含 URL 或 HTML`);
+    }
+  }
+
+  const normalizedTexts = [...day.highlights, ...day.cautions, day.purpose].map(
+    normalizeNarrativeLabel,
+  );
+  for (const knownAttraction of options.knownAttractions ?? []) {
+    const normalizedKnown = normalizeNarrativeLabel(knownAttraction);
+    if (!normalizedKnown) continue;
+    const scheduledToday = [...attractions].some(
+      (scheduled) => scheduled.includes(normalizedKnown) || normalizedKnown.includes(scheduled),
+    );
+    if (scheduledToday) continue;
+    if (normalizedTexts.some((text) => text.includes(normalizedKnown))) {
+      throw new Error(`第 ${index + 1} 天摘要提到当天未安排的景点：${knownAttraction}`);
     }
   }
 
@@ -214,6 +229,7 @@ export type GuidebookNarrativePreparationOptions = {
   deps?: DeepSeekTravelDeps;
   loadDayNarrative?: (day: TripDay, dayIndex: number) => Promise<TripDay>;
   failNarrativeDay?: number;
+  knownAttractions?: readonly string[];
 };
 
 /**
@@ -227,6 +243,12 @@ export async function prepareGuidebookDayNarrative(
 ): Promise<TripDay> {
   const day = plan.days[index];
   if (!day) throw new Error(`第 ${index + 1} 天不存在`);
+  const scheduledAttractions = plan.days.flatMap((planDay) =>
+    planDay.nodes
+      .filter((node) => node.type === "attraction" || node.type === "night-activity")
+      .map((node) => node.name),
+  );
+  const knownAttractions = [...(options.knownAttractions ?? []), ...scheduledAttractions];
 
   let candidate = day;
   try {
@@ -241,7 +263,7 @@ export async function prepareGuidebookDayNarrative(
     validateDayNarrative(candidate, index);
   } catch {
     candidate = buildFallbackDayNarrative(day, index);
-    validateDayNarrative(candidate, index, { allowAnalysisFailure: true });
+    validateDayNarrative(candidate, index, { allowAnalysisFailure: true, knownAttractions });
   }
 
   return candidate;

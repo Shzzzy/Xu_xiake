@@ -4,6 +4,7 @@ import type { TripPlan } from "./travel-plan.ts";
 import {
   clearNarrativeCache,
   enrichTripPlanNarrative,
+  validateDayNarrative,
 } from "./guidebook-narrative.server.ts";
 
 const plan: TripPlan = {
@@ -172,4 +173,35 @@ test("butler plan skips legacy enrichment and preserves day copy", async () => {
   assert.equal(enriched.days[0]?.analysisFailed, true);
   assert.match(enriched.days[0]?.cautions[0] ?? "", /本页分析未能生成/);
   assert.equal(enriched.days[1]?.purpose, "管家第 2 天目的");
+});
+
+test("自由文本提到已知但非当天安排的景点时拒绝", () => {
+  const day = plan.days[0];
+  assert.ok(day);
+  const illegal = {
+    ...day,
+    purpose: "顺路去故宫看看",
+    highlights: ["午餐后继续去故宫"],
+    cautions: ["天气变化注意保暖"],
+  };
+
+  assert.throws(
+    () => validateDayNarrative(illegal, 0, { knownAttractions: ["故宫"] }),
+    /未安排/,
+  );
+});
+
+test("当天景点与通用词不会被自由文本规则误杀", () => {
+  const day = plan.days[0];
+  assert.ok(day);
+  const allowed = {
+    ...day,
+    purpose: "上午游览黄山风景区，午餐后休息，关注天气与 ETH 行程标记。",
+    highlights: ["黄山风景区：按当天排程游览", "午餐：在山脚用餐", "天气：关注阵雨"],
+    cautions: ["休息：午后保留机动时间", "ETH 是内部测试标记，不是景点"],
+  };
+
+  assert.doesNotThrow(() =>
+    validateDayNarrative(allowed, 0, { knownAttractions: ["黄山风景区", "故宫"] }),
+  );
 });
