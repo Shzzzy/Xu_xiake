@@ -8,18 +8,22 @@ export type PlannerDayCopy = {
   history: { title: string; background: string; source: string }[];
 };
 
+const nonBlankString = z.string().refine((value) => value.trim().length > 0, {
+  message: "不能为空",
+});
+
+const historyEntrySchema = z.object({
+  title: nonBlankString,
+  background: nonBlankString,
+  source: z.string().nullable().optional(),
+});
+
 const plannerDayCopySchema = z.object({
   day: z.number().int().positive(),
   purpose: z.string().trim().min(1),
   highlights: z.array(z.string()),
   cautions: z.array(z.string()),
-  history: z.array(
-    z.object({
-      title: z.string().trim().min(1),
-      background: z.string().trim().min(1),
-      source: z.string().nullable().optional(),
-    }),
-  ),
+  history: z.array(z.unknown()),
 });
 
 function stripJsonFence(content: string): string {
@@ -49,10 +53,11 @@ export function parsePlannerDayCopy(content: string): PlannerDayCopy {
     throw new Error("每日文案至少需要 2 条注意事项");
   }
 
-  const history = parsed.history.flatMap((entry) => {
-    const source = entry.source?.trim();
-    if (!source) return [];
-    return [{ title: entry.title, background: entry.background, source }];
+  const history = parsed.history.flatMap((rawEntry) => {
+    // 历史条目只做校验，不转换；保留原始对象及其中的空白字符。
+    const entry = historyEntrySchema.parse(rawEntry);
+    if (typeof entry.source !== "string" || !entry.source.trim()) return [];
+    return [rawEntry as PlannerDayCopy["history"][number]];
   });
 
   return {

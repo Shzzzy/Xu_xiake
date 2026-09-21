@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildDayCopyInstruction, parsePlannerDayCopy } from "./planner-day-copy.ts";
 
-test("文案解析丢弃没有来源的历史条目", () => {
+test("文案解析丢弃没有来源的历史条目并保留其余原样", () => {
   const copy = parsePlannerDayCopy(
     JSON.stringify({
       day: 1,
@@ -10,15 +10,16 @@ test("文案解析丢弃没有来源的历史条目", () => {
       highlights: ["黄山：观察奇松怪石", "宏村：沿水系看徽派村落", "屯溪老街：感受市井烟火"],
       cautions: ["注意保暖", "带好雨具"],
       history: [
-        { title: "黄山", background: "背景", source: "《黄山志》" },
+        { title: " 黄山 ", background: " 背景 ", source: " 《黄山志》 " },
         { title: "宏村", background: "背景", source: "" },
         { title: "西递", background: "背景" },
       ],
     }),
   );
 
-  assert.equal(copy.history.length, 1);
-  assert.equal(copy.history[0]?.source, "《黄山志》");
+  assert.deepEqual(copy.history, [
+    { title: " 黄山 ", background: " 背景 ", source: " 《黄山志》 " },
+  ]);
 });
 
 test("文案解析拒绝少于两条注意事项", () => {
