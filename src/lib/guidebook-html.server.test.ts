@@ -450,7 +450,7 @@ test("escapes plan content and strips API keys from rendered URLs", () => {
   assert.doesNotMatch(html, /(?:[?&](?:key|api_key|apikey|access_key|accesskey|secret|token)=)/i);
 });
 
-test("keeps return route line styles on the main map when a static map URL exists", () => {
+test("uses a real static map when available and keeps schematic return styles on fallback", () => {
   const fastHtml = renderGuidebookHtml({
     ...fixturePlan,
     route: { ...fixturePlan.route, returnMode: "fast" },
@@ -459,22 +459,22 @@ test("keeps return route line styles on the main map when a static map URL exist
     ...fixturePlan,
     route: { ...fixturePlan.route, returnMode: "scenic" },
   });
-  const singleHtml = renderGuidebookHtml({
+  const fallbackHtml = renderGuidebookHtml({
     ...fixturePlan,
-    route: { ...fixturePlan.route, returnMode: null },
+    route: { ...fixturePlan.route, returnMode: "fast", staticMapUrl: undefined },
   });
 
+  const fastRoute = pageFragments(fastHtml, "route")[0] ?? "";
+  const scenicRoute = pageFragments(scenicHtml, "route")[0] ?? "";
+  assert.match(fastRoute, /<img src="https:\/\/maps\.example\.test\/static/);
+  assert.doesNotMatch(fastRoute, /schematic-map/);
+  assert.match(fastHtml, /快速返程/);
+  assert.match(scenicRoute, /<img src="https:\/\/maps\.example\.test\/static/);
+  assert.match(scenicHtml, /回程再玩/);
   assert.match(
-    fastHtml,
+    fallbackHtml,
     /<polyline data-layer="return"[^>]*stroke="#8A6A58"[^>]*stroke-dasharray="9 8"/,
   );
-  assert.match(fastHtml, /快速返程/);
-  assert.doesNotMatch(fastHtml, /maps\.example\.test\/static/);
-  assert.match(scenicHtml, /回程再玩/);
-  assert.match(scenicHtml, /<polyline data-layer="return"[^>]*stroke="#C96442"[^>]*>/);
-  assert.doesNotMatch(scenicHtml, /stroke-dasharray="9 8"/);
-  assert.match(singleHtml, /未安排返程/);
-  assert.doesNotMatch(singleHtml, /data-layer="return"/);
 });
 
 test("builds separate solid map layers for scenic returns", () => {

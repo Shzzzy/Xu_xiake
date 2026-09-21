@@ -1,12 +1,7 @@
 import { enrichTripPlanNarrative, isButlerNarrativePlan } from "./guidebook-narrative.server.ts";
-import {
-  guidebookPageSpecs,
-  renderGuidebookHead,
-} from "./guidebook-html.server.ts";
-import {
-  prepareGuidebookImage,
-  type GuidebookImageFetchOptions,
-} from "./guidebook-pdf.server.ts";
+import { enrichGuidebookPlanWithMaps } from "./guidebook-map.server.ts";
+import { guidebookPageSpecs, renderGuidebookHead } from "./guidebook-html.server.ts";
+import { prepareGuidebookImage, type GuidebookImageFetchOptions } from "./guidebook-pdf.server.ts";
 import type { TripPlan } from "./travel-plan.ts";
 
 /**
@@ -43,21 +38,25 @@ export async function* streamGuidebookPages(
     head: renderGuidebookHead(plan, { forPreview: true }),
   };
 
+  // 地图与路线在服务端补齐后再进入模板；缺失或失败时 enrichment 会返回原计划，
+  // 现有 schematic / placeholder 仍然可用。图片内联逻辑只消费公开的无 Key URL。
+  const mapPlan = await enrichGuidebookPlanWithMaps(plan, options);
+
   // 每日旅行信息与分析由 DeepSeek 写，但只依赖最终排程；封面、概览、路线、预算
   // 不等它，先渲染出去，文案到了再补进当天页面。
   // 管家 dayCopy 已是权威源，preview 不得再触发 legacy enrichment。
-  const narrativePromise = isButlerNarrativePlan(plan)
-    ? Promise.resolve(plan)
-    : enrichTripPlanNarrative(plan);
+  const narrativePromise = isButlerNarrativePlan(mapPlan)
+    ? Promise.resolve(mapPlan)
+    : enrichTripPlanNarrative(mapPlan);
   let narrativeApplied = false;
 
-  const routeMap = prepareGuidebookImage(plan.route.staticMapUrl, "map", options);
-  const dayImages = plan.days.map((day) => ({
+  const routeMap = prepareGuidebookImage(mapPlan.route.staticMapUrl, "map", options);
+  const dayImages = mapPlan.days.map((day) => ({
     map: prepareGuidebookImage(day.mapUrl, "map", options),
     qrCode: prepareGuidebookImage(day.qrCodeUrl, "qr", options),
   }));
 
-  let prepared = plan;
+  let prepared = mapPlan;
   for (let index = 0; index < specs.length; index += 1) {
     const spec = specs[index];
     if (!spec) continue;

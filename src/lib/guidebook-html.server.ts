@@ -256,7 +256,8 @@ function renderMapImage(url: string | null, alt: string): string {
 }
 
 function renderRouteMap(plan: TripPlan, alt: string, label: string): string {
-  const staticMap = plan.route.returnMode === null ? sanitizeUrl(plan.route.staticMapUrl) : null;
+  // 真实静态图已经包含去程/返程线型；有图时优先使用，失败降级才回到本地 schematic。
+  const staticMap = sanitizeUrl(plan.route.staticMapUrl);
   return staticMap ? renderMapImage(staticMap, alt) : renderSchematicMap(plan.route, label);
 }
 
@@ -629,14 +630,19 @@ const GUIDEBOOK_FONT_LINKS =
  * 改用系统中文字体，避免在访问不到这些 CDN 的网络里报错、缺字；服务端渲染 PDF 时
  * 仍使用完整字体。
  */
-export function renderGuidebookHead(plan: TripPlan, options: { forPreview?: boolean } = {}): string {
+export function renderGuidebookHead(
+  plan: TripPlan,
+  options: { forPreview?: boolean } = {},
+): string {
   const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>${escapeHtml(plan.meta.title)}</title>`;
   return options.forPreview
     ? `${head}<style>${GUIDEBOOK_CSS}</style><style>${PREVIEW_FALLBACK_CSS}</style>`
     : `${head}${GUIDEBOOK_FONT_LINKS}<style>${GUIDEBOOK_CSS}</style>`;
 }
 
-export function renderGuidebookPages(plan: TripPlan): { id: string; label: string; html: string }[] {
+export function renderGuidebookPages(
+  plan: TripPlan,
+): { id: string; label: string; html: string }[] {
   return guidebookPageSpecs(plan).map((spec) => ({
     id: spec.id,
     label: spec.label,

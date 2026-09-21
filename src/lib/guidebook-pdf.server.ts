@@ -1,6 +1,11 @@
 import { existsSync } from "node:fs";
 import { isIP } from "node:net";
 import { chromium, type APIResponse, type Page, type Route } from "playwright";
+import {
+  enrichGuidebookPlanWithMaps,
+  resolveGuidebookAmapKey,
+  type GuidebookMapEnrichmentOptions,
+} from "./guidebook-map.server.ts";
 import { renderGuidebookHtml } from "./guidebook-html.server.ts";
 import type { TripPlan } from "./travel-plan.ts";
 
@@ -171,10 +176,7 @@ export async function installGuidebookRequestGuard(page: Page): Promise<void> {
 
 export type GuidebookImageKind = "map" | "qr";
 
-export type GuidebookImageFetchOptions = {
-  fetchImpl?: typeof fetch;
-  amapKey?: string | null;
-};
+export type GuidebookImageFetchOptions = GuidebookMapEnrichmentOptions;
 
 function isSensitiveImageQueryKey(key: string): boolean {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "_");
@@ -189,13 +191,7 @@ function isSensitiveImageQueryKey(key: string): boolean {
 }
 
 function guidebookAmapKey(override: string | null | undefined): string {
-  if (override !== undefined) return override?.trim() ?? "";
-  return (
-    process.env.AMAP_WEB_SERVICE_KEY?.trim() ||
-    process.env.AMAP_API_KEY?.trim() ||
-    process.env.AMAP_KEY?.trim() ||
-    ""
-  );
+  return resolveGuidebookAmapKey(override);
 }
 
 function secureGuidebookImageUrl(
@@ -330,14 +326,40 @@ async function fetchGuidebookImageDataUrl(
  * 抽成导出函数是为了让逐页流式预览按页取图：纯文字页不必等图片，
  * 需要地图或二维码的页各自等自己的那一张。
  */
+const GUIDEBOOK_IMAGE_CACHE_TTL_MS = 120_000;
+
+type GuidebookImageCacheEntry = {
+  expiresAt: number;
+  promise: Promise<string | undefined>;
+};
+
+const guidebookImageCaches = new WeakMap<typeof fetch, Map<string, GuidebookImageCacheEntry>>();
+
+function guidebookImageCache(fetchImpl: typeof fetch) {
+  const cached = guidebookImageCaches.get(fetchImpl);
+  if (cached) return cached;
+  const cache = new Map<string, GuidebookImageCacheEntry>();
+  guidebookImageCaches.set(fetchImpl, cache);
+  return cache;
+}
+
 export async function prepareGuidebookImage(
   value: string | undefined,
   kind: GuidebookImageKind,
   options: GuidebookImageFetchOptions = {},
 ): Promise<string | undefined> {
   if (!value) return value;
-  const dataUrl = await fetchGuidebookImageDataUrl(value, kind, options);
-  return dataUrl ?? guidebookPlaceholderSvg(kind);
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const cache = guidebookImageCache(fetchImpl);
+  const cacheKey = `${kind}\u0000${guidebookAmapKey(options.amapKey)}\u0000${value}`;
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+
+  const promise = fetchGuidebookImageDataUrl(value, kind, options)
+    .then((dataUrl) => dataUrl ?? guidebookPlaceholderSvg(kind))
+    .catch(() => guidebookPlaceholderSvg(kind));
+  cache.set(cacheKey, { expiresAt: Date.now() + GUIDEBOOK_IMAGE_CACHE_TTL_MS, promise });
+  return promise;
 }
 
 export async function prepareGuidebookPlan(
@@ -450,7 +472,8 @@ export async function exportGuidebookForTest(
   dependencies: GuidebookExportDependencies,
 ): Promise<GuidebookExportResult> {
   const startedAt = Date.now();
-  const preparedPlan = await prepareGuidebookPlan(plan, dependencies);
+  const mapPlan = await enrichGuidebookPlanWithMaps(plan, dependencies);
+  const preparedPlan = await prepareGuidebookPlan(mapPlan, dependencies);
   const preparedAt = Date.now();
   const html = renderGuidebookHtml(preparedPlan);
 
