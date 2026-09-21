@@ -137,7 +137,14 @@ export async function searchAmapDestinationCandidates(input: {
   const batches = await Promise.all(
     AMAP_POI_QUERIES.map(async (keywords) => {
       try {
-        return await input.client?.searchPoi({ keywords, city, pageSize: 10 });
+        const scoped = await input.client?.searchPoi({ keywords, city, pageSize: 10 });
+        if (scoped && scoped.length > 0) return scoped;
+      } catch {
+        // 城市名不是合法城市时继续做无城市范围搜索。
+      }
+      try {
+        // “江南水乡”“桂林与阳朔”这类目的地不是城市名，不能强制传 city。
+        return await input.client?.searchPoi({ keywords, pageSize: 10 });
       } catch {
         // 单个关键词失败不应阻断其余高德候选；最终由调用方决定是否使用本地 seed。
         return [];

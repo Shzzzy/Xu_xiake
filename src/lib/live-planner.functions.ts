@@ -344,7 +344,7 @@ export const generateLongItinerary = createServerFn({ method: "POST" })
       const discovery = await discoverRoutePlaces({
         route: data.route,
         deepseekKey,
-        tavilyKey,
+        tavilyKey: tavilyKey ?? "",
         fetchImpl: fetch,
       });
       discoveries = discovery.notices;
@@ -525,12 +525,8 @@ export async function runLivePlannerWith(
   const fetchImpl = deps.fetchImpl ?? fetch;
   const deepseekKey = readLiveEnv(deps, "DEEPSEEK_API_KEY")?.trim();
   const tavilyKey = readLiveEnv(deps, "TAVILY_API_KEY")?.trim();
-  const missing = [
-    !deepseekKey ? "DEEPSEEK_API_KEY" : "",
-    !tavilyKey ? "TAVILY_API_KEY" : "",
-  ].filter(Boolean);
-
-  if (!deepseekKey || !tavilyKey) {
+  const missing = [!deepseekKey ? "DEEPSEEK_API_KEY" : ""].filter(Boolean);
+  if (!deepseekKey) {
     return { status: "needs_configuration", missing };
   }
 
@@ -564,7 +560,7 @@ export async function runLivePlannerWith(
       route: input.route,
       startDate: input.startDate,
       travelers: input.travelers,
-      tavilyKey,
+      tavilyKey: tavilyKey ?? "",
       tavilyEndpoint: tavilyUrl,
       fetchImpl,
     }),

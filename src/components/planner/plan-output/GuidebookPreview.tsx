@@ -63,7 +63,7 @@ export function GuidebookPreview({ plan }: { plan: TripPlan }) {
       frame.style.transform = `scale(${nextScale})`;
       if (contentHeight > 0) {
         frame.style.height = `${contentHeight}px`;
-        shell.style.height = `${contentHeight * nextScale}px`;
+        shell.style.overflowAnchor = "none";
       }
     };
 
@@ -199,7 +199,7 @@ export function GuidebookPreview({ plan }: { plan: TripPlan }) {
         />
       </div>
 
-      <div ref={shellRef} className="relative w-full overflow-hidden">
+      <div ref={shellRef} className="relative w-full overflow-y-auto" style={{ height: "min(78vh, 900px)", overflowAnchor: "none" }}>
         <iframe
           ref={frameRef}
           title="路书预览"

@@ -2315,7 +2315,7 @@ function ItineraryScreen({
             <p className="mt-6 text-xs leading-6 text-[var(--v-muted)]">
               {detailedTrip
                 ? plannerState === "ready"
-                  ? "当前景点由 Tavily 实时搜索、DeepSeek 规划排序，并保留来源链接。"
+                  ? "当前景点由高德地点资料提供，DeepSeek 编排；Tavily 仅用于票价参考。"
                   : "当前景点采用开发期精选数据并保留来源链接；配置实时服务后会自动替换。"
                 : plannerState === "ready"
                   ? "当前路线由 DeepSeek 按阶段汇总，适合长线行程先定大方向。"
