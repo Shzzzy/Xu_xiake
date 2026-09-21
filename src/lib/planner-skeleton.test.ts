@@ -269,12 +269,30 @@ test("景点选择只接受 day、candidateId、sequence、stayMinutes、reason"
 });
 
 test("模型不能在候选之外新增景点", () => {
+  assert.throws(
+    () =>
+      parseAttractionSelection(
+        JSON.stringify([
+          { day: 1, candidateId: "missing", sequence: 1, stayMinutes: 120, reason: "测试" },
+        ]),
+        new Set(["poi-1"]),
+      ),
+    /候选/,
+  );
+});
+
+test("全程移动日允许空 selection，由非移动日覆盖校验继续把关", () => {
+  assert.deepEqual(parseAttractionSelection("[]", new Set(["poi-1"])), []);
+});
+test("景点选择兼容 json_object 外层 selections 包装", () => {
   const selection = parseAttractionSelection(
-    JSON.stringify([
-      { day: 1, candidateId: "missing", sequence: 1, stayMinutes: 120, reason: "测试" },
-    ]),
+    JSON.stringify({
+      selections: [
+        { day: 1, candidateId: "poi-1", sequence: 1, stayMinutes: 120, reason: "上午体力最好" },
+      ],
+    }),
     new Set(["poi-1"]),
   );
-
-  assert.throws(() => validateAttractionSelection(selection, new Set(["poi-1"])), /候选/);
+  assert.equal(selection.length, 1);
+  assert.equal(selection[0]?.candidateId, "poi-1");
 });

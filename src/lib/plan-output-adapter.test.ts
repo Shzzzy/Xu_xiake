@@ -278,3 +278,68 @@ test("骨架转 TripPlan 写入本 run 候选并驱动文案拒绝未安排景�
   assert.equal(prepared.analysisFailed, true);
   assert.doesNotMatch(JSON.stringify(prepared), /故宫/);
 });
+
+test("确定性预算与交通腿覆盖节点费用并保留路线元数据", () => {
+  const budgetPlan = {
+    transport: 10_800,
+    lodging: 6_000,
+    food: 5_500,
+    tickets: 1_500,
+    other: 2_380,
+    estimatedTotal: 26_180,
+    priceReferences: [],
+    provenance: {
+      transport: [],
+      tickets: [],
+      lodging: {
+        kind: "lodging" as const,
+        label: "住宿参考价",
+        amount: 500,
+        currency: "CNY" as const,
+        confidence: "fallback" as const,
+        quantity: 12,
+        total: 6_000,
+      },
+      food: {
+        kind: "food" as const,
+        label: "餐饮参考价",
+        amount: 220,
+        currency: "CNY" as const,
+        confidence: "fallback" as const,
+        quantity: 25,
+        total: 5_500,
+      },
+      other: {
+        kind: "other" as const,
+        label: "其他费用",
+        amount: 2_380,
+        currency: "CNY" as const,
+        confidence: "fallback" as const,
+        quantity: 1,
+        total: 2_380,
+      },
+    },
+  };
+  const transportLegs = skeletonRoutePlan.legs.map((leg) => ({
+    id: leg.id,
+    kind: leg.kind,
+    from: leg.from,
+    to: leg.to,
+    distanceKm: 1_964,
+    mode: "flight" as const,
+    doorToDoorMinutes: 344,
+    minimumPerPersonCost: 1_080,
+  }));
+
+  const plan = buildTripPlanFromSkeleton({
+    ...skeletonInputFixture,
+    budgetPlan,
+    transportLegs,
+  });
+
+  assert.equal(plan.budget.transport.amount, 10_800);
+  assert.equal(plan.budget.lodging.amount, 6_000);
+  assert.equal(plan.budget.estimatedTotal, 26_180);
+  assert.ok(plan.route.outboundSegments.every((segment) => segment.distanceKm === 1_964));
+  assert.ok(plan.route.returnSegments.every((segment) => segment.durationMinutes === 344));
+});

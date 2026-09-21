@@ -17,6 +17,9 @@ import type { AmapClient } from "./amap.server.ts";
 import type { RouteDiscoveryNotice } from "./place-discovery.server.ts";
 import type { PlacePersistenceRepository } from "./place-discovery.ts";
 import type { ButlerPlanInput } from "./planner-orchestrator.server.ts";
+import type { BudgetPlan } from "./budget-planner.ts";
+import type { PlannerDestinationCandidate } from "./planner-context.server.ts";
+import type { TransportPlanLeg } from "./transport-planner.server.ts";
 import type { PlannerSkeleton } from "./planner-skeleton.ts";
 import type { PlannerDayCopy } from "./planner-day-copy.ts";
 import type { PlanViolation } from "./plan-validator.ts";
@@ -24,9 +27,8 @@ import type { PlanViolation } from "./plan-validator.ts";
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
 const loadPlaceDiscovery = createServerOnlyFn(async () => {
-  const { discoverRoutePlaces, routeNodesNeedingDiscovery } = await import(
-    "./place-discovery.server.ts"
-  );
+  const { discoverRoutePlaces, routeNodesNeedingDiscovery } =
+    await import("./place-discovery.server.ts");
   return { discoverRoutePlaces, routeNodesNeedingDiscovery };
 });
 
@@ -108,7 +110,9 @@ export type LivePlanResult =
       violations: PlanViolation[];
       attempts: number;
       closing: TripClosing;
-      candidates: { name: string; summary: string; source: string }[];
+      candidates: PlannerDestinationCandidate[];
+      transportLegs: TransportPlanLeg[];
+      budget: BudgetPlan;
       sources: SearchResult[];
       discoveries: DiscoveryNotice[];
       route: RoutePlan;
@@ -387,6 +391,8 @@ type SharedPlannerContext = {
   sources: SearchResult[];
   discoveredStops: DiscoveredStop[];
   route: RoutePlan;
+  candidates: PlannerDestinationCandidate[];
+  transportLegs: TransportPlanLeg[];
   transportPriceReferences: TransportPriceReference[];
   baseUrl?: string;
   model?: string;
@@ -458,11 +464,7 @@ async function runButlerPlan(
   deps: LivePlannerDeps,
   context: SharedPlannerContext,
 ): Promise<LivePlanResult> {
-  const candidates = context.sources.map((source) => ({
-    name: source.title,
-    summary: source.content,
-    source: source.url,
-  }));
+  const candidates = context.candidates;
   const briefTransport =
     input.transport && context.route.legs.every((leg) => leg.transport === input.transport)
       ? input.transport
@@ -485,6 +487,7 @@ async function runButlerPlan(
     route: context.route,
     weather: input.weather,
     candidates,
+    transportLegs: context.transportLegs,
     transportPriceReferences: context.transportPriceReferences,
   };
 
@@ -501,8 +504,11 @@ async function runButlerPlan(
   }
 
   if (result.status === "fallback") {
-    // 管家骨架失败时退回现有实时链路，保证用户仍能得到可展示的行程。
-    return runLegacyPlan(input, deps, context);
+    // 开关打开时 fail closed，不把旧骨架结果伪装成确定性管家结果。
+    throw new Error(`管家规划失败：${result.reason}`);
+  }
+  if (result.status === "failed") {
+    throw new Error(`管家规划失败于 ${result.stage} 阶段：${result.reason}`);
   }
 
   return {
@@ -515,6 +521,8 @@ async function runButlerPlan(
     attempts: result.attempts,
     closing: result.closing,
     candidates: result.candidates,
+    transportLegs: result.transportLegs,
+    budget: result.budget,
     // 结果页的「N 个候选景区」依赖 sources，绝不能返回空数组。
     sources: result.candidates.map((candidate) => ({
       title: candidate.name,
@@ -556,10 +564,16 @@ export async function runLivePlannerWith(
     (readLiveEnv(deps, "AMAP_E2E_FIXTURE") === "1"
       ? (await loadAmapE2eFixture())()
       : plannerContext.createPlannerAmapClient(amapKey, fetchImpl));
-  const seedCandidates = input.seedPlaces.map((place) => ({
+  const seedCandidates: PlannerDestinationCandidate[] = input.seedPlaces.map((place) => ({
+    id: `seed:${place.id}`,
     name: place.name,
     summary: `${place.area}。${place.summary}。建议停留 ${place.duration} 分钟。`,
     source: place.source,
+    address: place.area,
+    type: "本地候选",
+    location: [0, 0],
+    publicUrl: place.source,
+    areaKey: place.area,
   }));
   const [amapCandidates, transportPlan] = await Promise.all([
     plannerContext.searchAmapDestinationCandidates({
@@ -584,7 +598,7 @@ export async function runLivePlannerWith(
   const candidates = plannerContext.mergePlannerCandidates({
     primary: amapCandidates,
     fallback: seedCandidates,
-  });
+  }) as PlannerDestinationCandidate[];
   const sources = selectPlannerSources({
     destinationSources: candidates.map((candidate) => ({
       title: candidate.name,
@@ -602,6 +616,8 @@ export async function runLivePlannerWith(
     sources,
     discoveredStops,
     route: transportPlan.route,
+    candidates,
+    transportLegs: transportPlan.legs,
     transportPriceReferences: transportPlan.references,
     baseUrl: readLiveEnv(deps, "DEEPSEEK_BASE_URL")?.trim(),
     model: readLiveEnv(deps, "DEEPSEEK_MODEL")?.trim(),

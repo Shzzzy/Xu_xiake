@@ -8,14 +8,8 @@ import {
 } from "./live-planner.ts";
 import { normalizeTavilyResults } from "./tavily.server.ts";
 import { buildRoutePlan } from "./route-planner.ts";
-import {
-  runLivePlannerWith,
-  type LiveItineraryInput,
-} from "./live-planner.functions.ts";
-import type {
-  DiscoveredPlaceRecord,
-  PlacePersistenceRepository,
-} from "./place-discovery.ts";
+import { runLivePlannerWith, type LiveItineraryInput } from "./live-planner.functions.ts";
+import type { DiscoveredPlaceRecord, PlacePersistenceRepository } from "./place-discovery.ts";
 import type { AmapClient } from "./amap.server.ts";
 
 test("normalizes Tavily results and drops entries without a URL", () => {
@@ -293,7 +287,6 @@ test("source selection keeps destination and seed sources ahead of discovery", (
   assert.deepEqual([...discoveryByGroup.values()], [4, 2]);
 });
 
-
 // ---- Task 9：服务端函数接线与 BUTLER_PLANNER 开关的契约测试 ----
 
 type FetchImpl = typeof fetch;
@@ -305,7 +298,12 @@ function responseWith(content: string): Response {
 function tavilySearchResponse(): Response {
   return Response.json({
     results: [
-      { title: "黄山风景区", url: "https://example.com/huangshan", content: "安徽黄山风景区", score: 0.9 },
+      {
+        title: "黄山风景区",
+        url: "https://example.com/huangshan",
+        content: "安徽黄山风景区",
+        score: 0.9,
+      },
       { title: "屯溪老街", url: "https://example.com/tunxi", content: "徽州老街", score: 0.8 },
     ],
   });
@@ -354,7 +352,14 @@ function buildLiveInput(overrides: Partial<LiveItineraryInput> = {}): LiveItiner
       roundTrip: false,
       returnMode: null,
       legs: [
-        { id: "leg-1", from: "北京", to: "黄山", transport: "balanced", style: "direct", kind: "outbound" },
+        {
+          id: "leg-1",
+          from: "北京",
+          to: "黄山",
+          transport: "balanced",
+          style: "direct",
+          kind: "outbound",
+        },
       ],
     },
     weather: [
@@ -362,8 +367,24 @@ function buildLiveInput(overrides: Partial<LiveItineraryInput> = {}): LiveItiner
       { date: "2026-10-02", code: 1, tempMax: 20, tempMin: 12, precipProb: 20 },
     ],
     seedPlaces: [
-      { id: "hs", name: "黄山风景区", area: "安徽", indoor: false, duration: 180, summary: "奇峰云海", source: "https://example.com/huangshan" },
-      { id: "tx", name: "屯溪老街", area: "安徽", indoor: false, duration: 90, summary: "徽州老街", source: "https://example.com/tunxi" },
+      {
+        id: "hs",
+        name: "黄山风景区",
+        area: "安徽",
+        indoor: false,
+        duration: 180,
+        summary: "奇峰云海",
+        source: "https://example.com/huangshan",
+      },
+      {
+        id: "tx",
+        name: "屯溪老街",
+        area: "安徽",
+        indoor: false,
+        duration: 90,
+        summary: "徽州老街",
+        source: "https://example.com/tunxi",
+      },
     ],
     ...overrides,
   };
@@ -410,11 +431,37 @@ function butlerSkeletonJson(): string {
     day,
     theme: day === 1 ? "黄山核心游览" : "屯溪老街收尾",
     nodes: [
-      { type: "attraction", startTime: "09:00", endTime: "11:30", name: "黄山风景区", stayMinutes: 150, estimatedCost: 230 },
+      {
+        type: "attraction",
+        startTime: "09:00",
+        endTime: "11:30",
+        name: "黄山风景区",
+        stayMinutes: 150,
+        estimatedCost: 230,
+      },
       { type: "meal", startTime: "12:00", endTime: "13:00", name: "徽菜午餐", estimatedCost: 120 },
-      { type: "attraction", startTime: "14:00", endTime: "15:30", name: "屯溪老街", stayMinutes: 90, estimatedCost: 60 },
-      { type: "hotel", startTime: "16:00", endTime: "16:30", name: "黄山温泉酒店", estimatedCost: hotel },
-      { type: "rest", startTime: "17:00", endTime: "17:30", name: "返回酒店休息", estimatedCost: 0 },
+      {
+        type: "attraction",
+        startTime: "14:00",
+        endTime: "15:30",
+        name: "屯溪老街",
+        stayMinutes: 90,
+        estimatedCost: 60,
+      },
+      {
+        type: "hotel",
+        startTime: "16:00",
+        endTime: "16:30",
+        name: "黄山温泉酒店",
+        estimatedCost: hotel,
+      },
+      {
+        type: "rest",
+        startTime: "17:00",
+        endTime: "17:30",
+        name: "返回酒店休息",
+        estimatedCost: 0,
+      },
     ],
     radar: { physical: 60, childFit: 55, weatherSensitivity: 65, timeCost: 50, crowding: 70 },
   });
@@ -425,6 +472,28 @@ function butlerSkeletonJson(): string {
   });
 }
 
+function butlerSelectionJsonFromPrompt(content: string): string {
+  // 从选择提示词尾部解析候选与需要安排的非移动日，避免测试依赖固定高德 ID。
+  const taskIndex = content.indexOf('"task": "景点选择"');
+  const start = taskIndex >= 0 ? content.lastIndexOf("{", taskIndex) : -1;
+  const end = content.lastIndexOf("}");
+  if (start < 0 || end <= start) return JSON.stringify([]);
+  const payload = JSON.parse(content.slice(start, end + 1)) as {
+    candidates?: { id?: string }[];
+    nonMovementDays?: number[];
+  };
+  const ids = (payload.candidates ?? []).map((candidate) => candidate.id).filter(Boolean);
+  if (ids.length === 0) return JSON.stringify([]);
+  return JSON.stringify(
+    (payload.nonMovementDays ?? [1]).map((day, index) => ({
+      day,
+      candidateId: ids[index % ids.length],
+      sequence: 1,
+      stayMinutes: 150,
+      reason: "按已冻结交通与地理分区安排",
+    })),
+  );
+}
 function fakeButlerFetch(): FetchImpl {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -445,7 +514,7 @@ function fakeButlerFetch(): FetchImpl {
     if (content.includes("生成旅行回望与结束语")) {
       return responseWith(JSON.stringify({ quoteId: null, message: "这是一段值得回味的旅程。" }));
     }
-    return responseWith(butlerSkeletonJson());
+    return responseWith(butlerSelectionJsonFromPrompt(content));
   }) as FetchImpl;
 }
 
@@ -454,7 +523,7 @@ function failingButlerFetch(): FetchImpl {
     const url = String(input);
     if (url.includes("tavily")) return tavilySearchResponse();
     const content = requestMessageContent(JSON.parse(String(init?.body)));
-    if (content.includes("生成逐日排程骨架")) {
+    if (content.includes("景点选择")) {
       throw new TypeError("network down");
     }
     if (content.includes("生成旅行回望与结束语")) {
@@ -508,21 +577,20 @@ test("开关打开时走管家链路并带回违规清单", async () => {
   );
 });
 
-test("管家骨架失败时退回 legacy 链路而不抛错", async () => {
-  const result = await runLivePlannerWith(buildLiveInput(), {
-    env: {
-      BUTLER_PLANNER: "1",
-      DEEPSEEK_API_KEY: "k",
-      TAVILY_API_KEY: "k",
-      AMAP_E2E_FIXTURE: "1",
-    },
-    fetchImpl: failingButlerFetch(),
-    repository: createMemoryPlaceRepository(),
-  });
-
-  assert.equal(result.status, "ok");
-  if (result.status !== "ok") return;
-  assert.equal(result.mode, "legacy");
+test("管家阶段失败时 fail closed 而不退回 legacy", async () => {
+  await assert.rejects(
+    runLivePlannerWith(buildLiveInput(), {
+      env: {
+        BUTLER_PLANNER: "1",
+        DEEPSEEK_API_KEY: "k",
+        TAVILY_API_KEY: "k",
+        AMAP_E2E_FIXTURE: "1",
+      },
+      fetchImpl: failingButlerFetch(),
+      repository: createMemoryPlaceRepository(),
+    }),
+    /管家规划失败/,
+  );
 });
 
 test("高德目的地候选非空时会进入管家 sources", async () => {
@@ -550,7 +618,7 @@ test("高德目的地候选非空时会进入管家 sources", async () => {
           name: "天坛公园",
           type: "风景名胜;公园",
           address: "北京市东城区天坛东里甲1号",
-          location: [116.410, 39.882],
+          location: [116.41, 39.882],
         },
       ];
     },
@@ -595,18 +663,32 @@ test("高德目的地候选非空时会进入管家 sources", async () => {
         roundTrip: true,
         returnMode: "fast",
         legs: [
-          { id: "outbound:0", from: "厦门", to: "北京", transport: "balanced", style: "direct", kind: "outbound" },
-          { id: "return", from: "北京", to: "厦门", transport: "balanced", style: "direct", kind: "return" },
+          {
+            id: "outbound:0",
+            from: "厦门",
+            to: "北京",
+            transport: "balanced",
+            style: "direct",
+            kind: "outbound",
+          },
+          {
+            id: "return",
+            from: "北京",
+            to: "厦门",
+            transport: "balanced",
+            style: "direct",
+            kind: "return",
+          },
         ],
       },
     }),
     {
       env: {
-      BUTLER_PLANNER: "1",
-      DEEPSEEK_API_KEY: "k",
-      TAVILY_API_KEY: "k",
-      AMAP_E2E_FIXTURE: "1",
-    },
+        BUTLER_PLANNER: "1",
+        DEEPSEEK_API_KEY: "k",
+        TAVILY_API_KEY: "k",
+        AMAP_E2E_FIXTURE: "1",
+      },
       fetchImpl,
       repository: createMemoryPlaceRepository(),
       amapClient,
@@ -617,7 +699,10 @@ test("高德目的地候选非空时会进入管家 sources", async () => {
   if (result.status !== "ok") return;
   assert.ok(result.sources.some((source) => source.title === "故宫博物院"));
   assert.ok(result.sources.some((source) => source.url.includes("amap.com/place/")));
-  assert.deepEqual(result.route.legs.map((leg) => leg.transport), ["flight", "flight"]);
+  assert.deepEqual(
+    result.route.legs.map((leg) => leg.transport),
+    ["flight", "flight"],
+  );
   assert.ok(tavilyQueries.length >= 2);
   assert.ok(tavilyQueries.every((query) => query.includes("票价")));
 });

@@ -56,7 +56,11 @@ import {
 } from "@/lib/route-planner";
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
 import { recommendBudget } from "@/lib/budget-advice.functions";
-import { buildPlannedDaysFromSkeleton, buildTripPlanFromSkeleton, buildTripPlanOutput } from "@/lib/plan-output-adapter";
+import {
+  buildPlannedDaysFromSkeleton,
+  buildTripPlanFromSkeleton,
+  buildTripPlanOutput,
+} from "@/lib/plan-output-adapter";
 import {
   validateTripBrief,
   type TripBrief as TravelerBudgetTripBrief,
@@ -2088,7 +2092,15 @@ function ItineraryScreen({
       });
     }
     return splitPlacesAcrossDays(destination.places, weather, brief.pace);
-  }, [brief.days, brief.pace, butlerResult, destination.places, livePlan, resolvedRoutePlan, weather]);
+  }, [
+    brief.days,
+    brief.pace,
+    butlerResult,
+    destination.places,
+    livePlan,
+    resolvedRoutePlan,
+    weather,
+  ]);
 
   const executionPlan = useMemo(() => {
     if (butlerResult && resolvedRoutePlan) {
@@ -2097,6 +2109,8 @@ function ItineraryScreen({
         dayCopy: butlerResult.dayCopy,
         candidates: butlerResult.candidates,
         failedDays: butlerResult.failedDays,
+        budgetPlan: butlerResult.budget,
+        transportLegs: butlerResult.transportLegs,
         violations: butlerResult.violations,
         origin: brief.origin,
         destination,
@@ -2132,7 +2146,16 @@ function ItineraryScreen({
       title: livePlan?.title,
       closing: liveClosing ?? undefined,
     });
-  }, [brief, butlerResult, destination, liveClosing, livePlan?.title, plannedDays, resolvedRoutePlan, weather]);
+  }, [
+    brief,
+    butlerResult,
+    destination,
+    liveClosing,
+    livePlan?.title,
+    plannedDays,
+    resolvedRoutePlan,
+    weather,
+  ]);
   // 每次执行计划变化都分配新的预览 runId，旧流即使晚到也无法写入当前纸张。
   const previewRunId = useMemo(
     () =>
@@ -2187,7 +2210,8 @@ function ItineraryScreen({
           {resolvedRoutePlan ? (
             <div>
               <p className="result-route-path">
-                {resolvedRoutePlan.legs.map((leg) => leg.from).join(" → ")} → {resolvedRoutePlan.legs.at(-1)?.to}
+                {resolvedRoutePlan.legs.map((leg) => leg.from).join(" → ")} →{" "}
+                {resolvedRoutePlan.legs.at(-1)?.to}
                 {resolvedRoutePlan.roundTrip
                   ? resolvedRoutePlan.returnMode === "scenic"
                     ? " · 不走回头"
@@ -2241,36 +2265,36 @@ function ItineraryScreen({
       ) : null}
 
       {!detailedTrip ? (
-      <section className="result-weather">
-        <div className="section-kicker">
-          <span>{detailedTrip ? "WEATHER / 逐日天气" : "WEATHER / 前 16 天趋势"}</span>
-          <Badge>
-            {weatherState === "ready"
-              ? "Open-Meteo 实时"
-              : weatherState === "loading"
-                ? "正在获取"
-                : "暂不可用"}
-          </Badge>
-        </div>
-        <WeatherStrip
-          days={weather}
-          variant={variant}
-          loading={weatherState === "loading"}
-          error={weatherError}
-        />
-        {!detailedTrip ? (
-          <p className="mt-4 text-sm leading-7 text-[var(--v-muted)]">
-            前 3 天可信度较高，4–16 天仅作趋势参考；第 17 天起暂无逐日天气预报，以实际天气为准。
-          </p>
-        ) : null}
-        {rainDays > 0 ? (
-          <p className="mt-4 text-sm text-[var(--v-muted)]">
-            前 16 天中有
-            <strong className="text-[var(--v-ink)]">{rainDays} 天</strong>
-            可能降雨，行程会优先照顾室内或短时景点。
-          </p>
-        ) : null}
-      </section>
+        <section className="result-weather">
+          <div className="section-kicker">
+            <span>{detailedTrip ? "WEATHER / 逐日天气" : "WEATHER / 前 16 天趋势"}</span>
+            <Badge>
+              {weatherState === "ready"
+                ? "Open-Meteo 实时"
+                : weatherState === "loading"
+                  ? "正在获取"
+                  : "暂不可用"}
+            </Badge>
+          </div>
+          <WeatherStrip
+            days={weather}
+            variant={variant}
+            loading={weatherState === "loading"}
+            error={weatherError}
+          />
+          {!detailedTrip ? (
+            <p className="mt-4 text-sm leading-7 text-[var(--v-muted)]">
+              前 3 天可信度较高，4–16 天仅作趋势参考；第 17 天起暂无逐日天气预报，以实际天气为准。
+            </p>
+          ) : null}
+          {rainDays > 0 ? (
+            <p className="mt-4 text-sm text-[var(--v-muted)]">
+              前 16 天中有
+              <strong className="text-[var(--v-ink)]">{rainDays} 天</strong>
+              可能降雨，行程会优先照顾室内或短时景点。
+            </p>
+          ) : null}
+        </section>
       ) : null}
 
       {detailedTrip ? (

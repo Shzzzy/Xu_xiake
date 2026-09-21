@@ -9,8 +9,28 @@ import type { PlanningStage } from "./planning-run.ts";
 
 // 两条候选资料，供骨架指令与校验器使用。
 const candidates = [
-  { name: "黄山风景区", summary: "以奇松怪石云海温泉四绝著称。", source: "https://example.com/huangshan" },
-  { name: "屯溪老街", summary: "徽州老街，适合傍晚漫步。", source: "https://example.com/tunxi" },
+  {
+    id: "poi-huangshan",
+    name: "黄山风景区",
+    summary: "以奇松怪石云海温泉四绝著称。",
+    source: "https://example.com/huangshan",
+    address: "安徽省黄山市黄山区",
+    type: "风景名胜",
+    location: [118.166, 30.13] as [number, number],
+    publicUrl: "https://example.com/huangshan",
+    areaKey: "黄山市-黄山区",
+  },
+  {
+    id: "poi-tunxi",
+    name: "屯溪老街",
+    summary: "徽州老街，适合傍晚漫步。",
+    source: "https://example.com/tunxi",
+    address: "安徽省黄山市屯溪区",
+    type: "风景名胜",
+    location: [118.31, 29.71] as [number, number],
+    publicUrl: "https://example.com/tunxi",
+    areaKey: "黄山市-屯溪区",
+  },
 ];
 
 // 合法的两天行程输入；transport 留空，避免触发 TRANSPORT_CONFLICT。
@@ -38,12 +58,24 @@ const butlerInput: ButlerPlanInput = {
         id: "leg-1",
         from: "杭州",
         to: "黄山",
-        transport: "balanced",
+        transport: "train",
         style: "direct",
         kind: "outbound",
       },
     ],
   },
+  transportLegs: [
+    {
+      id: "leg-1",
+      kind: "outbound",
+      from: "杭州",
+      to: "黄山",
+      distanceKm: 260,
+      mode: "train",
+      doorToDoorMinutes: 180,
+      minimumPerPersonCost: 150,
+    },
+  ],
   weather: [
     { date: "2026-10-01", code: 0, tempMax: 22, tempMin: 14, precipProb: 10 },
     { date: "2026-10-02", code: 1, tempMax: 20, tempMin: 12, precipProb: 20 },
@@ -59,11 +91,37 @@ function skeletonJson(overBudget = false): string {
     day,
     theme: day === 1 ? "黄山核心游览" : "屯溪老街收尾",
     nodes: [
-      { type: "attraction", startTime: "09:00", endTime: "11:30", name: "黄山风景区", stayMinutes: 150, estimatedCost: 230 },
+      {
+        type: "attraction",
+        startTime: "09:00",
+        endTime: "11:30",
+        name: "黄山风景区",
+        stayMinutes: 150,
+        estimatedCost: 230,
+      },
       { type: "meal", startTime: "12:00", endTime: "13:00", name: "徽菜午餐", estimatedCost: 120 },
-      { type: "attraction", startTime: "14:00", endTime: "15:30", name: "屯溪老街", stayMinutes: 90, estimatedCost: 60 },
-      { type: "hotel", startTime: "16:00", endTime: "16:30", name: "黄山温泉酒店", estimatedCost: hotel },
-      { type: "rest", startTime: "17:00", endTime: "17:30", name: "返回酒店休息", estimatedCost: 0 },
+      {
+        type: "attraction",
+        startTime: "14:00",
+        endTime: "15:30",
+        name: "屯溪老街",
+        stayMinutes: 90,
+        estimatedCost: 60,
+      },
+      {
+        type: "hotel",
+        startTime: "16:00",
+        endTime: "16:30",
+        name: "黄山温泉酒店",
+        estimatedCost: hotel,
+      },
+      {
+        type: "rest",
+        startTime: "17:00",
+        endTime: "17:30",
+        name: "返回酒店休息",
+        estimatedCost: 0,
+      },
     ],
     radar: { physical: 60, childFit: 55, weatherSensitivity: 65, timeCost: 50, crowding: 70 },
   });
@@ -88,6 +146,11 @@ function closingJson(): string {
   return JSON.stringify({ quoteId: null, message: "这是一段值得回味的旅程。" });
 }
 
+function selectionJson(): string {
+  return JSON.stringify([
+    { day: 2, candidateId: "poi-tunxi", sequence: 1, stayMinutes: 120, reason: "次日安排屯溪老街" },
+  ]);
+}
 function responseWith(content: string): Response {
   return Response.json({ choices: [{ message: { content } }] });
 }
@@ -114,13 +177,13 @@ function fakeFetch(calls: string[] = [], bodies: RequestBody[] = []): FetchImpl 
     if (content.includes("生成旅行回望与结束语")) {
       return responseWith(closingJson());
     }
-    return responseWith(skeletonJson(false));
+    return responseWith(selectionJson());
   }) as FetchImpl;
 }
 
-// 首次骨架超预算，重排一次后合规；可选记录重排请求体，用于断言回喂内容。
+// selection 首次越界时只修复一次；可选记录修复请求体。
 function fakeFetchOverBudgetOnce(repairBodies: RequestBody[] = []): FetchImpl {
-  let skeletonCalls = 0;
+  let selectionCalls = 0;
   return (async (url: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as RequestBody;
     const content = messageContent(body);
@@ -132,16 +195,24 @@ function fakeFetchOverBudgetOnce(repairBodies: RequestBody[] = []): FetchImpl {
     if (content.includes("生成旅行回望与结束语")) {
       return responseWith(closingJson());
     }
-    if (content.includes("上一版排程骨架存在以下违规")) {
-      repairBodies.push(body);
+    if (content.includes("景点选择")) {
+      selectionCalls += 1;
+      if (content.includes("上一版景点选择未通过校验")) {
+        repairBodies.push(body);
+        return responseWith(selectionJson());
+      }
+      return responseWith(
+        JSON.stringify([
+          { day: 2, candidateId: "missing", sequence: 1, stayMinutes: 120, reason: "越界" },
+        ]),
+      );
     }
 
-    skeletonCalls += 1;
-    return responseWith(skeletonJson(skeletonCalls === 1));
+    return responseWith(selectionJson());
   }) as FetchImpl;
 }
 
-// 重排后仍然超预算：只允许一次内容重排，最终交付带违规的版本。
+// selection 修复后仍越界时，必须 fail closed。
 function fakeFetchOverBudgetAlways(): FetchImpl {
   return (async (url: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as RequestBody;
@@ -154,7 +225,11 @@ function fakeFetchOverBudgetAlways(): FetchImpl {
     if (content.includes("生成旅行回望与结束语")) {
       return responseWith(closingJson());
     }
-    return responseWith(skeletonJson(true));
+    return responseWith(
+      JSON.stringify([
+        { day: 2, candidateId: "missing", sequence: 1, stayMinutes: 120, reason: "越界" },
+      ]),
+    );
   }) as FetchImpl;
 }
 
@@ -171,7 +246,7 @@ function fakeFetchWithFailingDayCopy(): FetchImpl {
     if (content.includes("生成旅行回望与结束语")) {
       return responseWith(closingJson());
     }
-    return responseWith(skeletonJson(false));
+    return responseWith(selectionJson());
   }) as FetchImpl;
 }
 
@@ -182,19 +257,23 @@ function failingFetch(): FetchImpl {
   }) as FetchImpl;
 }
 
-test("正常路径：骨架一次、文案按天顺序、结尾一次", async () => {
+test("正常路径：选择一次、文案按天顺序、结尾一次", async () => {
   const calls: string[] = [];
   const bodies: RequestBody[] = [];
-  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: fakeFetch(calls, bodies) });
+  const result = await planWithButler(butlerInput, {
+    apiKey: "k",
+    fetchImpl: fakeFetch(calls, bodies),
+  });
 
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
 
-  assert.equal(result.attempts, 1);
+  assert.equal(result.attempts, 4);
   assert.equal(result.dayCopy.length, 2);
   assert.equal(result.failedDays.length, 0);
   assert.equal(result.candidates.length, 2);
-  assert.equal(calls.filter((url) => url.includes("chat/completions")).length, 4); // 骨架 + 2 文案 + 结尾
+  assert.ok(result.budget.transport >= 450);
+  assert.equal(calls.filter((url) => url.includes("chat/completions")).length, 4);
 
   // 结尾调用必须显式收敛到 800 tokens。
   const closingBody = bodies.find((body) => messageContent(body).includes("生成旅行回望与结束语"));
@@ -202,7 +281,7 @@ test("正常路径：骨架一次、文案按天顺序、结尾一次", async ()
   assert.equal(closingBody?.max_tokens, 800);
 });
 
-test("首次骨架超预算时只重排一次", async () => {
+test("selection 首次越界时只修复一次", async () => {
   const repairBodies: RequestBody[] = [];
   const result = await planWithButler(butlerInput, {
     apiKey: "k",
@@ -212,30 +291,32 @@ test("首次骨架超预算时只重排一次", async () => {
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
 
-  assert.equal(result.attempts, 2);
+  assert.equal(result.attempts, 5);
   assert.equal(result.violations.length, 0);
-
-  // 重排请求必须同时回喂上一版骨架节点与违规清单。
   assert.equal(repairBodies.length, 1);
   const repairContent = messageContent(repairBodies[0] as RequestBody);
-  assert.match(repairContent, /黄山温泉酒店/); // 只出现在上一版骨架 JSON 里
-  assert.match(repairContent, /总预算超支/); // 违规清单信息
+  assert.match(repairContent, /上一版景点选择未通过校验/);
+  assert.match(repairContent, /missing/);
 });
 
-test("重排后仍不合规则带违规清单返回", async () => {
-  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: fakeFetchOverBudgetAlways() });
+test("selection 修复后仍越界时 fail closed", async () => {
+  const result = await planWithButler(butlerInput, {
+    apiKey: "k",
+    fetchImpl: fakeFetchOverBudgetAlways(),
+  });
 
-  assert.equal(result.status, "ok");
-  if (result.status !== "ok") return;
-
-  assert.equal(result.attempts, 2); // 真实骨架调用次数：正常 + 一次重排
-  assert.ok(result.violations.some((item) => item.code === "OVER_BUDGET"));
+  assert.equal(result.status, "failed");
+  if (result.status !== "failed") return;
+  assert.equal(result.stage, "selection");
+  assert.match(result.reason, /候选/);
 });
 
-test("骨架连续失败后走兜底", async () => {
+test("selection 连续请求失败时 fail closed", async () => {
   const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: failingFetch() });
 
-  assert.equal(result.status, "fallback");
+  assert.equal(result.status, "failed");
+  if (result.status !== "failed") return;
+  assert.equal(result.stage, "selection");
 });
 
 test("缺少 API key 时返回 needs_configuration", async () => {
@@ -255,7 +336,10 @@ test("apiKey 为空字符串时回退到 deepseekKey", async () => {
 });
 
 test("第 2 天文案失败时降级为空文案并记录 failedDays", async () => {
-  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: fakeFetchWithFailingDayCopy() });
+  const result = await planWithButler(butlerInput, {
+    apiKey: "k",
+    fetchImpl: fakeFetchWithFailingDayCopy(),
+  });
 
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
@@ -349,7 +433,7 @@ test("每日文案逐日生成，前一天完成前不会请求下一天", async
       }
     }
     if (content.includes("生成旅行回望与结束语")) return responseWith(closingJson());
-    return responseWith(skeletonJson(false));
+    return responseWith(selectionJson());
   }) as FetchImpl;
 
   const pending = planWithButler(butlerInput, { apiKey: "k", fetchImpl });
@@ -371,7 +455,7 @@ test("每日文案 day 与请求日期不一致时只降级当天", async () => 
       return responseWith(dayCopyJson(day === 2 ? 1 : day));
     }
     if (content.includes("生成旅行回望与结束语")) return responseWith(closingJson());
-    return responseWith(skeletonJson(false));
+    return responseWith(selectionJson());
   }) as FetchImpl;
 
   const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl });

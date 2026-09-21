@@ -115,17 +115,27 @@ const attractionSelectionSchema = z
   })
   .strict();
 
+const attractionSelectionResponseSchema = z.union([
+  z.array(attractionSelectionSchema),
+  z.object({ selections: z.array(attractionSelectionSchema) }).strict(),
+]);
 export function parseAttractionSelection(
   content: string,
-  _candidateIds: ReadonlySet<string>,
+  candidateIds: ReadonlySet<string>,
 ): AttractionSelection[] {
-  void _candidateIds;
   const cleaned = content
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/, "")
     .trim();
-  return z.array(attractionSelectionSchema).min(1).parse(JSON.parse(cleaned));
+  const parsed = attractionSelectionResponseSchema.parse(JSON.parse(cleaned));
+  const selection = Array.isArray(parsed) ? parsed : parsed.selections;
+  for (const item of selection) {
+    if (!candidateIds.has(item.candidateId)) {
+      throw new Error(`景点选择包含候选集合之外的 candidateId：${item.candidateId}`);
+    }
+  }
+  return selection;
 }
 export type SkeletonCandidate = { name: string; summary: string; source: string };
 

@@ -2,6 +2,8 @@ import type { Destination } from "../data/planner-destinations.ts";
 import type { PlannerDayCopy } from "./planner-day-copy.ts";
 import type { PlanViolation } from "./plan-validator.ts";
 import type { PlannerSkeleton, PlannerSkeletonNode } from "./planner-skeleton.ts";
+import type { BudgetPlan } from "./budget-planner.ts";
+import type { TransportPlanLeg } from "./transport-planner.server.ts";
 import {
   classifyWeather,
   type Pace,
@@ -66,6 +68,10 @@ export type TripPlanFromSkeletonInput = {
   /** 文案生成失败的日期（day 序号），用于在路书上标注「本页分析未能生成」。 */
   failedDays?: number[];
   transportPreference: TransportPreference;
+  /** deterministic 管线的最终预算；传入后不得再由节点费用覆盖。 */
+  budgetPlan?: BudgetPlan;
+  /** 归一化交通腿，用于补全路线页的距离与门到门时长。 */
+  transportLegs?: TransportPlanLeg[];
 };
 
 const PACE_LABELS: Record<Pace, string> = {
@@ -149,31 +155,43 @@ export function buildTripRoute(
   routePlan: RoutePlan | null,
   roundTrip: boolean,
   returnMode: ReturnMode,
+  transportLegs: TransportPlanLeg[] = [],
 ): TripRoute {
-  const toSegment = (leg: RoutePlan["legs"][number]) => ({
-    from: leg.from,
-    to: leg.to,
-    mode: leg.transport,
-    distanceKm: 0,
-    durationMinutes: 0,
-    navigation: "",
-  });
+  const plannedByLegId = new Map(transportLegs.map((leg) => [leg.id, leg]));
+  const toSegment = (leg: RoutePlan["legs"][number]) => {
+    const planned = plannedByLegId.get(leg.id);
+    return {
+      from: leg.from,
+      to: leg.to,
+      mode: planned?.mode ?? leg.transport,
+      distanceKm: planned?.distanceKm ?? 0,
+      durationMinutes: planned?.doorToDoorMinutes ?? 0,
+      navigation: "",
+    };
+  };
   const outboundSegments =
     routePlan?.legs.filter((leg) => leg.kind === "outbound").map(toSegment) ?? [];
   const returnSegments =
     routePlan?.legs.filter((leg) => leg.kind === "return").map(toSegment) ?? [];
+  const distanceKm = [...outboundSegments, ...returnSegments].reduce(
+    (total, segment) => total + segment.distanceKm,
+    0,
+  );
+  const durationMinutes = [...outboundSegments, ...returnSegments].reduce(
+    (total, segment) => total + segment.durationMinutes,
+    0,
+  );
 
   return {
     outbound: [],
     returnPath: [],
     outboundSegments,
     returnSegments,
-    distanceKm: 0,
-    durationMinutes: 0,
+    distanceKm,
+    durationMinutes,
     returnMode: roundTrip ? returnMode : null,
   };
 }
-
 function parseClock(value: string | undefined) {
   const matched = /^(\d{1,2}):(\d{2})$/.exec(value ?? "");
   if (!matched) return null;
@@ -313,6 +331,22 @@ function buildBudgetFromDays(
   });
 }
 
+function buildBudgetFromDeterministicPlan(
+  plan: BudgetPlan,
+  totalBudget: number,
+  travelers: Travelers,
+): TripBudget {
+  const exact = (value: number) => ({ min: value, max: value });
+  return estimateBudget({
+    totalBudget: Math.max(0, totalBudget),
+    travelers,
+    transport: exact(plan.transport),
+    lodging: exact(plan.lodging),
+    food: exact(plan.food),
+    tickets: exact(plan.tickets),
+    other: exact(plan.other),
+  });
+}
 function addDays(isoDate: string, offset: number): string {
   const parsed = new Date(isoDate + "T00:00:00Z");
   if (Number.isNaN(parsed.getTime())) return isoDate;
@@ -438,8 +472,15 @@ export function buildTripPlanFromSkeleton(input: TripPlanFromSkeletonInput): Tri
       // 管家 dayCopy 是每日文案权威源，下游 preview/PDF 的 legacy enrichment 必须跳过。
       narrativeSource: "butler",
     },
-    budget: buildBudgetFromDays(days, input.totalBudget, input.travelers),
-    route: buildTripRoute(input.routePlan, input.roundTrip, input.returnMode),
+    budget: input.budgetPlan
+      ? buildBudgetFromDeterministicPlan(input.budgetPlan, input.totalBudget, input.travelers)
+      : buildBudgetFromDays(days, input.totalBudget, input.travelers),
+    route: buildTripRoute(
+      input.routePlan,
+      input.roundTrip,
+      input.returnMode,
+      input.transportLegs ?? [],
+    ),
     days,
     closing: input.closing ?? {
       quote: null,
