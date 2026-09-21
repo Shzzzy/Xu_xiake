@@ -501,6 +501,11 @@ test("开关打开时走管家链路并带回违规清单", async () => {
   assert.ok(result.skeleton.days.length > 0);
   assert.ok(result.dayCopy.length > 0);
   assert.ok(result.sources.length > 0);
+  assert.ok(result.candidates.length > 0);
+  assert.deepEqual(
+    result.candidates.map((candidate) => candidate.name),
+    result.sources.map((source) => source.title),
+  );
 });
 
 test("管家骨架失败时退回 legacy 链路而不抛错", async () => {
