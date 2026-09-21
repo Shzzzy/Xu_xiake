@@ -377,7 +377,10 @@ export async function runDeterministicPipeline(
         if (options.failAt === stage) {
           throw new Error(`阶段 ${stage} 按测试要求失败`);
         }
-        await options.runStage?.(stage, attempt, run);
+        if (!options.runStage) {
+          throw new Error(`缺少阶段处理器：${stage}`);
+        }
+        await options.runStage(stage, attempt, run);
         run = setStageStatus(run, stage, "passed");
         break;
       } catch (error) {

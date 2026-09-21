@@ -271,6 +271,7 @@ test("每一步失败后不会调用下一步", async () => {
   const run = await runDeterministicPipeline({
     id: "run-stop",
     onStage: (stage) => stages.push(stage),
+    runStage: async () => {},
     failAt: "selection",
   });
 
@@ -378,4 +379,17 @@ test("每日文案 day 与请求日期不一致时只降级当天", async () => 
   assert.ok((result.dayCopy[0]?.purpose ?? "").length > 0);
   assert.equal(result.dayCopy[1]?.purpose, "");
   assert.deepEqual(result.failedDays, [2]);
+});
+
+test("缺少阶段处理器时当前阶段失败并停止", async () => {
+  const stages: PlanningStage[] = [];
+  const run = await runDeterministicPipeline({
+    id: "run-missing-handler",
+    onStage: (stage) => stages.push(stage),
+  });
+
+  assert.deepEqual(stages, ["route"]);
+  assert.equal(run.stages.route.status, "failed");
+  assert.match(run.stages.route.error ?? "", /处理器/);
+  assert.equal(run.stages.pois.status, "pending");
 });
