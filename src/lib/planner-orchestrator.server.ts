@@ -24,6 +24,8 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 // 骨架、每日文案、结尾的 token 上限，与设计文档 §9 保持一致。
 const SKELETON_MAX_TOKENS = 4000;
 const DAY_COPY_MAX_TOKENS = 1200;
+// 结尾调用 ≤ 800 tokens，与设计文档 §9 一致。
+const CLOSING_MAX_TOKENS = 800;
 
 // 骨架调用预算：正常 1 次 + 技术重试 1 次 + 内容重排 1 次，共用额度。
 const MAX_SKELETON_ATTEMPTS = 3;
@@ -71,6 +73,8 @@ export type ButlerPlanResult =
       skeleton: PlannerSkeleton;
       violations: PlanViolation[];
       dayCopy: PlannerDayCopy[];
+      /** 文案生成失败的天序号，供 Task 8 渲染「本页分析未能生成」留痕。 */
+      failedDays: number[];
       closing: TripClosing;
       attempts: number;
       candidates: { name: string; summary: string; source: string }[];
@@ -83,7 +87,12 @@ type SkeletonOutcome =
   | { kind: "fallback"; reason: string };
 
 function resolveApiKey(deps: ButlerDeps): string {
-  return (deps.apiKey ?? deps.deepseekKey ?? process.env.DEEPSEEK_API_KEY ?? "").trim();
+  return (
+    deps.apiKey?.trim() ||
+    deps.deepseekKey?.trim() ||
+    process.env.DEEPSEEK_API_KEY?.trim() ||
+    ""
+  ).trim();
 }
 
 // 统一的 DeepSeek Chat Completions 调用，供骨架与每日文案复用。
@@ -158,7 +167,7 @@ function buildSkeletonInstructionInput(input: ButlerPlanInput): SkeletonInstruct
   };
 }
 
-// 解析/结构失败时的更严格指令：复用正常指令并追加格式硬约束。
+// 解析/结构失败时的更严格指令：在上一条指令上追加格式硬约束。
 function buildStricterSkeletonInstruction(previousInstruction: string): string {
   return [
     previousInstruction,
@@ -190,6 +199,24 @@ function buildValidationBrief(input: ButlerPlanInput): {
     waypoints: input.route.waypoints,
     destination: input.destination,
   };
+}
+
+// 重排请求必须回喂「违规指令 + 上一版骨架 + 与首次调用相同的输入」，
+// 让模型能执行「只改违规处、其余保持原样」，而不是凭空重写一份。
+function buildSkeletonRepairPrompt(
+  input: SkeletonInstructionInput,
+  skeleton: PlannerSkeleton,
+  violations: PlanViolation[],
+): string {
+  return [
+    buildSkeletonRepairInstruction(violations),
+    "",
+    "上一版骨架（只改被判定违规处，其余保持原样）：",
+    JSON.stringify(skeleton, null, 2),
+    "",
+    "同一份输入（brief / route / weather / candidates）：",
+    buildSkeletonInstruction(input),
+  ].join("\n");
 }
 
 async function obtainSkeleton(
@@ -248,11 +275,12 @@ async function obtainSkeleton(
 
     // 内容违规：只允许一次带清单重排。
     if (repaired) {
-      // 重排后仍不合规：交付带提醒版本，attempts 记满额表示额度耗尽。
-      return { kind: "ok", skeleton, violations, attempts: MAX_SKELETON_ATTEMPTS };
+      // 重排后仍不合规：交付带提醒版本，attempts 报告真实调用次数。
+      return { kind: "ok", skeleton, violations, attempts };
     }
     repaired = true;
-    nextInstruction = buildSkeletonRepairInstruction(violations);
+    // 重排请求回喂违规清单 + 上一版骨架 + 同一份输入，见 buildSkeletonRepairPrompt。
+    nextInstruction = buildSkeletonRepairPrompt(instructionInput, skeleton, violations);
   }
 
   return { kind: "fallback", reason: "骨架尝试次数已用尽，已退回本地兜底行程" };
@@ -297,20 +325,26 @@ export async function planWithButler(
   const { skeleton, violations, attempts } = skeletonOutcome;
 
   // 骨架定稿后，每天文案与结尾并行发出；单个失败只降级该份内容，不影响整体。
-  const dayCopyJobs = skeleton.days.map(async (day): Promise<PlannerDayCopy> => {
-    try {
-      const content = await requestChatCompletion(
-        buildDayCopyInstructionForDay(day),
-        deps,
-        apiKey,
-        DAY_COPY_MAX_TOKENS,
-      );
-      return parsePlannerDayCopy(content);
-    } catch {
-      // 某天文案失败时退回空文案，Task 8 组装器会用本地默认文案补齐。
-      return { day: day.day, purpose: "", highlights: [], cautions: [], history: [] };
-    }
-  });
+  const dayCopyJobs = skeleton.days.map(
+    async (day): Promise<{ day: number; copy: PlannerDayCopy; failed: boolean }> => {
+      try {
+        const content = await requestChatCompletion(
+          buildDayCopyInstructionForDay(day),
+          deps,
+          apiKey,
+          DAY_COPY_MAX_TOKENS,
+        );
+        return { day: day.day, copy: parsePlannerDayCopy(content), failed: false };
+      } catch {
+        // 某天文案失败时退回空文案并记录 failedDays，Task 8 组装器会用本地默认文案补齐并留痕。
+        return {
+          day: day.day,
+          copy: { day: day.day, purpose: "", highlights: [], cautions: [], history: [] },
+          failed: true,
+        };
+      }
+    },
+  );
 
   const closingJob = (async (): Promise<TripClosing> => {
     try {
@@ -320,19 +354,23 @@ export async function planWithButler(
         model: deps.model ?? process.env.DEEPSEEK_MODEL,
         fetchImpl: deps.fetchImpl ?? fetch,
         timeoutMs: deps.timeoutMs,
+        maxTokens: CLOSING_MAX_TOKENS,
       });
     } catch {
       return { quote: null, source: null, message: FALLBACK_CLOSING_MESSAGE };
     }
   })();
 
-  const [dayCopy, closing] = await Promise.all([Promise.all(dayCopyJobs), closingJob]);
+  const [dayCopyResults, closing] = await Promise.all([Promise.all(dayCopyJobs), closingJob]);
+  const dayCopy = dayCopyResults.map((result) => result.copy);
+  const failedDays = dayCopyResults.filter((result) => result.failed).map((result) => result.day);
 
   return {
     status: "ok",
     skeleton,
     violations,
     dayCopy,
+    failedDays,
     closing,
     attempts,
     candidates: input.candidates,

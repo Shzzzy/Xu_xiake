@@ -91,13 +91,19 @@ function responseWith(content: string): Response {
 }
 
 type FetchImpl = typeof fetch;
+type RequestBody = { messages: { content: string }[]; max_tokens?: number };
 
-// 正常路径：第一条骨架、每日文案与结尾都成功。
-function fakeFetch(calls: string[] = []): FetchImpl {
+function messageContent(body: RequestBody): string {
+  return body.messages.map((message) => message.content).join("\n");
+}
+
+// 正常路径：第一条骨架、每日文案与结尾都成功；可选记录请求体用于断言 token 上限。
+function fakeFetch(calls: string[] = [], bodies: RequestBody[] = []): FetchImpl {
   return (async (url: RequestInfo | URL, init?: RequestInit) => {
     calls.push(String(url));
-    const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
-    const content = body.messages.map((message) => message.content).join("\n");
+    const body = JSON.parse(String(init?.body)) as RequestBody;
+    bodies.push(body);
+    const content = messageContent(body);
 
     if (content.includes("每日文案")) {
       const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
@@ -110,12 +116,12 @@ function fakeFetch(calls: string[] = []): FetchImpl {
   }) as FetchImpl;
 }
 
-// 首次骨架超预算，重排一次后合规。
-function fakeFetchOverBudgetOnce(): FetchImpl {
+// 首次骨架超预算，重排一次后合规；可选记录重排请求体，用于断言回喂内容。
+function fakeFetchOverBudgetOnce(repairBodies: RequestBody[] = []): FetchImpl {
   let skeletonCalls = 0;
   return (async (url: RequestInfo | URL, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
-    const content = body.messages.map((message) => message.content).join("\n");
+    const body = JSON.parse(String(init?.body)) as RequestBody;
+    const content = messageContent(body);
 
     if (content.includes("每日文案")) {
       const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
@@ -123,6 +129,9 @@ function fakeFetchOverBudgetOnce(): FetchImpl {
     }
     if (content.includes("生成旅行回望与结束语")) {
       return responseWith(closingJson());
+    }
+    if (content.includes("上一版排程骨架存在以下违规")) {
+      repairBodies.push(body);
     }
 
     skeletonCalls += 1;
@@ -133,8 +142,8 @@ function fakeFetchOverBudgetOnce(): FetchImpl {
 // 重排后仍然超预算：只允许一次内容重排，最终交付带违规的版本。
 function fakeFetchOverBudgetAlways(): FetchImpl {
   return (async (url: RequestInfo | URL, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
-    const content = body.messages.map((message) => message.content).join("\n");
+    const body = JSON.parse(String(init?.body)) as RequestBody;
+    const content = messageContent(body);
 
     if (content.includes("每日文案")) {
       const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
@@ -147,6 +156,23 @@ function fakeFetchOverBudgetAlways(): FetchImpl {
   }) as FetchImpl;
 }
 
+// 第 2 天文案失败：其余链路正常，用于覆盖 failedDays 降级。
+function fakeFetchWithFailingDayCopy(): FetchImpl {
+  return (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as RequestBody;
+    const content = messageContent(body);
+
+    if (content.includes("每日文案")) {
+      const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
+      return day === 2 ? responseWith("{ bad json") : responseWith(dayCopyJson(day));
+    }
+    if (content.includes("生成旅行回望与结束语")) {
+      return responseWith(closingJson());
+    }
+    return responseWith(skeletonJson(false));
+  }) as FetchImpl;
+}
+
 // 骨架连续网络失败：自动重试一次后仍失败，返回 fallback。
 function failingFetch(): FetchImpl {
   return (async () => {
@@ -156,25 +182,42 @@ function failingFetch(): FetchImpl {
 
 test("正常路径：骨架一次、文案按天并行、结尾一次", async () => {
   const calls: string[] = [];
-  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: fakeFetch(calls) });
+  const bodies: RequestBody[] = [];
+  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: fakeFetch(calls, bodies) });
 
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
 
   assert.equal(result.attempts, 1);
   assert.equal(result.dayCopy.length, 2);
+  assert.equal(result.failedDays.length, 0);
   assert.equal(result.candidates.length, 2);
   assert.equal(calls.filter((url) => url.includes("chat/completions")).length, 4); // 骨架 + 2 文案 + 结尾
+
+  // 结尾调用必须显式收敛到 800 tokens。
+  const closingBody = bodies.find((body) => messageContent(body).includes("生成旅行回望与结束语"));
+  assert.ok(closingBody, "应发出一次结尾调用");
+  assert.equal(closingBody?.max_tokens, 800);
 });
 
 test("首次骨架超预算时只重排一次", async () => {
-  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: fakeFetchOverBudgetOnce() });
+  const repairBodies: RequestBody[] = [];
+  const result = await planWithButler(butlerInput, {
+    apiKey: "k",
+    fetchImpl: fakeFetchOverBudgetOnce(repairBodies),
+  });
 
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
 
   assert.equal(result.attempts, 2);
   assert.equal(result.violations.length, 0);
+
+  // 重排请求必须同时回喂上一版骨架节点与违规清单。
+  assert.equal(repairBodies.length, 1);
+  const repairContent = messageContent(repairBodies[0] as RequestBody);
+  assert.match(repairContent, /黄山温泉酒店/); // 只出现在上一版骨架 JSON 里
+  assert.match(repairContent, /总预算超支/); // 违规清单信息
 });
 
 test("重排后仍不合规则带违规清单返回", async () => {
@@ -183,7 +226,7 @@ test("重排后仍不合规则带违规清单返回", async () => {
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
 
-  assert.equal(result.attempts, 3); // 1 正常 + 1 技术重试额度未用 + 1 重排
+  assert.equal(result.attempts, 2); // 真实骨架调用次数：正常 + 一次重排
   assert.ok(result.violations.some((item) => item.code === "OVER_BUDGET"));
 });
 
@@ -197,4 +240,26 @@ test("缺少 API key 时返回 needs_configuration", async () => {
   const result = await planWithButler(butlerInput, { apiKey: "" });
 
   assert.equal(result.status, "needs_configuration");
+});
+
+test("apiKey 为空字符串时回退到 deepseekKey", async () => {
+  const result = await planWithButler(butlerInput, {
+    apiKey: "",
+    deepseekKey: "k",
+    fetchImpl: fakeFetch(),
+  });
+
+  assert.equal(result.status, "ok");
+});
+
+test("第 2 天文案失败时降级为空文案并记录 failedDays", async () => {
+  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl: fakeFetchWithFailingDayCopy() });
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+
+  assert.deepEqual(result.failedDays, [2]);
+  assert.ok((result.dayCopy[0]?.purpose ?? "").length > 0);
+  assert.equal(result.dayCopy[1]?.purpose, "");
+  assert.deepEqual(result.dayCopy[1]?.highlights, []);
 });
