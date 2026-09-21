@@ -2391,3 +2391,80 @@
     animation: none;
   }
 }
+
+/* AI 预算建议：独立成条，避免在窄预算列里挤压按钮文字。 */
+.budget-advice-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.85rem;
+  padding: 0.72rem 0.78rem;
+  border: 1px dashed color-mix(in oklab, var(--v-accent) 36%, var(--v-line));
+  border-radius: calc(var(--v-card-radius) * 0.55);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--v-accent) 7%, transparent), transparent 62%),
+    var(--v-paper);
+}
+
+.budget-advice-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.budget-advice-copy strong {
+  color: var(--v-ink);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.budget-advice-copy span {
+  color: var(--v-muted);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.budget-advice-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  min-height: 2.35rem;
+  padding: 0 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--v-accent) 74%, var(--v-line));
+  border-radius: 999px;
+  background: var(--v-accent);
+  color: var(--v-paper);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 7px 16px color-mix(in oklab, var(--v-accent) 22%, transparent);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+.budget-advice-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 9px 20px color-mix(in oklab, var(--v-accent) 28%, transparent);
+}
+
+.budget-advice-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  box-shadow: none;
+}
+
+@media (max-width: 640px) {
+  .budget-advice-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .budget-advice-action {
+    width: 100%;
+  }
+}

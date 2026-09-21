@@ -198,6 +198,9 @@ test("全团总预算旁提供 AI 推荐按钮", () => {
     />,
   );
   assert.match(html, /AI 推荐/);
+  assert.match(html, /budget-advice-panel/);
+  assert.match(html, /budget-advice-action/);
+  assert.match(html, /aria-describedby="budget-advice-hint"/);
 });
 
 const budgetAdvicePayload = {

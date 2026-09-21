@@ -1,3 +1,4 @@
+import { LoaderCircle, Sparkles } from "lucide-react";
 import type { TripBrief, VehicleEnergy } from "@/lib/travel-plan";
 import { cn } from "@/lib/utils";
 
@@ -79,24 +80,34 @@ export function TravelerBudgetFields({
               元
             </span>
           </div>
-          {budgetAdvice ? (
-            <span className="mt-2 flex items-center gap-2">
-              <button
-                type="button"
-                aria-label="AI 推荐预算"
-                disabled={budgetAdvice.pending}
-                onClick={budgetAdvice.onRequest}
-                className="rounded-md border border-[var(--v-line)] bg-[var(--v-soft)] px-3 py-1 text-xs font-medium text-[var(--v-accent)] hover:bg-[var(--v-line)] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {budgetAdvice.pending ? "正在估算…" : "AI 推荐"}
-              </button>
-              {budgetAdvice.hint ? (
-                <span className="text-xs text-[var(--v-muted)]">{budgetAdvice.hint}</span>
-              ) : null}
-            </span>
-          ) : null}
         </label>
       </div>
+
+      {budgetAdvice ? (
+        <div className="budget-advice-panel">
+          <div className="budget-advice-copy">
+            <strong>不知道该填多少？</strong>
+            <span id="budget-advice-hint">
+              {budgetAdvice.hint ?? "按人数、天数和交通方式给你一个参考预算。"}
+            </span>
+          </div>
+          <button
+            type="button"
+            aria-label="AI 推荐预算"
+            aria-describedby="budget-advice-hint"
+            disabled={budgetAdvice.pending}
+            onClick={budgetAdvice.onRequest}
+            className="budget-advice-action"
+          >
+            {budgetAdvice.pending ? (
+              <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Sparkles className="size-3.5" aria-hidden="true" />
+            )}
+            <span>{budgetAdvice.pending ? "正在估算" : "AI 推荐"}</span>
+          </button>
+        </div>
+      ) : null}
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <label>
