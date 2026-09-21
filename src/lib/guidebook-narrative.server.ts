@@ -1,0 +1,135 @@
+import { createHash } from "node:crypto";
+import type { TripDay, TripPlan } from "./travel-plan.ts";
+import {
+  buildDaySummaryWithDeepSeek,
+  type DaySummary,
+  type DeepSeekTravelDeps,
+} from "./travel-plan.server.ts";
+
+/** 同时问 DeepSeek 的自然日上限，避免长行程一次打出十几个并发请求。 */
+const NARRATIVE_CONCURRENCY = 3;
+const MAX_CACHE_ENTRIES = 300;
+
+/**
+ * 每日文案缓存：键是同一天最终排程的内容哈希。
+ *
+ * 路书会被预览和 PDF 导出各渲染一次，行程没变就不该重复付费。
+ */
+const narrativeCache = new Map<string, DaySummary>();
+
+export function dayNarrativeKey(plan: TripPlan, day: TripDay): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        title: plan.meta.title,
+        date: day.date,
+        weather: day.weather ?? null,
+        pace: plan.meta.pace,
+        travelers: plan.meta.travelers,
+        interests: plan.meta.interests,
+        nodes: day.nodes.map((node) => [node.type, node.name, node.timeLabel, node.estimatedCost]),
+      }),
+    )
+    .digest("hex");
+}
+
+export function clearNarrativeCache(): void {
+  narrativeCache.clear();
+}
+
+function rememberSummary(key: string, summary: DaySummary): void {
+  if (narrativeCache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = narrativeCache.keys().next().value;
+    if (oldest) narrativeCache.delete(oldest);
+  }
+  narrativeCache.set(key, summary);
+}
+
+async function summarizeDay(
+  plan: TripPlan,
+  day: TripDay,
+  index: number,
+  deps: DeepSeekTravelDeps,
+): Promise<DaySummary | null> {
+  const key = dayNarrativeKey(plan, day);
+  const cached = narrativeCache.get(key);
+  if (cached) return cached;
+
+  try {
+    const summary = await buildDaySummaryWithDeepSeek(
+      {
+        day,
+        dayNumber: index + 1,
+        date: day.date,
+        destination: plan.meta.destination,
+        origin: plan.meta.origin,
+        routeNodes: [plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination],
+        attractions: day.nodes
+          .filter((node) => node.type === "attraction" || node.type === "night-activity")
+          .map((node) => node.name),
+        weather: day.weather,
+        travelers: plan.meta.travelers,
+        pace: plan.meta.pace,
+        interests: plan.meta.interests,
+      },
+      deps,
+    );
+    rememberSummary(key, summary);
+    return summary;
+  } catch {
+    // DeepSeek 不可用时保留本地排程文案，路书本身照常生成。
+    return null;
+  }
+}
+
+function applySummary(day: TripDay, summary: DaySummary | null): TripDay {
+  if (!summary) return day;
+  // 只替换文字：时间轴节点、费用、地图与日期一律以最终排程为准。
+  return {
+    ...day,
+    purpose: summary.purpose,
+    highlights: summary.highlights,
+    cautions: summary.cautions,
+  };
+}
+
+/** 按并发上限依次推进，保持输入顺序。 */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      const item = items[index];
+      if (index >= items.length || item === undefined) return;
+      results[index] = await run(item, index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * 用 DeepSeek 重写每天的旅行信息与分析（今日目的、核心重点、注意事项）。
+ *
+ * 输入是**已经排好的最终时间轴**，所以文案描述的就是用户真正会走的路线；
+ * 单日失败只保留该日的本地文案，不影响路书其余部分。
+ */
+export async function enrichTripPlanNarrative(
+  plan: TripPlan,
+  deps: DeepSeekTravelDeps = {},
+): Promise<TripPlan> {
+  if (plan.days.length === 0) return plan;
+  const summaries = await mapWithConcurrency(plan.days, NARRATIVE_CONCURRENCY, (day, index) =>
+    summarizeDay(plan, day, index, deps),
+  );
+  return {
+    ...plan,
+    days: plan.days.map((day, index) => applySummary(day, summaries[index] ?? null)),
+  };
+}

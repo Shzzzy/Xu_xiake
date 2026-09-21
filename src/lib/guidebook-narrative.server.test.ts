@@ -1,0 +1,140 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { TripPlan } from "./travel-plan.ts";
+import {
+  clearNarrativeCache,
+  enrichTripPlanNarrative,
+} from "./guidebook-narrative.server.ts";
+
+const plan: TripPlan = {
+  meta: {
+    title: "徽州两日路书",
+    origin: "上海",
+    waypoints: [],
+    destination: "黄山",
+    startDate: "2026-09-20",
+    days: 2,
+    travelers: { adults: 2, children: 0 },
+    perPersonBudget: 4000,
+    transportPreference: "balanced",
+    pace: "balanced",
+    interests: ["自然山水"],
+  },
+  budget: {
+    totalBudget: 8000,
+    estimatedTotal: 3000,
+    totalMin: 2800,
+    totalMax: 3200,
+    remaining: 4800,
+    overBudget: 0,
+    perPersonBudget: 4000,
+    perPersonEstimated: 1500,
+    rooms: 1,
+    transport: { min: 800, max: 900, amount: 850, ratio: 0.28 },
+    lodging: { min: 800, max: 900, amount: 850, ratio: 0.28 },
+    food: { min: 400, max: 500, amount: 450, ratio: 0.15 },
+    tickets: { min: 500, max: 600, amount: 550, ratio: 0.18 },
+    other: { min: 200, max: 300, amount: 250, ratio: 0.08 },
+  },
+  route: {
+    outbound: [
+      [118.4, 29.7],
+      [118.3, 30.1],
+    ],
+    returnPath: [],
+    outboundSegments: [
+      {
+        from: "上海",
+        to: "黄山",
+        mode: "balanced",
+        distanceKm: 400,
+        durationMinutes: 240,
+        navigation: "https://www.amap.com/",
+      },
+    ],
+    returnSegments: [],
+    distanceKm: 400,
+    durationMinutes: 240,
+    returnMode: null,
+  },
+  days: [0, 1].map((offset) => ({
+    date: offset === 0 ? "2026-09-20" : "2026-09-21",
+    theme: offset === 0 ? "黄山风景区" : "宏村",
+    weather: offset === 0 ? "晴 18–26°" : "多云 19–27°",
+    nodes: [
+      {
+        startTime: "09:00",
+        endTime: "12:00",
+        timeLabel: "09:00–12:00",
+        type: "attraction" as const,
+        name: offset === 0 ? "黄山风景区" : "宏村",
+        location: offset === 0 ? "黄山风景区" : "宏村",
+        estimatedCost: 320,
+        navigation: null,
+      },
+    ],
+    estimatedCost: 320,
+    radar: { physical: 60, childFit: 40, weatherSensitivity: 70, timeCost: 55, crowding: 65 },
+    purpose: "本地排程兜底文案",
+    highlights: ["本地亮点"],
+    cautions: ["本地注意事项"],
+  })),
+  closing: { quote: null, source: null, message: "山河万里。" },
+};
+
+function summaryFetch(content: unknown, calls: unknown[] = []) {
+  return (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(init?.body ?? null);
+    return Response.json({ choices: [{ message: { content: JSON.stringify(content) } }] });
+  }) as typeof fetch;
+}
+
+test("rewrites each day's travel analysis from the final schedule", async () => {
+  clearNarrativeCache();
+  const calls: unknown[] = [];
+  const enriched = await enrichTripPlanNarrative(plan, {
+    apiKey: "test-key",
+    fetchImpl: summaryFetch(
+      {
+        purpose: "上午先登主峰，下午转古村，避开午后阵雨。",
+        highlights: ["黄山风景区：迎客松与光明顶是当日主线"],
+        cautions: ["山上风大，注意保暖", "雨后石阶湿滑"],
+      },
+      calls,
+    ),
+  });
+
+  assert.equal(calls.length, plan.days.length);
+  assert.equal(enriched.days[0]?.purpose, "上午先登主峰，下午转古村，避开午后阵雨。");
+  assert.deepEqual(enriched.days[0]?.highlights, ["黄山风景区：迎客松与光明顶是当日主线"]);
+  assert.deepEqual(enriched.days[0]?.cautions, ["山上风大，注意保暖", "雨后石阶湿滑"]);
+  // 时间轴与费用必须原样保留，AI 只能改文字。
+  assert.deepEqual(enriched.days[0]?.nodes, plan.days[0]?.nodes);
+  assert.equal(enriched.days[0]?.date, plan.days[0]?.date);
+  assert.equal(enriched.days[0]?.estimatedCost, plan.days[0]?.estimatedCost);
+});
+
+test("reuses the cached analysis for an unchanged day", async () => {
+  clearNarrativeCache();
+  const calls: unknown[] = [];
+  const deps = {
+    apiKey: "test-key",
+    fetchImpl: summaryFetch(
+      { purpose: "AI 目的", highlights: ["AI 重点"], cautions: ["AI 注意"] },
+      calls,
+    ),
+  };
+
+  await enrichTripPlanNarrative(plan, deps);
+  const firstRound = calls.length;
+  await enrichTripPlanNarrative(plan, deps);
+  assert.equal(calls.length, firstRound);
+});
+
+test("keeps the local text when DeepSeek is unavailable", async () => {
+  clearNarrativeCache();
+  const failing = (async () => new Response("boom", { status: 500 })) as typeof fetch;
+  const enriched = await enrichTripPlanNarrative(plan, { apiKey: "test-key", fetchImpl: failing });
+  assert.equal(enriched.days[0]?.purpose, "本地排程兜底文案");
+  assert.deepEqual(enriched.days[1]?.highlights, ["本地亮点"]);
+});
