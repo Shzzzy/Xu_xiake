@@ -1,0 +1,161 @@
+{
+  "generatedAt": "2026-09-22T03:00:02.444Z",
+  "source": "AMap Web Service",
+  "geocode": {
+    "beijing": [
+      116.407387,
+      39.904179
+    ],
+    "shanghai": [
+      121.473667,
+      31.230525
+    ],
+    "dali": [
+      100.266116,
+      25.643582
+    ]
+  },
+  "legs": [
+    {
+      "id": "bjs-sha",
+      "kind": "outbound",
+      "from": "北京",
+      "to": "上海",
+      "mode": "flight",
+      "distanceKm": 1067.3,
+      "doorToDoorMinutes": 300,
+      "minimumPerPersonCost": 588
+    },
+    {
+      "id": "sha-dali",
+      "kind": "outbound",
+      "from": "上海",
+      "to": "大理洱海",
+      "mode": "flight",
+      "distanceKm": 2160.6,
+      "doorToDoorMinutes": 361,
+      "minimumPerPersonCost": 1189
+    },
+    {
+      "id": "dali-bjs",
+      "kind": "return",
+      "from": "大理洱海",
+      "to": "北京",
+      "mode": "flight",
+      "distanceKm": 2182,
+      "doorToDoorMinutes": 362,
+      "minimumPerPersonCost": 1201
+    }
+  ],
+  "driveAlternative": {
+    "from": "上海",
+    "to": "大理洱海",
+    "distanceKm": 2651.7,
+    "drivingMinutes": 1673.3,
+    "doorToDoorMinutes": 1883,
+    "restMinutes": 210,
+    "steps": 254
+  },
+  "pois": {
+    "shanghai": [
+      {
+        "id": "B00155FXB3",
+        "name": "外滩",
+        "type": "风景名胜;风景名胜;风景名胜",
+        "address": "中山东一路",
+        "location": [
+          121.492127,
+          31.233516
+        ],
+        "publicUrl": "https://www.amap.com/place/B00155FXB3"
+      },
+      {
+        "id": "B00155MF55",
+        "name": "上海豫园",
+        "type": "风景名胜;风景名胜;国家级景点",
+        "address": "福佑路168号",
+        "location": [
+          121.492497,
+          31.227714
+        ],
+        "publicUrl": "https://www.amap.com/place/B00155MF55"
+      },
+      {
+        "id": "B001535BBC",
+        "name": "上海博物馆(人民广场馆)",
+        "type": "科教文化服务;博物馆;博物馆",
+        "address": "人民大道201号",
+        "location": [
+          121.47548,
+          31.228231
+        ],
+        "publicUrl": "https://www.amap.com/place/B001535BBC"
+      },
+      {
+        "id": "B0IA3PHRXP",
+        "name": "武康路",
+        "type": "地名地址信息;交通地名;道路名",
+        "address": "徐汇区",
+        "location": [
+          121.440627,
+          31.209252
+        ],
+        "publicUrl": "https://www.amap.com/place/B0IA3PHRXP"
+      }
+    ],
+    "dali": [
+      {
+        "id": "B0FFFZH0RQ",
+        "name": "大理古城",
+        "type": "风景名胜;风景名胜;国家级景点",
+        "address": "护国路172号",
+        "location": [
+          100.164,
+          25.694836
+        ],
+        "publicUrl": "https://www.amap.com/place/B0FFFZH0RQ"
+      },
+      {
+        "id": "B0368000BF",
+        "name": "崇圣寺三塔文化旅游区",
+        "type": "风景名胜;风景名胜;寺庙道观",
+        "address": "大理镇三塔公园",
+        "location": [
+          100.143044,
+          25.704129
+        ],
+        "publicUrl": "https://www.amap.com/place/B0368000BF"
+      },
+      {
+        "id": "B0FFH27SSH",
+        "name": "喜洲古镇",
+        "type": "风景名胜;风景名胜;风景名胜",
+        "address": "清真路130号",
+        "location": [
+          100.131582,
+          25.85295
+        ],
+        "publicUrl": "https://www.amap.com/place/B0FFH27SSH"
+      },
+      {
+        "id": "B0G3JY36P7",
+        "name": "洱海生态廊道",
+        "type": "生活服务;售票处;售票处",
+        "address": "环海西路与017乡道交叉口北60米",
+        "location": [
+          100.223557,
+          25.622667
+        ],
+        "publicUrl": "https://www.amap.com/place/B0G3JY36P7"
+      }
+    ]
+  },
+  "map": "/prototypes/plan-a-amap-map.png",
+  "dayMaps": {
+    "day1": "/prototypes/plan-a-amap-day1.png",
+    "day2": "/prototypes/plan-a-amap-day2.png",
+    "day3": "/prototypes/plan-a-amap-day3.png",
+    "day4": "/prototypes/plan-a-amap-day4.png",
+    "day5": "/prototypes/plan-a-amap-day5.png"
+  }
+}

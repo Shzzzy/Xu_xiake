@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>旅行规划 · 可行性原型</title>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@500;600;700&display=swap");
+    :root {
+      --ink: #17231f;
+      --muted: #68716b;
+      --paper: #f5f0e6;
+      --paper-deep: #ebe4d6;
+      --line: rgba(23, 35, 31, .16);
+      --green: #0c6a50;
+      --green-soft: #dcebe4;
+      --red: #b84a36;
+      --amber: #a56b1d;
+      --blue: #1f5d73;
+      --card: rgba(255, 253, 248, .86);
+      --shadow: 0 24px 60px rgba(38, 50, 43, .12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 8%, rgba(12, 106, 80, .10), transparent 28rem),
+        radial-gradient(circle at 92% 24%, rgba(184, 74, 54, .08), transparent 30rem),
+        linear-gradient(135deg, var(--paper), #fbf8f0 50%, #eee7d9);
+      font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      min-height: 100vh;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .22;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    .shell { max-width: 1480px; margin: 0 auto; padding: 26px clamp(16px, 3vw, 44px) 56px; position: relative; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 22px; animation: reveal .55s ease both; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .seal { width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center; color: #fff; background: var(--green); font-family: "Noto Serif SC", serif; font-weight: 700; box-shadow: 0 9px 22px rgba(12,106,80,.22); }
+    .eyebrow { font-size: 11px; letter-spacing: .2em; color: var(--green); font-weight: 700; }
+    .brand strong { display: block; font-family: "Noto Serif SC", serif; font-size: 20px; margin-top: 2px; }
+    .prototype-tag { border: 1px solid var(--line); background: rgba(255,255,255,.55); padding: 8px 12px; border-radius: 999px; color: var(--muted); font-size: 12px; }
+    .hero { display: grid; grid-template-columns: minmax(310px, .78fr) minmax(0, 1.55fr); gap: 22px; align-items: start; }
+    .panel { background: var(--card); border: 1px solid rgba(23,35,31,.12); border-radius: 25px; box-shadow: var(--shadow); backdrop-filter: blur(14px); }
+    .form-panel { padding: 24px; position: sticky; top: 18px; animation: reveal .65s .04s ease both; }
+    .panel-kicker { color: var(--green); font-size: 11px; letter-spacing: .18em; font-weight: 700; }
+    h1, h2, h3 { margin: 0; font-family: "Noto Serif SC", serif; font-weight: 600; }
+    h1 { font-size: clamp(30px, 4vw, 56px); line-height: 1.04; margin-top: 12px; letter-spacing: -.045em; }
+    h2 { font-size: 24px; letter-spacing: -.025em; }
+    h3 { font-size: 18px; }
+    .muted { color: var(--muted); }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 22px; }
+    .field { min-width: 0; }
+    .field.wide { grid-column: 1 / -1; }
+    .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .input { width: 100%; min-height: 44px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.64); padding: 0 13px; color: var(--ink); outline: none; transition: .2s ease; }
+    .input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(12,106,80,.11); }
+    .field-note { display: block; margin-top: 5px; font-size: 11px; color: var(--muted); }
+    .segmented { display: flex; gap: 7px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.5); }
+    .segmented button { flex: 1; border: 0; border-radius: 10px; padding: 9px 8px; color: var(--muted); background: transparent; }
+    .segmented button.active { color: #fff; background: var(--green); box-shadow: 0 7px 16px rgba(12,106,80,.18); }
+    .budget-field { grid-column: 1 / -1; border: 1px solid rgba(12,106,80,.2); border-radius: 18px; background: linear-gradient(135deg, rgba(220,235,228,.72), rgba(255,255,255,.68)); padding: 15px; }
+    .budget-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .budget-title { font-weight: 600; }
+    .ghost-btn { border: 1px solid rgba(12,106,80,.28); background: rgba(255,255,255,.7); color: var(--green); border-radius: 999px; padding: 8px 12px; font-size: 12px; font-weight: 600; }
+    .budget-input-row { display: flex; align-items: baseline; gap: 8px; margin-top: 12px; }
+    .budget-input-row .input { font-size: 26px; font-family: "Noto Serif SC", serif; font-weight: 700; min-height: 54px; background: #fff; }
+    .budget-input-row span { color: var(--muted); }
+    .budget-detail { display: none; margin-top: 14px; border-top: 1px dashed rgba(12,106,80,.25); padding-top: 13px; }
+    .budget-detail.open { display: block; animation: reveal .35s ease both; }
+    .cost-line { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13px; }
+    .cost-line strong { font-weight: 600; }
+    .cost-total { margin-top: 8px; padding-top: 10px; border-top: 1px solid rgba(12,106,80,.17); color: var(--green); }
+    .primary-btn { width: 100%; border: 0; border-radius: 15px; padding: 14px 16px; margin-top: 16px; color: #fff; background: var(--green); font-weight: 700; box-shadow: 0 13px 25px rgba(12,106,80,.2); transition: transform .18s ease, box-shadow .18s ease; }
+    .primary-btn:hover { transform: translateY(-1px); box-shadow: 0 17px 32px rgba(12,106,80,.24); }
+    .main { display: grid; gap: 18px; animation: reveal .65s .1s ease both; }
+    .hero-card { padding: 28px; overflow: hidden; position: relative; }
+    .hero-card::after { content: ""; position: absolute; width: 320px; height: 320px; border-radius: 50%; right: -160px; top: -180px; background: radial-gradient(circle, rgba(12,106,80,.14), transparent 68%); }
+    .hero-copy { max-width: 720px; position: relative; z-index: 1; }
+    .hero-copy p { color: var(--muted); line-height: 1.8; margin: 14px 0 0; }
+    .status { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px; background: #fae8e1; color: var(--red); font-size: 12px; font-weight: 700; margin-top: 18px; }
+    .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .metric-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 22px; position: relative; z-index: 1; }
+    .metric { border: 1px solid var(--line); border-radius: 15px; padding: 13px; background: rgba(255,255,255,.52); }
+    .metric span { display: block; color: var(--muted); font-size: 11px; }
+    .metric strong { display: block; margin-top: 5px; font-family: "Noto Serif SC", serif; font-size: 21px; }
+    .analysis-grid { display: grid; grid-template-columns: .92fr 1.08fr; gap: 18px; }
+    .card { padding: 22px; }
+    .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
+    .section-head p { margin: 5px 0 0; font-size: 12px; color: var(--muted); }
+    .time-table { display: grid; gap: 9px; }
+    .time-row { display: grid; grid-template-columns: 82px 1fr auto; gap: 11px; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(23,35,31,.09); }
+    .time-row:last-child { border-bottom: 0; }
+    .time-kind { font-size: 11px; color: var(--muted); }
+    .time-name { font-weight: 600; font-size: 13px; }
+    .time-value { font-family: "Noto Serif SC", serif; font-weight: 600; white-space: nowrap; }
+    .bar { height: 6px; border-radius: 99px; background: var(--paper-deep); overflow: hidden; margin-top: 6px; }
+    .bar i { display: block; height: 100%; border-radius: inherit; background: var(--green); }
+    .bar.warn i { background: var(--amber); }
+    .bar.danger i { background: var(--red); }
+    .feasibility-copy { line-height: 1.8; color: var(--muted); font-size: 13px; }
+    .verdict { margin: 14px 0 0; padding: 15px; border-left: 3px solid var(--red); border-radius: 0 13px 13px 0; background: rgba(184,74,54,.075); color: #713326; line-height: 1.75; font-size: 13px; }
+    .options-wrap { padding: 24px; }
+    .option-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px; margin-top: 18px; }
+    .option { text-align: left; border: 1px solid var(--line); background: rgba(255,255,255,.54); border-radius: 20px; padding: 18px; transition: .22s ease; min-height: 258px; }
+    .option:hover { transform: translateY(-3px); border-color: rgba(12,106,80,.38); box-shadow: 0 16px 30px rgba(38,50,43,.1); }
+    .option.active { background: var(--ink); color: #fff; border-color: var(--ink); box-shadow: 0 18px 36px rgba(23,35,31,.2); }
+    .option-badge { display: inline-flex; border-radius: 999px; padding: 5px 9px; font-size: 10px; letter-spacing: .08em; font-weight: 700; background: var(--green-soft); color: var(--green); }
+    .option.active .option-badge { background: rgba(255,255,255,.12); color: #bde6d6; }
+    .option h3 { margin-top: 14px; font-size: 22px; }
+    .option p { color: var(--muted); line-height: 1.7; font-size: 12px; margin: 10px 0 0; }
+    .option.active p { color: rgba(255,255,255,.7); }
+    .option-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 16px; }
+    .option-stat { border: 1px solid var(--line); border-radius: 12px; padding: 9px; font-size: 11px; }
+    .option.active .option-stat { border-color: rgba(255,255,255,.16); }
+    .option-stat strong { display: block; font-family: "Noto Serif SC", serif; font-size: 16px; margin-top: 3px; }
+    .plan-preview { display: none; padding: 24px; }
+    .plan-preview.visible { display: block; animation: reveal .38s ease both; }
+    .plan-line { display: grid; grid-template-columns: 75px 1fr; gap: 13px; padding: 13px 0; border-bottom: 1px solid rgba(23,35,31,.08); }
+    .plan-line:last-child { border-bottom: 0; }
+    .day-pill { align-self: start; border-radius: 999px; padding: 6px 8px; text-align: center; color: var(--green); background: var(--green-soft); font-weight: 700; font-size: 11px; }
+    .plan-line strong { display: block; font-size: 13px; }
+    .plan-line span { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.65; }
+    .footer-note { margin-top: 16px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    @media (max-width: 1050px) { .hero { grid-template-columns: 1fr; } .form-panel { position: static; } .analysis-grid { grid-template-columns: 1fr; } .option-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 620px) { .shell { padding: 14px 10px 34px; } .form-panel, .hero-card, .card, .options-wrap, .plan-preview { padding: 18px; border-radius: 20px; } .metric-row { grid-template-columns: 1fr 1fr; } .form-grid { grid-template-columns: 1fr; } .field { grid-column: 1 / -1; } .time-row { grid-template-columns: 66px 1fr; } .time-value { grid-column: 2; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="seal">徐</div>
+        <div><div class="eyebrow">XU XIAKE · PLANNING LAB</div><strong>旅行可行性原型</strong></div>
+      </div>
+      <div class="prototype-tag">交互原型 · 非正式数据</div>
+    </header>
+
+    <section class="hero">
+      <aside class="panel form-panel">
+        <div class="panel-kicker">01 / 需求条件</div>
+        <h2 style="margin-top:8px">这趟怎么走</h2>
+        <div class="form-grid">
+          <div class="field"><label>出发地</label><input class="input" id="origin" value="北京" /></div>
+          <div class="field"><label>途经地</label><input class="input" id="waypoint" value="上海" /></div>
+          <div class="field wide"><label>目的地</label><input class="input" id="destination" value="大理洱海" /></div>
+          <div class="field"><label>旅行天数</label><input class="input" id="days" type="number" value="5" min="1" /></div>
+          <div class="field"><label>成人数</label><input class="input" id="adults" type="number" value="3" min="1" /></div>
+          <div class="field wide"><label>行程语义</label>
+            <div class="segmented" id="tripStyle"><button>全程直达</button><button class="active">上海停留 + 沿途边走边玩</button></div>
+            <span class="field-note">选择了“沿途边走边玩”，上海 → 大理将按自驾计算，不能自动改成飞机。</span>
+          </div>
+          <div class="field wide"><label>上海 → 大理</label>
+            <select class="input" id="legMode"><option value="drive" selected>自驾 · 沿途游玩</option><option value="flight">飞机 · 直达落地</option></select>
+          </div>
+          <div class="budget-field">
+            <div class="budget-head">
+              <div><div class="budget-title">全团总预算</div><div class="field-note">AI 按人数、天数、里程、住宿、交通、饮食计算</div></div>
+              <button class="ghost-btn" id="aiBudgetBtn">AI 推荐预算</button>
+            </div>
+            <div class="budget-input-row"><input class="input" id="totalBudget" type="number" value="18600" /><span>元</span></div>
+            <div class="budget-detail" id="budgetDetail">
+              <div class="cost-line"><span>交通 · 3 位成人 / 3 段</span><strong id="costTransport">¥9,600</strong></div>
+              <div class="cost-line"><span>住宿 · 3 间 × 4 晚</span><strong id="costHotel">¥6,000</strong></div>
+              <div class="cost-line"><span>餐饮 · 3 人 × 5 天</span><strong id="costFood">¥3,300</strong></div>
+              <div class="cost-line"><span>门票 · 2 个核心景点</span><strong id="costTicket">¥720</strong></div>
+              <div class="cost-line"><span>其他 · 打车 / 零食 / 道具</span><strong id="costOther">¥1,962</strong></div>
+              <div class="cost-line cost-total"><span>基础成本合计</span><strong id="costBase">¥21,582</strong></div>
+              <div class="cost-line"><span>AI 建议上浮 · 15%</span><strong id="costBuffer">¥3,237</strong></div>
+              <div class="cost-line cost-total"><span>建议预算</span><strong id="costRecommended">¥24,800</strong></div>
+            </div>
+          </div>
+        </div>
+        <button class="primary-btn" id="analyzeBtn">生成可行性分析</button>
+      </aside>
+
+      <section class="main">
+        <article class="panel hero-card">
+          <div class="hero-copy">
+            <div class="eyebrow">北京 → 上海 → 大理洱海 → 北京</div>
+            <h1>先算时间，<br />再谈去哪里。</h1>
+            <p>系统先调用高德补齐路线、热门景点、通勤和驾驶时间，再由 DeepSeek 在时间与预算上限内排程。时间不够时，不生成废稿，直接给出可选方案。</p>
+            <div class="status" id="statusText">当前条件：5 天自驾方案时间不可行</div>
+          </div>
+          <div class="metric-row">
+            <div class="metric"><span>上海可玩</span><strong>约 1.5 天</strong></div>
+            <div class="metric"><span>上海 → 大理</span><strong>2,161 km</strong></div>
+            <div class="metric"><span>纯驾驶</span><strong>约 24 小时</strong></div>
+            <div class="metric"><span>剩余可用</span><strong>不足以返程</strong></div>
+          </div>
+        </article>
+
+        <div class="analysis-grid">
+          <article class="panel card">
+            <div class="section-head"><div><div class="panel-kicker">02 / 时间开销表</div><h3>时间先花在哪里</h3><p>通勤优先扣除，剩余时间才给景点。</p></div></div>
+            <div class="time-table">
+              <div class="time-row"><div class="time-kind">飞机</div><div><div class="time-name">北京 → 上海</div><div class="bar"><i style="width:36%"></i></div></div><div class="time-value">5 小时</div></div>
+              <div class="time-row"><div class="time-kind">驾驶</div><div><div class="time-name">上海 → 大理洱海</div><div class="bar danger"><i style="width:100%"></i></div></div><div class="time-value">约 24 小时</div></div>
+              <div class="time-row"><div class="time-kind">游玩</div><div><div class="time-name">上海热门景点</div><div class="bar"><i style="width:48%"></i></div></div><div class="time-value">约 1.5 天</div></div>
+              <div class="time-row"><div class="time-kind">游玩</div><div><div class="time-name">沿途 + 大理热门景点</div><div class="bar warn"><i style="width:64%"></i></div></div><div class="time-value">约 2 天</div></div>
+              <div class="time-row"><div class="time-kind">返程</div><div><div class="time-name">大理 → 北京</div><div class="bar"><i style="width:30%"></i></div></div><div class="time-value">约 5 小时</div></div>
+            </div>
+          </article>
+
+          <article class="panel card">
+            <div class="section-head"><div><div class="panel-kicker">03 / 可行性结论</div><h3>为什么 5 天自驾不可行</h3></div></div>
+            <p class="feasibility-copy">上海 → 大理约 2,161 km，纯驾驶已经接近 24 小时。按每天最多 6 小时驾驶计算，至少占用 4 个白天；再叠加上海游玩、沿途景点停留、休息和大理落地游玩，5 天无法完整容纳。</p>
+            <div class="verdict">建议不要硬排。优先选择“直达落地后再游玩”，或者保留自驾但把行程延长到 8 天以上。</div>
+          </article>
+        </div>
+
+        <article class="panel options-wrap">
+          <div class="section-head"><div><div class="panel-kicker">04 / 三个方案建议</div><h2>在时间、体验和预算之间选择</h2><p>点击方案查看排程摘要和预算。</p></div></div>
+          <div class="option-grid" id="optionGrid">
+            <button class="option active" data-plan="direct">
+              <span class="option-badge">推荐 · 5 天</span><h3>直达落地</h3>
+              <p>保留上海与大理双城体验。上海结束后直飞大理，落地后再安排当地热门景点。</p>
+              <div class="option-stats"><div class="option-stat">交通<strong>更省时</strong></div><div class="option-stat">预算<strong>¥24,800</strong></div></div>
+            </button>
+            <button class="option" data-plan="drive">
+              <span class="option-badge">体验 · 8 天</span><h3>自驾穿越</h3>
+              <p>保留“沿途边走边玩”，增加天数，把驾驶拆成多段，并挑选沿途著名景点。</p>
+              <div class="option-stats"><div class="option-stat">驾驶<strong>分段安排</strong></div><div class="option-stat">预算<strong>¥31,600</strong></div></div>
+            </button>
+            <button class="option" data-plan="single">
+              <span class="option-badge">压缩 · 5 天</span><h3>专注一地</h3>
+              <p>放弃双城跨度，只选择上海周边或大理洱海周边，完整体验一个区域。</p>
+              <div class="option-stats"><div class="option-stat">复杂度<strong>最低</strong></div><div class="option-stat">预算<strong>¥18,800</strong></div></div>
+            </button>
+          </div>
+        </article>
+
+        <article class="panel plan-preview visible" id="planPreview">
+          <div class="section-head"><div><div class="panel-kicker" id="previewKicker">方案 A · 推荐</div><h3 id="previewTitle">直达落地 · 5 天</h3><p>所有时间均为可行性原型示意。</p></div></div>
+          <div id="previewLines"></div>
+          <div class="footer-note">正式生成时：每一步先校验，再进入下一步；页面和 PDF 共用同一份已校验数据，费用必须满足每日分项上限和总预算上限。</div>
+        </article>
+      </section>
+    </section>
+  </main>
+  <script>
+    const plans = {
+      direct: { kicker: "方案 A · 推荐", title: "直达落地 · 5 天", lines: [
+        ["DAY 01", "北京 → 上海", "飞机约 5 小时；抵达后安排外滩、豫园等近场景点。"],
+        ["DAY 02", "上海深度游", "从高德热门景点中选 2–3 个，先扣景点间交通时间。"],
+        ["DAY 03", "上海 → 大理洱海", "直飞落地，下午安排洱海西岸短时景点。"],
+        ["DAY 04", "大理洱海", "安排洱海碑观景台、风情园等核心景点。"],
+        ["DAY 05", "大理洱海 → 北京", "返程前只保留酒店到机场的交通与必要用餐。"]
+      ]},
+      drive: { kicker: "方案 B · 延长 8 天", title: "自驾穿越 · 保留沿途游玩", lines: [
+        ["DAY 01–02", "上海停留", "飞机抵达，安排上海热门景点和本地交通。"],
+        ["DAY 03–06", "上海 → 大理自驾", "每天控制驾驶上限，分 3–4 段推进；沿途只选高德检索到的著名景点。"],
+        ["DAY 07", "大理洱海", "落地后安排洱海核心区域，避免高强度绕行。"],
+        ["DAY 08", "大理 → 北京", "返还车辆后直飞北京；总预算按新增天数重新计算。"]
+      ]},
+      single: { kicker: "方案 C · 压缩", title: "专注一地 · 5 天", lines: [
+        ["DAY 01", "北京 → 上海", "飞机落地后从近场景点开始。"],
+        ["DAY 02–04", "上海周边", "按高德热门景点分成三个片区，减少跨区往返。"],
+        ["DAY 05", "上海 → 北京", "返程前留出完整通勤缓冲。"]
+      ]}
+    };
+    const optionGrid = document.getElementById("optionGrid");
+    const previewLines = document.getElementById("previewLines");
+    function money(value) { return "¥" + Number(value).toLocaleString("zh-CN"); }
+    function calculateBase() {
+      const adults = Number(document.getElementById("adults").value) || 1;
+      const days = Number(document.getElementById("days").value) || 1;
+      const transport = adults * 3200;
+      const hotel = adults * Math.max(0, days - 1) * 500;
+      const food = adults * days * 220;
+      const ticket = adults * 240;
+      const other = Math.max(200, (transport + hotel + food + ticket) * 0.1);
+      const base = transport + hotel + food + ticket + other;
+      const buffer = base * 0.15;
+      return { adults, days, transport, hotel, food, ticket, other, base, buffer, recommended: Math.round((base + buffer) / 100) * 100 };
+    }
+    function updateBudget() {
+      const c = calculateBase();
+      document.getElementById("costTransport").textContent = money(c.transport);
+      document.getElementById("costHotel").textContent = money(c.hotel);
+      document.getElementById("costFood").textContent = money(c.food);
+      document.getElementById("costTicket").textContent = money(c.ticket);
+      document.getElementById("costOther").textContent = money(Math.round(c.other));
+      document.getElementById("costBase").textContent = money(Math.round(c.base));
+      document.getElementById("costBuffer").textContent = money(Math.round(c.buffer));
+      document.getElementById("costRecommended").textContent = money(c.recommended);
+      return c;
+    }
+    document.getElementById("aiBudgetBtn").addEventListener("click", () => {
+      const c = updateBudget();
+      document.getElementById("totalBudget").value = c.recommended;
+      document.getElementById("budgetDetail").classList.add("open");
+    });
+    document.getElementById("analyzeBtn").addEventListener("click", () => {
+      updateBudget();
+      document.getElementById("statusText").textContent = document.getElementById("legMode").value === "drive"
+        ? "当前条件：5 天自驾方案时间不可行"
+        : "当前条件：5 天直飞方案时间可行";
+    });
+    optionGrid.addEventListener("click", (event) => {
+      const button = event.target.closest(".option");
+      if (!button) return;
+      optionGrid.querySelectorAll(".option").forEach((item) => item.classList.toggle("active", item === button));
+      const plan = plans[button.dataset.plan];
+      document.getElementById("previewKicker").textContent = plan.kicker;
+      document.getElementById("previewTitle").textContent = plan.title;
+      previewLines.innerHTML = plan.lines.map(([day, title, text]) => `<div class="plan-line"><div class="day-pill">${day}</div><div><strong>${title}</strong><span>${text}</span></div></div>`).join("");
+      document.getElementById("planPreview").classList.add("visible");
+    });
+    document.querySelectorAll("#tripStyle button").forEach((button) => button.addEventListener("click", () => {
+      document.querySelectorAll("#tripStyle button").forEach((item) => item.classList.toggle("active", item === button));
+      document.getElementById("legMode").value = button.textContent.includes("直达") ? "flight" : "drive";
+    }));
+    ["adults", "days"].forEach((id) => document.getElementById(id).addEventListener("input", updateBudget));
+    updateBudget();
+  </script>
+</body>
+</html>
