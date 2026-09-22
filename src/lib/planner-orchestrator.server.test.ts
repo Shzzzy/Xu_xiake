@@ -626,3 +626,46 @@ test("候选不足以覆盖景点槽位时允许复用同一景点", async () =>
   // 只有一个候选而两天都需要景点：允许复用，不因去重规则拒绝交付。
   assert.equal(result.status, "ok");
 });
+
+test("长途长城徒步的体力值明显高于室内博物馆", async () => {
+  const { buildDayRadar } = await import("./planner-orchestrator.server.ts");
+  const wall = buildDayRadar({
+    pace: "balanced",
+    attractions: [{ name: "八达岭长城", stayMinutes: 180 }],
+    transportMinutes: 150,
+    windowMinutes: 600,
+    weather: { tempMax: 30, tempMin: 20, precipProb: 10 },
+  });
+  const museum = buildDayRadar({
+    pace: "balanced",
+    attractions: [{ name: "国家博物馆", stayMinutes: 180 }],
+    transportMinutes: 60,
+    windowMinutes: 600,
+    weather: { tempMax: 30, tempMin: 20, precipProb: 10 },
+  });
+
+  assert.ok(wall.physical >= 70, `长城体力应偏高，实际 ${wall.physical}`);
+  assert.ok(wall.physical > museum.physical, "长城体力应高于博物馆");
+  assert.ok(wall.childFit < museum.childFit, "长城亲子友好度应低于博物馆");
+});
+
+test("雨天户外行程的天气敏感度更高", async () => {
+  const { buildDayRadar } = await import("./planner-orchestrator.server.ts");
+  const rainy = buildDayRadar({
+    pace: "balanced",
+    attractions: [{ name: "八达岭长城", stayMinutes: 180 }],
+    transportMinutes: 120,
+    windowMinutes: 600,
+    weather: { tempMax: 28, tempMin: 20, precipProb: 80 },
+  });
+  const dry = buildDayRadar({
+    pace: "balanced",
+    attractions: [{ name: "八达岭长城", stayMinutes: 180 }],
+    transportMinutes: 120,
+    windowMinutes: 600,
+    weather: { tempMax: 28, tempMin: 20, precipProb: 5 },
+  });
+
+  assert.ok(rainy.weatherSensitivity > dry.weatherSensitivity);
+  assert.ok(rainy.crowding <= dry.crowding, "雨天拥挤度不应高于晴天");
+});

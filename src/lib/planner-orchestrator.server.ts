@@ -987,14 +987,80 @@ function repairSelectionLocations(
   return changed ? result : null;
 }
 
-function buildDayRadar(pace: Pace): PlannerSkeletonDay["radar"] {
-  const base = pace === "relaxed" ? 38 : pace === "deep" ? 68 : 52;
+// 景点特征关键词：用于把"当天去了哪"换算成体力、亲子、天气等五个维度。
+const HEAVY_PHYSICAL_PATTERN =
+  /长城|登山|徒步|爬山|峡谷|古道|冰川|雪山|高原|沙漠|草原|峰|岩石|栈道|溯溪|漂流/u;
+const LIGHT_PHYSICAL_PATTERN =
+  /博物馆|展览|纪念馆|美术馆|陈列馆|古镇|老街|园林|寺|庙|塔|宫|广场|剧院|图书馆/u;
+const FAMILY_FRIENDLY_PATTERN =
+  /动物园|海洋|游乐园|乐园|科技馆|博物馆|广场|古镇|公园|水族|马戏/u;
+const OUTDOOR_PATTERN = /长城|山|湖|草原|沙漠|公园|峡谷|海滩|岛|湿地|广场|溪|泉|林/u;
+const INDOOR_PATTERN = /博物馆|展览|纪念馆|美术馆|陈列馆|剧院|影院|商场|科技馆/u;
+const CROWDED_PATTERN =
+  /故宫|长城|迪士尼|兵马俑|西湖|外滩|天安门|颐和园|九寨|黄山|泰山|峨眉|布达拉宫|大熊猫/u;
+
+const clampScore = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
+
+/**
+ * 按当天实际行程推导五项画像。
+ *
+ * 之前这里只按节奏返回常数（适中节奏一律体力 52），所以出现"爬八达岭长城体力才 52"
+ * 这种明显失真。现在把景点类型、停留时长、交通时长和当天天气一起纳入计算。
+ */
+export function buildDayRadar(input: {
+  pace: Pace;
+  attractions: { name: string; stayMinutes: number }[];
+  transportMinutes: number;
+  windowMinutes: number;
+  weather?: { tempMax?: number; tempMin?: number; precipProb?: number; windMax?: number };
+}): PlannerSkeletonDay["radar"] {
+  const base = input.pace === "relaxed" ? 38 : input.pace === "deep" ? 68 : 52;
+  const names = input.attractions.map((item) => item.name);
+  const heavyCount = names.filter((name) => HEAVY_PHYSICAL_PATTERN.test(name)).length;
+  const lightCount = names.filter((name) => LIGHT_PHYSICAL_PATTERN.test(name)).length;
+  const familyCount = names.filter((name) => FAMILY_FRIENDLY_PATTERN.test(name)).length;
+  const outdoorCount = names.filter((name) => OUTDOOR_PATTERN.test(name)).length;
+  const indoorCount = names.filter((name) => INDOOR_PATTERN.test(name)).length;
+  const crowdedCount = names.filter((name) => CROWDED_PATTERN.test(name)).length;
+  const stayMinutes = input.attractions.reduce((total, item) => total + item.stayMinutes, 0);
+
+  // 体力：基准 + 重体力景点 + 长交通 + 长停留 - 室内轻量景点
+  let physical = base + heavyCount * 18 + lightCount * -8 + (names.length - heavyCount - lightCount) * 2;
+  if (input.transportMinutes >= 180) physical += 10;
+  else if (input.transportMinutes >= 60) physical += 5;
+  if (stayMinutes >= 360) physical += 8;
+  else if (stayMinutes >= 240) physical += 4;
+
+  // 亲子：室内、乐园、动物园友好；重体力与超长户外不友好
+  let childFit = 70 + familyCount * 8 - heavyCount * 12 - Math.max(0, stayMinutes - 300) / 60;
+
+  // 天气敏感度：户外占比 + 降水与极端温度
+  let weatherSensitivity = 45 + outdoorCount * 12 - indoorCount * 8;
+  const precip = input.weather?.precipProb;
+  if (typeof precip === "number") {
+    if (precip >= 60) weatherSensitivity += 20;
+    else if (precip >= 30) weatherSensitivity += 10;
+  }
+  const tempMax = input.weather?.tempMax;
+  const tempMin = input.weather?.tempMin;
+  if (typeof tempMax === "number" && tempMax >= 33) weatherSensitivity += 10;
+  if (typeof tempMin === "number" && tempMin <= 0) weatherSensitivity += 10;
+
+  // 时间成本：已排节点占当天可用窗口的比例
+  const busyMinutes = stayMinutes + input.transportMinutes;
+  const timeCost =
+    input.windowMinutes > 0 ? (busyMinutes / input.windowMinutes) * 100 : base;
+
+  // 拥挤度：热门景点显著更高，雨天略低
+  let crowding = 50 + crowdedCount * 18;
+  if (typeof precip === "number" && precip >= 60) crowding -= 5;
+
   return {
-    physical: base,
-    childFit: Math.max(20, 80 - base / 2),
-    weatherSensitivity: 58,
-    timeCost: base,
-    crowding: 55,
+    physical: clampScore(physical),
+    childFit: clampScore(childFit),
+    weatherSensitivity: clampScore(weatherSensitivity),
+    timeCost: clampScore(timeCost),
+    crowding: clampScore(crowding),
   };
 }
 
@@ -1075,6 +1141,8 @@ function buildSkeletonFromSelection(
     const day = index + 1;
     const transportLegs = state.transportByDay.get(day) ?? [];
     const transportMinutes = transportLegs.reduce((total, leg) => total + leg.doorToDoorMinutes, 0);
+    const dayWindowMinutes =
+      (parseClockMinutes(input.endTime) ?? 0) - (parseClockMinutes(input.startTime) ?? 0);
     const selections = (selectedByDay.get(day) ?? []).sort(
       (left, right) => left.sequence - right.sequence,
     );
@@ -1091,7 +1159,13 @@ function buildSkeletonFromSelection(
         day,
         theme: "行程安排",
         nodes: [],
-        radar: buildDayRadar(input.pace),
+        radar: buildDayRadar({
+          pace: input.pace,
+          attractions,
+          transportMinutes,
+          windowMinutes: dayWindowMinutes,
+          weather: input.weather[day - 1],
+        }),
       },
       startTime: input.startTime,
       endTime: input.endTime,
@@ -1115,7 +1189,13 @@ function buildSkeletonFromSelection(
       day,
       theme,
       nodes: plannedNodes,
-      radar: buildDayRadar(input.pace),
+      radar: buildDayRadar({
+        pace: input.pace,
+        attractions,
+        transportMinutes,
+        windowMinutes: dayWindowMinutes,
+        weather: input.weather[day - 1],
+      }),
     };
   });
 
