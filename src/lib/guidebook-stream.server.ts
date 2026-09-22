@@ -5,7 +5,8 @@ import {
   type GuidebookPageAcceptanceState,
 } from "./guidebook-page-protocol.ts";
 import { prepareGuidebookDayNarrative } from "./guidebook-narrative.server.ts";
-import { enrichGuidebookPlanWithMaps } from "./guidebook-map.server.ts";
+import { enrichGuidebookPlanWithMaps, fitMapZoom } from "./guidebook-map.server.ts";
+import { buildStaticMapUrl } from "./amap.server.ts";
 import { guidebookPageSpecs, renderGuidebookHead } from "./guidebook-html.server.ts";
 import { prepareGuidebookImage, type GuidebookImageFetchOptions } from "./guidebook-pdf.server.ts";
 import type { TripDay, TripPlan } from "./travel-plan.ts";
@@ -61,6 +62,28 @@ export function encodeGuidebookEvent(event: GuidebookStreamEvent): string {
 
 const DAY_PAGE_ID = /^day-(\d+)-(map|summary)$/;
 
+/** 用当天节点坐标构建高德静态地图；坐标缺失或非法时返回 undefined。 */
+function buildDayStaticMapUrl(day: TripDay): string | undefined {
+  const points = day.nodes
+    .flatMap((node) => (node.coordinates ? [node.coordinates] : []))
+    .filter(
+      ([longitude, latitude]) =>
+        Number.isFinite(longitude) &&
+        Number.isFinite(latitude) &&
+        Math.abs(longitude) <= 180 &&
+        Math.abs(latitude) <= 90,
+    );
+  if (points.length === 0) return undefined;
+  try {
+    return buildStaticMapUrl({
+      outbound: points.map(([longitude, latitude]) => ({ longitude, latitude })),
+      zoom: fitMapZoom(points),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * 按页产出路书：所有远程图片（高德静态地图、二维码）一开始就并行预取，
  * 纯文字页立刻送出，需要图片的页各自等自己那一张，因此既逐页推进又不比
@@ -90,7 +113,8 @@ export async function* streamGuidebookPages(
   const mapPlan = await enrichGuidebookPlanWithMaps(plan, options);
   const routeMap = prepareGuidebookImage(mapPlan.route.staticMapUrl, "map", options);
   const dayImages = mapPlan.days.map((day) => ({
-    map: prepareGuidebookImage(day.mapUrl, "map", options),
+    // enrichment 没给出当天地图时，用当天节点坐标现场补一张，避免当天页面没有地图。
+    map: prepareGuidebookImage(day.mapUrl ?? buildDayStaticMapUrl(day), "map", options),
     qrCode: prepareGuidebookImage(day.qrCodeUrl, "qr", options),
   }));
 
@@ -135,12 +159,12 @@ export async function* streamGuidebookPages(
         if (day && images) {
           // 当日地图取不到时（占位 SVG）退到全程路线图，避免用户看到"地图暂不可用"。
           const dayMap = await images.map;
-          // 只有当日地图缺图时才等待全程路线图，避免每页都多等一次。
-          const mapUrl =
-            dayMap && !dayMap.startsWith("data:image/svg+xml") ? dayMap : await routeMap;
+          // 占位图意味着当天地图没取到：清空后由当天点位示意图兜底，
+          // 不能用全程路线图冒充，否则地图和当天行程对不上。
+          const usableMap = dayMap && !dayMap.startsWith("data:image/svg+xml") ? dayMap : undefined;
           const preparedDay = {
             ...day,
-            mapUrl,
+            mapUrl: usableMap,
             qrCodeUrl: await images.qrCode,
           };
           prepared = {

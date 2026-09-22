@@ -705,7 +705,7 @@ function mercatorY(latitude: number): number {
 }
 
 // 按路线经纬度跨度估算静态地图缩放级别，并额外留出一级边距，避免首末标记贴边被裁切。
-function fitMapZoom(points: readonly AmapCoordinate[]): number {
+export function fitMapZoom(points: readonly AmapCoordinate[]): number {
   if (points.length < 1) return 10;
   const longitudes = points.map(([longitude]) => longitude);
   const latitudes = points.map(([, latitude]) => latitude);
@@ -1012,15 +1012,25 @@ async function enrichDays(
     const lastNodeEnd = [...nodes].reverse().find((node) => node.coordinates)?.coordinates;
     const dayEnd = hotelEnd ?? lastNodeEnd ?? routeStops.get(plan.meta.destination) ?? dayStart;
     const points = dayMapPoints(nodes, dayStart, dayEnd, plan, route, routeStops);
+    // 高德静图对坐标范围敏感：先剔除非法坐标，避免单个坏点导致整天没有地图。
+    const validPoints = points.filter(
+      ([longitude, latitude]) =>
+        Number.isFinite(longitude) &&
+        Number.isFinite(latitude) &&
+        Math.abs(longitude) <= 180 &&
+        Math.abs(latitude) <= 90,
+    );
     const mapUrl =
-      points.length > 0
+      validPoints.length > 0
         ? buildStaticMapUrlSafely(
             {
-              outbound: samplePath(points, MAX_DAY_MAP_POINTS).map(([longitude, latitude]) => ({
-                longitude,
-                latitude,
-              })),
-              zoom: fitMapZoom(points),
+              outbound: samplePath(validPoints, MAX_DAY_MAP_POINTS).map(
+                ([longitude, latitude]) => ({
+                  longitude,
+                  latitude,
+                }),
+              ),
+              zoom: fitMapZoom(validPoints),
             },
             report,
           )

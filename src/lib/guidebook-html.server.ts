@@ -468,8 +468,10 @@ function hotelForDay(day: TripDay): TripTimelineNode | undefined {
   return day.nodes.find((node) => node.type === "hotel");
 }
 
-function mapForDay(plan: TripPlan, day: TripDay): string {
-  const mapUrl = sanitizeUrl(day.mapUrl) ?? sanitizeUrl(plan.route.staticMapUrl);
+function mapForDay(day: TripDay): string {
+  // 只用当天地图；缺失时退到当天点位示意图。
+  // 绝不回退全程路线图，否则用户会看到与当天完全无关的地图。
+  const mapUrl = sanitizeUrl(day.mapUrl);
   if (mapUrl) return renderMapImage(mapUrl, `${day.theme}每日地图`);
   const coordinates: Coordinate[] = day.nodes.flatMap((node) =>
     node.coordinates ? [node.coordinates] : [],
@@ -531,7 +533,7 @@ function renderDayMapPage(plan: TripPlan, day: TripDay, index: number): string {
   const navigationUrl = sanitizeUrl(day.navigationUrl);
   const lodging = hotel?.location ?? hotel?.name ?? "住宿地点待确认";
   const dailyNodeCost = day.nodes.reduce((sum, node) => sum + finiteNumber(node.estimatedCost), 0);
-  const body = `${renderSectionHeading(`DAY ${String(index + 1).padStart(2, "0")} / 左页`, "每日导航与准备")}<div class="day-heading"><div><p class="section-label">DAY ${String(index + 1).padStart(2, "0")}</p><h1>${escapeHtml(day.theme)}</h1></div><div class="day-heading-meta"><span><i class="ti ti-calendar"></i> ${escapeHtml(formatDate(day.date))}</span>${day.weather ? `<span><i class="ti ti-sun"></i> ${escapeHtml(day.weather)}</span>` : ""}</div></div><div class="day-left-top"><section class="day-map-block"><h3>高德每日地图</h3>${mapForDay(plan, day)}</section><div class="day-side-cards"><section class="info-card navigation-card"><h3><i class="ti ti-navigation"></i> 导航与二维码</h3>${renderExternalLink(navigationUrl, "打开当日导航")}${renderQrBlock(day)}</section><section class="info-card lodging-card"><h3><i class="ti ti-bed"></i> 今晚住宿</h3><strong>${escapeHtml(lodging)}</strong><p>${hotel ? escapeHtml(hotel.startTime ? `${hotel.startTime} 起可安排入住` : "按住宿节点办理入住") : "请在出发前确认房型和入住时间。"}</p></section>${renderDayBudgetCard(plan, day, dailyNodeCost)}</div></div><section class="radar-section"><div class="radar-heading"><div><p class="section-label">DAILY BALANCE / 当日负荷</p><h3>当日综合雷达</h3></div><span><i class="ti ti-chart-radar"></i> 五项关注度</span></div>${renderRadar(day.radar)}</section>`;
+  const body = `${renderSectionHeading(`DAY ${String(index + 1).padStart(2, "0")} / 左页`, "每日导航与准备")}<div class="day-heading"><div><p class="section-label">DAY ${String(index + 1).padStart(2, "0")}</p><h1>${escapeHtml(day.theme)}</h1></div><div class="day-heading-meta"><span><i class="ti ti-calendar"></i> ${escapeHtml(formatDate(day.date))}</span>${day.weather ? `<span><i class="ti ti-sun"></i> ${escapeHtml(day.weather)}</span>` : ""}</div></div><div class="day-left-top"><section class="day-map-block"><h3>高德每日地图</h3>${mapForDay(day)}</section><div class="day-side-cards"><section class="info-card navigation-card"><h3><i class="ti ti-navigation"></i> 导航与二维码</h3>${renderExternalLink(navigationUrl, "打开当日导航")}${renderQrBlock(day)}</section><section class="info-card lodging-card"><h3><i class="ti ti-bed"></i> 今晚住宿</h3><strong>${escapeHtml(lodging)}</strong><p>${hotel ? escapeHtml(hotel.startTime ? `${hotel.startTime} 起可安排入住` : "按住宿节点办理入住") : "请在出发前确认房型和入住时间。"}</p></section>${renderDayBudgetCard(plan, day, dailyNodeCost)}</div></div><section class="radar-section"><div class="radar-heading"><div><p class="section-label">DAILY BALANCE / 当日负荷</p><h3>当日综合雷达</h3></div><span><i class="ti ti-chart-radar"></i> 五项关注度</span></div>${renderRadar(day.radar)}</section>`;
   return renderPage(
     "day-map-page",
     "day-left",

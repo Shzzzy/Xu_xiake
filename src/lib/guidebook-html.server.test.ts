@@ -652,3 +652,21 @@ test("accepts only Task 4 verified quote ids in final closing text", async () =>
   assert.equal(unknownQuote.source, null);
   assert.doesNotMatch(unknownQuote.message, /自编引用不应生效/);
 });
+
+test("当天地图缺失时不会用全程路线图冒充", () => {
+  const plan: TripPlan = {
+    ...fixturePlan,
+    route: { ...fixturePlan.route, staticMapUrl: "https://maps.example.test/route-only-map" },
+    days: fixturePlan.days.map((day) => ({ ...day, mapUrl: undefined })),
+  };
+
+  const html = renderGuidebookHtml(plan);
+  const routePage = pageFragments(html, "route")[0] ?? "";
+  const dayPage = pageFragments(html, "day-left")[0] ?? "";
+
+  assert.match(routePage, /route-only-map/);
+  assert.ok(dayPage, "应当渲染当天地图页");
+  assert.doesNotMatch(dayPage, /route-only-map/);
+  // 没有当天坐标时至少给本地占位图，而不是全程路线图。
+  assert.match(dayPage, /map-placeholder|schematic-map/);
+});
