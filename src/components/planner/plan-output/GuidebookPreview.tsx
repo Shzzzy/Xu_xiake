@@ -280,6 +280,7 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
         </div>
         <ExportGuidebookButton
           plan={plan}
+          previewFrameRef={frameRef}
           disabled={!ready}
           disabledHint={error ? "路书生成失败，请先处理上方问题" : "路书全部页面生成完成后即可导出"}
         />

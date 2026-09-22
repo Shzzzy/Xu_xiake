@@ -1,4 +1,5 @@
-import { AlertCircle, Download, FileDown, LoaderCircle, RefreshCw } from "lucide-react";
+import type { RefObject } from "react";
+import { AlertCircle, Download, LoaderCircle, Printer, RefreshCw } from "lucide-react";
 import type { TripPlan } from "@/lib/travel-plan";
 import { Button } from "@/components/ui/button";
 import { isGuidebookReady } from "@/lib/guidebook-generation";
@@ -6,6 +7,8 @@ import { useGuidebookExport } from "./use-guidebook-export";
 
 type ExportGuidebookButtonProps = {
   plan: TripPlan;
+  /** 预览用的 iframe；打印导出直接复用其中已经渲染好的路书 HTML。 */
+  previewFrameRef?: RefObject<HTMLIFrameElement | null>;
   /** 路书页面还没排完时禁用导出，避免拿到半成品。 */
   disabled?: boolean;
   disabledHint?: string;
@@ -19,10 +22,14 @@ type ExportGuidebookButtonProps = {
  */
 export function ExportGuidebookButton({
   plan,
+  previewFrameRef,
   disabled = false,
   disabledHint,
 }: ExportGuidebookButtonProps) {
-  const { state, preparedPdf, isGenerating, generate, download } = useGuidebookExport(plan);
+  const { state, preparedPdf, isGenerating, generate, download } = useGuidebookExport(
+    plan,
+    previewFrameRef,
+  );
   const ready = isGuidebookReady(state) && Boolean(preparedPdf);
   const failed = state.stage === "failed";
 
@@ -45,7 +52,7 @@ export function ExportGuidebookButton({
         ) : failed ? (
           <RefreshCw className="size-4" />
         ) : (
-          <FileDown className="size-4" />
+          <Printer className="size-4" />
         )}
         {isGenerating
           ? "正在生成路书 PDF"
@@ -104,10 +111,10 @@ function getStageLabel(stage: string): string {
     case "finalizing":
       return "正在生成 PDF 文件";
     case "ready":
-      return "路书已就绪，可重复下载";
+      return "路书已就绪，可再次打印或保存";
     case "failed":
       return "路书生成失败";
     default:
-      return "点击后生成 PDF";
+      return "点击后打开打印窗口，目标选「另存为 PDF」";
   }
 }
