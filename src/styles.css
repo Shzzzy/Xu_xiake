@@ -2458,6 +2458,54 @@
   box-shadow: none;
 }
 
+/* AI 预算建议：面板左侧留一道强调色，让它在长表单里也能被一眼看到。 */
+.budget-advice-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.budget-advice-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--v-accent), transparent 88%);
+}
+
+/* 估算依据：把"AI 按什么算的"写成小药丸，信息密度高但不喧宾夺主。 */
+.budget-advice-basis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.34rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.budget-advice-basis li {
+  padding: 0.08rem 0.44rem;
+  border: 1px solid color-mix(in oklab, var(--v-accent) 24%, var(--v-line));
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--v-accent) 7%, transparent);
+  color: color-mix(in oklab, var(--v-accent) 74%, var(--v-ink));
+  font-size: 0.6rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* 悬停时图标轻轻偏转，呼应"正在盘算"的感觉。 */
+.budget-advice-action svg {
+  transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.budget-advice-action:hover:not(:disabled) svg {
+  transform: rotate(-14deg) scale(1.1);
+}
+
+.budget-advice-action:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
 @media (max-width: 640px) {
   .budget-advice-panel {
     align-items: stretch;

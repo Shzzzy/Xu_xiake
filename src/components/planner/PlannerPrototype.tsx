@@ -1001,6 +1001,13 @@ function KnownPlanScreen({
               budgetAdvice={{
                 pending: budgetAdvicePending,
                 hint: "按出发地、往返交通与人数估算",
+                basis: [
+                  `${brief.adults + brief.children} 人`,
+                  `${brief.days} 天`,
+                  transportLabels[
+                    routePlan?.legs.find((leg) => leg.kind === "outbound")?.transport ?? "balanced"
+                  ],
+                ],
                 onRequest: requestBudgetAdvice,
               }}
             />
@@ -1461,6 +1468,52 @@ function UnknownPlanScreen({
     onDraftChange((previous) => updateUnknownPlanDraft(previous, patch));
   };
 
+  const recommendBudgetFn = useServerFn(recommendBudget);
+  const [budgetAdvicePending, setBudgetAdvicePending] = useState(false);
+
+  // 未知目的地时还不知道最终去哪，用"推荐目的地"作为估算基准，
+  // 保证建议预算和随后生成的行程口径一致。
+  const requestWizardBudgetAdvice = async () => {
+    setBudgetAdvicePending(true);
+    try {
+      const destinationId = recommendDestination(answers, inspirationCatalog);
+      const destination = findInspiration(destinationId, inspirationCatalog);
+      const routeDecision = parseRouteAnswer(answers.routeMode ?? "roundtrip-fast");
+      const transport = normalizeTransportAnswer(answers.transport ?? "balanced");
+      const result = await recommendBudgetFn({
+        data: {
+          origin: answers.origin.trim() || "北京",
+          destination: destination?.name ?? "黄山",
+          region: destination?.region ?? "",
+          days: answers.days ?? 2,
+          travelers: { adults: travelerInput.adults, children: travelerInput.children },
+          transportPreference: transportLabels[transport],
+          roundTrip: routeDecision.roundTrip,
+          returnMode: routeDecision.roundTrip ? routeDecision.returnMode : null,
+          routeLegs: [],
+          pace: normalizePaceAnswer(answers.pace ?? "balanced"),
+          interests: answers.interest ? [answers.interest] : [],
+        },
+      });
+
+      if (result.status === "ok") {
+        const total = result.advice.total;
+        // 用函数式回填，避免覆盖用户请求期间对人数或时间的修改。
+        onDraftChange((previous) => ({
+          ...previous,
+          travelerInput: { ...previous.travelerInput, totalBudget: total },
+        }));
+        toast.success(`建议预算 ¥${total}`);
+      } else {
+        toast.error(result.message);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "预算建议失败");
+    } finally {
+      setBudgetAdvicePending(false);
+    }
+  };
+
   const steps: WizardStep[] = [
     {
       key: "mood",
@@ -1705,6 +1758,18 @@ function UnknownPlanScreen({
                   setBriefErrors([]);
                 }}
                 showVehicleEnergy={usesDrive}
+                budgetAdvice={{
+                  pending: budgetAdvicePending,
+                  hint: "你还不知道去哪也没关系，按已经填好的条件先估一个。",
+                  basis: [
+                    `${travelerInput.adults + travelerInput.children} 人`,
+                    `${answers.days ?? 2} 天`,
+                    transportLabels[normalizeTransportAnswer(answers.transport ?? "balanced")],
+                    findInspiration(recommendDestination(answers, inspirationCatalog), inspirationCatalog)
+                      ?.name ?? "未定目的地",
+                  ],
+                  onRequest: requestWizardBudgetAdvice,
+                }}
               />
               {briefErrors.length > 0 ? (
                 <ul className="mt-3 space-y-1 text-xs leading-5 text-[var(--v-seal)]">

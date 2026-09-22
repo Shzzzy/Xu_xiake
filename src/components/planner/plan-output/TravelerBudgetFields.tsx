@@ -9,7 +9,10 @@ const vehicleEnergyOptions: { id: VehicleEnergy; label: string }[] = [
 ];
 
 // 将 AI 建议的预算合并到最新 brief 上，避免用点击时的快照覆盖用户在请求期间的新编辑。
-export function applySuggestedBudget<T extends TripBrief>(prev: T, total: number): T {
+export function applySuggestedBudget<T extends { totalBudget: number }>(
+  prev: T,
+  total: number,
+): T {
   return { ...prev, totalBudget: total };
 }
 
@@ -22,8 +25,14 @@ export function TravelerBudgetFields({
   value: TripBrief;
   onChange: (value: TripBrief) => void;
   showVehicleEnergy?: boolean;
-  // AI 推荐由调用方注入：没有该 prop 时按钮不渲染（未知目的地向导里不出现）。
-  budgetAdvice?: { pending: boolean; hint?: string; onRequest: () => void };
+  // AI 推荐由调用方注入：没有该 prop 时按钮不渲染。
+  budgetAdvice?: {
+    pending: boolean;
+    hint?: string;
+    /** 估算依据，例如「2 人」「5 天」「飞机」，让用户知道 AI 按什么算的。 */
+    basis?: string[];
+    onRequest: () => void;
+  };
 }) {
   const update = (patch: Partial<TripBrief>) => onChange({ ...value, ...patch });
 
@@ -90,6 +99,13 @@ export function TravelerBudgetFields({
             <span id="budget-advice-hint">
               {budgetAdvice.hint ?? "按人数、天数和交通方式给你一个参考预算。"}
             </span>
+            {budgetAdvice.basis && budgetAdvice.basis.length > 0 ? (
+              <ul className="budget-advice-basis" aria-label="估算依据">
+                {budgetAdvice.basis.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : null}
           </div>
           <button
             type="button"

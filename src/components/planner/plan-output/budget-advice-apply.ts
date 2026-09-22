@@ -1,5 +1,4 @@
 import { applySuggestedBudget } from "./TravelerBudgetFields";
-import type { TripBrief } from "@/lib/travel-plan";
 
 // 传给预算建议服务的请求体；只描述用到的字段，避免把服务端类型带到客户端。
 export type BudgetAdviceInputLike = {
@@ -34,7 +33,8 @@ export type BudgetAdviceApplyOutcome =
   | { status: "failed"; message: string };
 
 // 把「请求 AI 预算建议并回写」的竞态敏感流程抽成纯函数，让普通单元测试能覆盖真正上线的逻辑。
-export async function requestAndApplyBudget<TBrief extends TripBrief>(input: {
+// 约束只要求带 totalBudget：已知目的地表单与未知目的地向导用的是两套 brief 类型。
+export async function requestAndApplyBudget<TBrief extends { totalBudget: number }>(input: {
   payload: BudgetAdviceInputLike;
   request: (payload: BudgetAdviceInputLike) => Promise<RecommendBudgetResult>;
   // 必须收到函数式更新，调用方才能基于最新 brief 合并，而不是用点击时的快照回写。
