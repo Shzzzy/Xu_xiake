@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createAmapClient, type AmapCoordinate } from "./amap.server.ts";
 
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
@@ -94,6 +95,10 @@ export type BudgetAdviceInput = {
 export type BudgetAdviceDeps = {
   fetchImpl?: typeof fetch;
   apiKey?: string;
+  /** 高德 Key；显式传空字符串时禁止回退到环境变量。 */
+  amapKey?: string;
+  /** 高德网络桩；与 DeepSeek 的 fetchImpl 分离，避免测试互相污染。 */
+  amapFetchImpl?: typeof fetch;
 };
 
 function stripJsonFence(content: string): string {
@@ -252,8 +257,16 @@ function estimateRouteLegCost(leg: BudgetAdviceRouteLeg, travelerCount: number):
   return estimateFallbackTransportCost(leg.transport, travelerCount);
 }
 
+function normalizeRouteLegCostBasis(leg: BudgetAdviceRouteLeg): BudgetAdviceRouteLeg {
+  return {
+    ...leg,
+    // 自驾按车辆实际成本，其他交通统一按单人价格计算。
+    costBasis: normalizeTransportMode(leg.transport) === "drive" ? "vehicle" : "per-person",
+  };
+}
+
 function completeTransportLegs(input: BudgetAdviceInput): BudgetAdviceRouteLeg[] {
-  const legs = [...input.routeLegs];
+  const legs = input.routeLegs.map(normalizeRouteLegCostBasis);
   if (input.roundTrip && !legs.some((leg) => leg.kind === "return")) {
     legs.push({
       from: input.destination,
@@ -264,6 +277,62 @@ function completeTransportLegs(input: BudgetAdviceInput): BudgetAdviceRouteLeg[]
     });
   }
   return legs;
+}
+
+function haversineDistanceKm(from: AmapCoordinate, to: AmapCoordinate): number {
+  const earthRadiusKm = 6_371.0088;
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const [fromLongitude, fromLatitude] = from;
+  const [toLongitude, toLatitude] = to;
+  const latitudeDelta = toRadians(toLatitude - fromLatitude);
+  const longitudeDelta = toRadians(toLongitude - fromLongitude);
+  const fromLatitudeRadians = toRadians(fromLatitude);
+  const toLatitudeRadians = toRadians(toLatitude);
+
+  const a =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(fromLatitudeRadians) * Math.cos(toLatitudeRadians) * Math.sin(longitudeDelta / 2) ** 2;
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function enrichBudgetAdviceInput(
+  input: BudgetAdviceInput,
+  deps: BudgetAdviceDeps,
+): Promise<BudgetAdviceInput> {
+  const routeLegs = completeTransportLegs(input);
+  const amapKey =
+    deps.amapKey !== undefined ? deps.amapKey.trim() : process.env.AMAP_API_KEY?.trim();
+  const needsDistance = routeLegs.some((leg) => normalizeAmount(leg.distanceKm) === 0);
+  if (!amapKey || !needsDistance) return { ...input, routeLegs };
+
+  const client = createAmapClient(amapKey, deps.amapFetchImpl ?? fetch);
+  const geocodeCache = new Map<string, Promise<AmapCoordinate | null>>();
+  const geocode = (address: string): Promise<AmapCoordinate | null> => {
+    const normalizedAddress = address.trim();
+    if (!normalizedAddress) return Promise.resolve(null);
+    const cached = geocodeCache.get(normalizedAddress);
+    if (cached) return cached;
+
+    const pending = client
+      .geocode({ address: normalizedAddress })
+      .then((results) => results[0]?.location ?? null)
+      // 单个地点定位失败时保留缺省里程，由本地保守公式兜底。
+      .catch(() => null);
+    geocodeCache.set(normalizedAddress, pending);
+    return pending;
+  };
+
+  const enrichedLegs = await Promise.all(
+    routeLegs.map(async (leg) => {
+      if (normalizeAmount(leg.distanceKm) > 0) return leg;
+      const [from, to] = await Promise.all([geocode(leg.from), geocode(leg.to)]);
+      if (!from || !to) return leg;
+      const distanceKm = Math.round(haversineDistanceKm(from, to) * 10) / 10;
+      return distanceKm > 0 ? { ...leg, distanceKm } : leg;
+    }),
+  );
+
+  return { ...input, routeLegs: enrichedLegs };
 }
 
 function resolveBufferRate(input: BudgetAdviceInput, legs: BudgetAdviceRouteLeg[]): number {
@@ -417,7 +486,8 @@ export async function requestBudgetAdvice(
   input: BudgetAdviceInput,
   deps: BudgetAdviceDeps = {},
 ): Promise<BudgetAdvice> {
-  const baseline = buildBudgetAdvice(input);
+  const enrichedInput = await enrichBudgetAdviceInput(input, deps);
+  const baseline = buildBudgetAdvice(enrichedInput);
   const apiKey =
     deps.apiKey !== undefined ? deps.apiKey.trim() : process.env.DEEPSEEK_API_KEY?.trim();
   if (!apiKey) return baseline;
@@ -437,7 +507,7 @@ export async function requestBudgetAdvice(
       },
       body: JSON.stringify({
         model: process.env.DEEPSEEK_MODEL?.trim() || DEFAULT_DEEPSEEK_MODEL,
-        messages: buildBudgetAdviceMessages(input, baseline),
+        messages: buildBudgetAdviceMessages(enrichedInput, baseline),
         response_format: { type: "json_object" },
         max_tokens: 800,
         temperature: 0.2,

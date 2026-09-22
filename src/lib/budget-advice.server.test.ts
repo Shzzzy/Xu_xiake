@@ -176,7 +176,11 @@ test("DeepSeek 只能整理 note，不能修改本地金额", async () => {
       ],
     })) as typeof fetch;
 
-  const advice = await requestBudgetAdvice(input, { apiKey: "test-key", fetchImpl });
+  const advice = await requestBudgetAdvice(input, {
+    apiKey: "test-key",
+    amapKey: " ",
+    fetchImpl,
+  });
 
   assert.equal(advice.total, baseline.total);
   assert.deepEqual(advice.categories, baseline.categories);
@@ -186,8 +190,102 @@ test("DeepSeek 只能整理 note，不能修改本地金额", async () => {
 });
 
 test("缺少 DeepSeek 时仍返回本地确定性预算", async () => {
-  const advice = await requestBudgetAdvice(input, { apiKey: " " });
+  const advice = await requestBudgetAdvice(input, { apiKey: " ", amapKey: " " });
   assert.deepEqual(advice, buildBudgetAdvice(input));
+});
+
+const inputWithoutTransportPrices: BudgetAdviceInput = {
+  ...input,
+  routeLegs: [
+    {
+      ...input.routeLegs[0]!,
+      distanceKm: undefined,
+      unitCost: undefined,
+      totalCost: undefined,
+    },
+    {
+      ...input.routeLegs[1]!,
+      transport: "drive",
+      distanceKm: undefined,
+      unitCost: undefined,
+      totalCost: undefined,
+    },
+  ],
+};
+
+test("有高德 Key 时补齐真实里程、自动标记计费基准并驱动本地交通价", async () => {
+  const amapCalls: URL[] = [];
+  const amapFetchImpl = (async (requestInput: RequestInfo | URL) => {
+    const url = new URL(String(requestInput));
+    amapCalls.push(url);
+    const address = url.searchParams.get("address");
+    const location = address === "上海" ? "121.4737,31.2304" : "116.4074,39.9042";
+    return Response.json({
+      status: "1",
+      geocodes: [{ location }],
+    });
+  }) as typeof fetch;
+
+  let deepSeekBody: { messages: { role: string; content: string }[] } | undefined;
+  const deepSeekFetchImpl = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
+    deepSeekBody = JSON.parse(String(init?.body)) as typeof deepSeekBody;
+    return Response.json({
+      choices: [{ message: { content: JSON.stringify({ note: "已按高德里程估算" }) } }],
+    });
+  }) as typeof fetch;
+
+  const advice = await requestBudgetAdvice(inputWithoutTransportPrices, {
+    apiKey: "deepseek-test",
+    amapKey: "amap-test",
+    amapFetchImpl,
+    fetchImpl: deepSeekFetchImpl,
+  });
+
+  assert.equal(amapCalls.length, 2);
+  const userMessage = JSON.parse(deepSeekBody!.messages[1]!.content) as {
+    input: {
+      routeLegs: { distanceKm?: number; costBasis?: string }[];
+    };
+  };
+  const outbound = userMessage.input.routeLegs[0]!;
+  const returnLeg = userMessage.input.routeLegs[1]!;
+  assert.ok((outbound.distanceKm ?? 0) > 1_060 && (outbound.distanceKm ?? 0) < 1_075);
+  assert.ok((returnLeg.distanceKm ?? 0) > 1_060 && (returnLeg.distanceKm ?? 0) < 1_075);
+  assert.equal(outbound.costBasis, "per-person");
+  assert.equal(returnLeg.costBasis, "vehicle");
+  assert.equal(advice.baseTotal, 6_980);
+  assert.equal(advice.recommendedTotal, 8_100);
+});
+
+test("没有高德 Key 时不发网络请求，本地公式仍可用", async () => {
+  let amapCalled = false;
+  const amapFetchImpl = (async () => {
+    amapCalled = true;
+    throw new Error("不应调用高德网络");
+  }) as typeof fetch;
+
+  const advice = await requestBudgetAdvice(inputWithoutTransportPrices, {
+    apiKey: " ",
+    amapKey: " ",
+    amapFetchImpl,
+  });
+
+  assert.equal(amapCalled, false);
+  assert.deepEqual(advice, buildBudgetAdvice(inputWithoutTransportPrices));
+});
+
+test("高德定位失败时保守降级，不阻塞本地预算", async () => {
+  const amapFetchImpl = (async () => {
+    throw new Error("高德网络失败");
+  }) as typeof fetch;
+
+  const advice = await requestBudgetAdvice(inputWithoutTransportPrices, {
+    apiKey: " ",
+    amapKey: "amap-test",
+    amapFetchImpl,
+  });
+
+  assert.deepEqual(advice, buildBudgetAdvice(inputWithoutTransportPrices));
 });
 
 test("预算解释必须是合法 JSON note", () => {
@@ -272,7 +370,11 @@ test("预算建议请求使用 DeepSeek 说明合同且金额来自本地基线"
     });
   }) as typeof fetch;
 
-  const advice = await requestBudgetAdvice(input, { apiKey: "test-key", fetchImpl });
+  const advice = await requestBudgetAdvice(input, {
+    apiKey: "test-key",
+    amapKey: " ",
+    fetchImpl,
+  });
   const body = JSON.parse(String(requests[0]?.init?.body)) as {
     messages: unknown[];
     response_format: { type: string };
