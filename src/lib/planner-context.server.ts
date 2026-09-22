@@ -384,7 +384,25 @@ function isRelevantAmapPoi(
       .join(" "),
   );
   const destinationText = normalizeName(destination);
-  if (!destinationText || !poiText.includes(destinationText)) return false;
+  if (!destinationText) return false;
+  // 组合地名（如「桂林阳朔」）不会完整出现在任何 POI 文本里，
+  // 允许退化成"已识别的城市名"匹配，否则桂林、阳朔的景点会被整批排除。
+  // 地名以「草原/湖/景区」这类地物后缀结尾时保持整体匹配；
+  // 否则按两字切分（如「桂林阳朔」→「桂林」「阳朔」），避免组合地名搜不到景点。
+  const endsWithTerrainSuffix =
+    /(草原|风景区|景区|古城|古镇|度假区|旅游区|国家森林公园|森林公园|公园|湖|山|岛|寺|塔|宫)$/u.test(
+      destinationText,
+    );
+  const segmentedTokens =
+    destinationText.length >= 4 && !endsWithTerrainSuffix
+      ? [destinationText.slice(0, 2), destinationText.slice(2, 4)]
+      : [];
+  const destinationTokens = new Set(
+    [destinationText, ...target.cityNames, ...segmentedTokens]
+      .map((value) => normalizeName(value))
+      .filter((value) => value.length > 0),
+  );
+  if (![...destinationTokens].some((token) => poiText.includes(token))) return false;
 
   if (target.provinceKeys.size > 0) {
     const mentionedProvinces = new Set([

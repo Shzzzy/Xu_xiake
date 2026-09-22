@@ -45,6 +45,9 @@ import {
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-chat";
 const DEFAULT_TIMEOUT_MS = 60_000;
+// 瞬时故障重试次数与退避间隔（毫秒）：3 次尝试覆盖短时限流与网络抖动。
+const DEEPSEEK_MAX_ATTEMPTS = 3;
+const DEEPSEEK_RETRY_DELAYS_MS = [450, 1500];
 
 // 骨架、每日文案、结尾的 token 上限，与设计文档 §9 保持一致。
 const SKELETON_MAX_TOKENS = 4000;
@@ -162,18 +165,20 @@ async function requestChatCompletion(
     return content;
   };
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  // 瞬时故障（网络抖动、限流、5xx）共尝试 3 次，退避递增；
+  // 单日文案与选景点会连续调用多次，抗抖动能力直接影响整单成功率。
+  for (let attempt = 0; attempt < DEEPSEEK_MAX_ATTEMPTS; attempt += 1) {
     try {
       return await send();
     } catch (error) {
-      if (attempt === 0 && isTransientDeepSeekError(error)) {
-        await new Promise((resolve) => setTimeout(resolve, 450));
-        continue;
-      }
-      if (isTransientDeepSeekError(error)) {
+      const transient = isTransientDeepSeekError(error);
+      const isLastAttempt = attempt === DEEPSEEK_MAX_ATTEMPTS - 1;
+      if (!transient) throw error;
+      if (isLastAttempt) {
         throw new Error("AI 规划服务暂时不可用，请稍后重试", { cause: error });
       }
-      throw error;
+      const delay = DEEPSEEK_RETRY_DELAYS_MS[attempt] ?? DEEPSEEK_RETRY_DELAYS_MS.at(-1) ?? 1500;
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
   throw new Error("AI 规划服务暂时不可用，请稍后重试");
