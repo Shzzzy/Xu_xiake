@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { VIOLATION_CODES } from "./plan-validator.ts";
 
 /**
  * 行程数据的校验 schema：服务端函数与路书流式接口共用同一份定义。
@@ -127,17 +128,7 @@ export const tripPlanSchema = z.object({
   violations: z
     .array(
       z.object({
-        code: z.enum([
-          "TIME_WINDOW",
-          "DAY_COVERAGE",
-          "MISSING_SLOT",
-          "OVER_BUDGET",
-          "OVER_CAPACITY",
-          "PACE_EXCEEDED",
-          "UNKNOWN_PLACE",
-          "TRANSPORT_CONFLICT",
-          "SUMMARY_MISMATCH",
-        ]),
+        code: z.enum(VIOLATION_CODES),
         day: z.number().int().positive().optional(),
         nodeIndex: z.number().int().nonnegative().optional(),
         message: z.string(),

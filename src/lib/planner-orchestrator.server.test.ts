@@ -525,3 +525,104 @@ test("runStage 返回空结果时当前阶段失败并停止", async () => {
   assert.match(run.stages.route.error ?? "", /未处理/);
   assert.equal(run.stages.pois.status, "pending");
 });
+
+// selection 首次跨天重复同一景点：修复一次后改用尚未占用的候选。
+function fakeFetchDuplicateAttractionOnce(repairBodies: RequestBody[] = []): FetchImpl {
+  return (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as RequestBody;
+    const content = messageContent(body);
+
+    if (content.includes("每日文案")) {
+      const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
+      return responseWith(dayCopyJson(day));
+    }
+    if (content.includes("生成旅行回望与结束语")) {
+      return responseWith(closingJson());
+    }
+    if (content.includes("上一版景点选择未通过校验")) {
+      repairBodies.push(body);
+      return responseWith(
+        JSON.stringify([
+          { day: 1, candidateId: "poi-huangshan", sequence: 1, stayMinutes: 120, reason: "首日黄山" },
+          { day: 2, candidateId: "poi-tunxi", sequence: 1, stayMinutes: 120, reason: "次日屯溪" },
+        ]),
+      );
+    }
+    return responseWith(
+      JSON.stringify([
+        { day: 1, candidateId: "poi-huangshan", sequence: 1, stayMinutes: 120, reason: "首日黄山" },
+        { day: 2, candidateId: "poi-huangshan", sequence: 1, stayMinutes: 120, reason: "重复安排" },
+      ]),
+    );
+  }) as FetchImpl;
+}
+
+// selection 修复后仍然跨天重复：必须 fail closed，不交付重复行程。
+function fakeFetchDuplicateAttractionAlways(): FetchImpl {
+  return (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as RequestBody;
+    const content = messageContent(body);
+
+    if (content.includes("每日文案")) {
+      const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
+      return responseWith(dayCopyJson(day));
+    }
+    if (content.includes("生成旅行回望与结束语")) {
+      return responseWith(closingJson());
+    }
+    return responseWith(
+      JSON.stringify([
+        { day: 1, candidateId: "poi-huangshan", sequence: 1, stayMinutes: 120, reason: "首日黄山" },
+        { day: 2, candidateId: "poi-huangshan", sequence: 1, stayMinutes: 120, reason: "重复安排" },
+      ]),
+    );
+  }) as FetchImpl;
+}
+
+test("selection 跨天重复时只修复一次并改用未占用的候选", async () => {
+  const repairBodies: RequestBody[] = [];
+  const result = await planWithButler(butlerInput, {
+    apiKey: "k",
+    fetchImpl: fakeFetchDuplicateAttractionOnce(repairBodies),
+  });
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  assert.equal(repairBodies.length, 1);
+  const repairContent = messageContent(repairBodies[0] as RequestBody);
+  assert.match(repairContent, /上一版景点选择未通过校验/);
+  assert.match(repairContent, /重复出现/);
+  const scheduledNames = result.skeleton.days.flatMap((day) =>
+    day.nodes.filter((node) => node.type === "attraction").map((node) => node.name),
+  );
+  assert.deepEqual(scheduledNames, ["黄山风景区", "屯溪老街"]);
+});
+
+test("selection 修复后仍跨天重复时由本地兜底改用未占用候选", async () => {
+  const result = await planWithButler(butlerInput, {
+    apiKey: "k",
+    fetchImpl: fakeFetchDuplicateAttractionAlways(),
+  });
+
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  const scheduledNames = result.skeleton.days.flatMap((day) =>
+    day.nodes.filter((node) => node.type === "attraction").map((node) => node.name),
+  );
+  // AI 第二次仍重复，本地兜底把第二天换成未占用的屯溪老街，保证交付不重复。
+  assert.deepEqual(scheduledNames, ["黄山风景区", "屯溪老街"]);
+});
+
+test("候选不足以覆盖景点槽位时允许复用同一景点", async () => {
+  const singleCandidateInput: ButlerPlanInput = {
+    ...butlerInput,
+    candidates: [candidates[0]!],
+  };
+  const result = await planWithButler(singleCandidateInput, {
+    apiKey: "k",
+    fetchImpl: fakeFetchDuplicateAttractionAlways(),
+  });
+
+  // 只有一个候选而两天都需要景点：允许复用，不因去重规则拒绝交付。
+  assert.equal(result.status, "ok");
+});

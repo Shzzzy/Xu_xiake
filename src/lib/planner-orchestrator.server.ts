@@ -595,6 +595,7 @@ function buildSelectionInstruction(
       : "请完成景点选择。",
     "你是旅行管家，只能在候选列表内选择景点并给出游览顺序；不得修改交通、价格、人数或每日时间窗。",
     "每个非移动日必须至少选择一个候选景点；移动日可按剩余时间选择，也可以不选。",
+    "同一个 candidateId 只能选择一次，不得在多个 day 重复安排同一景点；候选数量足够时优先使用尚未选择的候选。",
     "只输出严格 JSON 对象：{ selections: [...] }，每个 selection 只能包含 day、candidateId、sequence、stayMinutes、reason。",
     "candidateId 必须逐字来自 candidates.id，不得输出名称代替 ID，不得输出 URL 或价格。",
     JSON.stringify(payload, null, 2),
@@ -708,6 +709,22 @@ function validateSelectionCoverage(
     }
   }
 
+  // 同一景点不得跨天重复；候选数量不足以覆盖全部景点槽位时允许复用，避免无解重排。
+  const daysByCandidate = new Map<string, number[]>();
+  for (const item of selection) {
+    const days = daysByCandidate.get(item.candidateId) ?? [];
+    if (!days.includes(item.day)) days.push(item.day);
+    daysByCandidate.set(item.candidateId, days);
+  }
+  const repeated = [...daysByCandidate.entries()].find(([, days]) => days.length > 1);
+  if (repeated && input.candidates.length >= selection.length) {
+    const repeatedName =
+      input.candidates.find((candidate) => candidate.id === repeated[0])?.name ?? repeated[0];
+    throw new Error(
+      `景点「${repeatedName}」被安排在第 ${repeated[1].join("、")} 天重复出现，同一景点只能安排在一天`,
+    );
+  }
+
   for (let day = 1; day <= input.days; day += 1) {
     if ((transportByDay.get(day)?.length ?? 0) > 0) continue;
     if (
@@ -717,6 +734,40 @@ function validateSelectionCoverage(
       throw new Error(`第 ${day} 天容量足够但没有选择候选景点`);
     }
   }
+}
+
+/**
+ * 跨天重复的本地兜底：按天顺序保留首次出现的候选，重复项换成尚未占用的候选。
+ * 优先同区域候选以控制空间合理性；没有可替换候选时返回 null，交回调用方按原规则处理。
+ */
+function repairDuplicateSelectionsLocally(
+  candidates: readonly PlannerDestinationCandidate[],
+  selection: AttractionSelection[],
+): AttractionSelection[] | null {
+  const areaById = new Map(candidates.map((candidate) => [candidate.id, candidate.areaKey ?? ""]));
+  const pool = candidates.map((candidate) => candidate.id);
+  const usedIds = new Set<string>();
+  const ordered = [...selection].sort((left, right) =>
+    left.day === right.day ? left.sequence - right.sequence : left.day - right.day,
+  );
+  let replaced = false;
+  const result: AttractionSelection[] = [];
+  for (const item of ordered) {
+    if (!usedIds.has(item.candidateId)) {
+      usedIds.add(item.candidateId);
+      result.push(item);
+      continue;
+    }
+    const itemArea = areaById.get(item.candidateId)?.split("-")[0] ?? "";
+    const unused = pool.filter((id) => !usedIds.has(id));
+    const replacement =
+      unused.find((id) => (areaById.get(id)?.split("-")[0] ?? "") === itemArea) ?? unused[0];
+    if (!replacement) return null;
+    usedIds.add(replacement);
+    replaced = true;
+    result.push({ ...item, candidateId: replacement });
+  }
+  return replaced ? result : null;
 }
 
 function buildDayRadar(pace: Pace): PlannerSkeletonDay["radar"] {
@@ -1117,6 +1168,18 @@ export async function planWithButler(
             content,
             new Set(state.candidates.map((candidate) => candidate.id)),
           );
+          // 第二次尝试后仍跨天重复时，用未占用的候选本地替换，保证用户拿到不重复的排程。
+          if (attempt > 0) {
+            const repairedSelection = repairDuplicateSelectionsLocally(
+              state.candidates,
+              selection,
+            );
+            if (repairedSelection) {
+              validateSelectionCoverage(input, repairedSelection, state.transportByDay);
+              state.selection = repairedSelection;
+              break;
+            }
+          }
           validateSelectionCoverage(input, selection, state.transportByDay);
           state.selection = selection;
           break;

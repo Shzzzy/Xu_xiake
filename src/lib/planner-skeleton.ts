@@ -288,6 +288,7 @@ export function buildSkeletonInstruction(input: SkeletonInstructionInput): strin
     `每天核心景点（attraction 与 night-activity）合计不得超过 ${paceLimits[brief.pace]} 个（${
       paceLabels[brief.pace]
     }档节奏）`,
+    "同一个景点（attraction / night-activity）只能安排在一天，不得在多个日期重复出现；候选不足时优先使用尚未排入行程的候选，仍不足就用休息或自由活动节点补位",
     "标题与摘要必须与逐日排程保持一致，不得描述排程里没有的安排",
     `必须生成恰好 ${brief.days} 天，day 从 1 连续编号到 ${brief.days}`,
     ...(input.transportPriceReferences && input.transportPriceReferences.length > 0
@@ -325,6 +326,7 @@ export function buildSkeletonRepairInstruction(violations: PlanViolation[]): str
     "硬性重排约束：",
     "- 只改被判定违规处，其余保持原样",
     "- 不得引入候选清单之外的景点",
+    "- 跨天重复的景点只保留一天，其余改排候选清单里尚未使用的景点；没有新景点可用时改为休息或自由活动，不得再次复用同名景点",
     "- 不得输出 URL，字段结构与上一版完全一致",
     "- 仍只输出严格 JSON，不要解释、不要 Markdown",
   ].join("\n");

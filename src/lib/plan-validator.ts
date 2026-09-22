@@ -2,16 +2,21 @@ import type { AttractionSelection, PlannerSkeleton } from "./planner-skeleton";
 import type { Pace } from "./planner";
 import type { TransportMode, TravelStyle } from "./route-planner";
 
-export type ViolationCode =
-  | "TIME_WINDOW"
-  | "DAY_COVERAGE"
-  | "MISSING_SLOT"
-  | "OVER_BUDGET"
-  | "OVER_CAPACITY"
-  | "PACE_EXCEEDED"
-  | "UNKNOWN_PLACE"
-  | "TRANSPORT_CONFLICT"
-  | "SUMMARY_MISMATCH";
+// 违规代号的唯一来源：类型、提示标签与 trip-plan-schema 的校验枚举都从这里派生。
+export const VIOLATION_CODES = [
+  "TIME_WINDOW",
+  "DAY_COVERAGE",
+  "MISSING_SLOT",
+  "OVER_BUDGET",
+  "OVER_CAPACITY",
+  "PACE_EXCEEDED",
+  "UNKNOWN_PLACE",
+  "TRANSPORT_CONFLICT",
+  "DUPLICATE_ATTRACTION",
+  "SUMMARY_MISMATCH",
+] as const;
+
+export type ViolationCode = (typeof VIOLATION_CODES)[number];
 
 export type PlanViolation = {
   code: ViolationCode;
@@ -58,6 +63,7 @@ const violationLabels: Record<ViolationCode, string> = {
   PACE_EXCEEDED: "节奏",
   UNKNOWN_PLACE: "地点",
   TRANSPORT_CONFLICT: "交通",
+  DUPLICATE_ATTRACTION: "重复景点",
   SUMMARY_MISMATCH: "摘要",
 };
 
@@ -408,6 +414,33 @@ export function validateSkeleton(input: PlanValidationInput): PlanViolation[] {
           break outer;
         }
       }
+    }
+  }
+
+  // 9. DUPLICATE_ATTRACTION：同一景点不得跨天重复。候选数量不足以覆盖全部景点槽位时允许复用，避免出现无解的重排。
+  const attractionByDay = new Map<string, { name: string; days: number[] }>();
+  let attractionSlots = 0;
+  for (const day of skeleton.days) {
+    for (const node of day.nodes) {
+      if (node.type !== "attraction" && node.type !== "night-activity") continue;
+      attractionSlots += 1;
+      const normalized = normalizeName(node.name);
+      if (!normalized) continue;
+      const entry = attractionByDay.get(normalized) ?? { name: node.name, days: [] };
+      if (!entry.days.includes(day.day)) entry.days.push(day.day);
+      attractionByDay.set(normalized, entry);
+    }
+  }
+  const distinctCandidateCount = new Set(normalizedCandidates.filter((name) => name.length > 0)).size;
+  if (distinctCandidateCount >= attractionSlots) {
+    for (const entry of attractionByDay.values()) {
+      if (entry.days.length < 2) continue;
+      violations.push({
+        code: "DUPLICATE_ATTRACTION",
+        day: entry.days[0]!,
+        message: `景点「${entry.name}」被安排在多个日期`,
+        detail: { expected: "每个景点只安排一天", actual: `第 ${entry.days.join("、")} 天重复` },
+      });
     }
   }
 

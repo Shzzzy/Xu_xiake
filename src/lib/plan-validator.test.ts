@@ -387,3 +387,54 @@ test("直达模式允许无核心景点，边走边玩模式才强制核心景�
     ),
   );
 });
+
+// 构造多日骨架，用于跨天去重相关断言。
+function multiDaySkeleton(themes: { day: number; attractions: string[] }[]): PlannerSkeleton {
+  return {
+    title: "跨天行程",
+    summary: themes.flatMap((item) => item.attractions).join("、"),
+    days: themes.map((item) => ({
+      day: item.day,
+      theme: `第 ${item.day} 天`,
+      nodes: item.attractions.map((name, index) => ({
+        type: "attraction" as const,
+        startTime: `${String(9 + index).padStart(2, "0")}:00`,
+        endTime: `${String(11 + index).padStart(2, "0")}:00`,
+        name,
+        stayMinutes: 120,
+        estimatedCost: 100,
+      })),
+      radar,
+    })),
+  };
+}
+
+test("候选充足时跨天重复的景点会被判定为违规", () => {
+  const violations = validateSkeleton({
+    skeleton: multiDaySkeleton([
+      { day: 1, attractions: ["黄山风景区"] },
+      { day: 2, attractions: ["黄山风景区"] },
+    ]),
+    brief: balancedBrief({ days: 2 }),
+    candidates: ["黄山风景区", "宏村"],
+  });
+  const duplicate = violations.find((item) => item.code === "DUPLICATE_ATTRACTION");
+  assert.ok(duplicate, "应当报出重复景点违规");
+  assert.match(duplicate.message, /黄山风景区/);
+  assert.match(duplicate.detail.actual, /1、2/);
+});
+
+test("候选不足以覆盖景点槽位时允许复用，不报重复违规", () => {
+  const violations = validateSkeleton({
+    skeleton: multiDaySkeleton([
+      { day: 1, attractions: ["黄山风景区"] },
+      { day: 2, attractions: ["黄山风景区"] },
+    ]),
+    brief: balancedBrief({ days: 2 }),
+    candidates: ["黄山风景区"],
+  });
+  assert.equal(
+    violations.some((item) => item.code === "DUPLICATE_ATTRACTION"),
+    false,
+  );
+});
