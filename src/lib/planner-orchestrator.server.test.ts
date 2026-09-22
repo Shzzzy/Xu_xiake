@@ -281,6 +281,38 @@ test("正常路径：选择一次、文案按天顺序、结尾一次", async ()
   assert.equal(closingBody?.max_tokens, 800);
 });
 
+test("selection 首次网络失败后自动重试并成功", async () => {
+  let failed = false;
+  const base = fakeFetch();
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as RequestBody;
+    const content = messageContent(body);
+    if (content.includes("景点选择") && !failed) {
+      failed = true;
+      throw new TypeError("fetch failed");
+    }
+    return base(input, init);
+  }) as FetchImpl;
+
+  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl });
+
+  assert.equal(result.status, "ok");
+  assert.equal(failed, true);
+});
+
+test("selection 连续网络失败时返回友好错误", async () => {
+  const fetchImpl = (async () => {
+    throw new TypeError("fetch failed");
+  }) as FetchImpl;
+
+  const result = await planWithButler(butlerInput, { apiKey: "k", fetchImpl });
+
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") {
+    assert.match(result.reason, /AI 规划服务暂时不可用/);
+  }
+});
+
 test("selection 首次越界时只修复一次", async () => {
   const repairBodies: RequestBody[] = [];
   const result = await planWithButler(butlerInput, {

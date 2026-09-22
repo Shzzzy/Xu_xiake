@@ -129,6 +129,11 @@ function resolveApiKey(deps: ButlerDeps): string {
   ).trim();
 }
 
+function isTransientDeepSeekError(error: unknown): boolean {
+  const message = error instanceof Error ? error.name + " " + error.message : String(error);
+  return /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR|TimeoutError|aborted|429|（5\d\d）/i.test(message);
+}
+
 // 统一的 DeepSeek Chat Completions 调用，供骨架与每日文案复用。
 async function requestChatCompletion(
   instruction: string,
@@ -137,43 +142,42 @@ async function requestChatCompletion(
   maxTokens: number,
 ): Promise<string> {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const baseUrl = (deps.baseUrl ?? process.env.DEEPSEEK_BASE_URL ?? DEFAULT_BASE_URL)
-    .trim()
-    .replace(/\/+$/, "");
+  const baseUrl = (deps.baseUrl ?? process.env.DEEPSEEK_BASE_URL ?? DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
   const model = (deps.model ?? process.env.DEEPSEEK_MODEL ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-  const response = await fetchImpl(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: instruction }],
-      response_format: { type: "json_object" },
-      temperature: 0.2,
-      max_tokens: maxTokens,
-    }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(
-      `DeepSeek 请求失败（${response.status}）${detail ? `：${detail.slice(0, 180)}` : ""}`,
-    );
-  }
-
-  const payload = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
+  const send = async () => {
+    const response = await fetchImpl(baseUrl + "/chat/completions", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: instruction }], response_format: { type: "json_object" }, temperature: 0.2, max_tokens: maxTokens }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error("DeepSeek 请求失败（" + response.status + "）" + (detail ? "：" + detail.slice(0, 180) : ""));
+    }
+    const payload = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) throw new Error("DeepSeek 未返回行程内容");
+    return content;
   };
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content) throw new Error("DeepSeek 未返回行程内容");
-  return content;
-}
 
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await send();
+    } catch (error) {
+      if (attempt === 0 && isTransientDeepSeekError(error)) {
+        await new Promise((resolve) => setTimeout(resolve, 450));
+        continue;
+      }
+      if (isTransientDeepSeekError(error)) {
+        throw new Error("AI 规划服务暂时不可用，请稍后重试", { cause: error });
+      }
+      throw error;
+    }
+  }
+  throw new Error("AI 规划服务暂时不可用，请稍后重试");
+}
 function buildSkeletonInstructionInput(input: ButlerPlanInput): SkeletonInstructionInput {
   return {
     brief: {
