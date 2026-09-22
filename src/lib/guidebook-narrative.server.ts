@@ -190,14 +190,22 @@ export function validateDayNarrative(
     throw new Error(`第 ${index + 1} 天历史来源包含 HTML`);
   }
   for (const entry of day.history ?? []) {
-    let source: URL;
-    try {
-      source = new URL(entry.source);
-    } catch {
-      throw new Error(`第 ${index + 1} 天历史来源不是有效 URL`);
+    const source = (entry.source ?? "").trim();
+    if (!source) {
+      throw new Error(`第 ${index + 1} 天历史背景缺少来源说明`);
     }
-    if (source.protocol !== "http:" && source.protocol !== "https:") {
-      throw new Error(`第 ${index + 1} 天历史来源协议不安全`);
+    // 允许「景区官方介绍」「地方志」这类说明性来源：强制 URL 会让模型干脆不写历史背景。
+    // 一旦写成链接，就必须是 http(s)。
+    if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(source)) {
+      let parsed: URL;
+      try {
+        parsed = new URL(source);
+      } catch {
+        throw new Error(`第 ${index + 1} 天历史来源不是有效 URL`);
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error(`第 ${index + 1} 天历史来源协议不安全`);
+      }
     }
   }
 

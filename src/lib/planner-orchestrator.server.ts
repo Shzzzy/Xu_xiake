@@ -331,11 +331,15 @@ async function obtainSkeleton(
   return { kind: "fallback", reason: "骨架尝试次数已用尽，已退回本地兜底行程" };
 }
 
-function buildDayCopyInstructionForDay(day: PlannerSkeletonDay): string {
+function buildDayCopyInstructionForDay(
+  day: PlannerSkeletonDay,
+  weather?: ButlerPlanInput["weather"][number],
+): string {
   return buildDayCopyInstruction({
     day: day.day,
     theme: day.theme,
     nodes: day.nodes.map((node) => ({ name: node.name, type: node.type })),
+    weather,
   });
 }
 
@@ -608,6 +612,7 @@ function buildSelectionInstruction(
       : "请完成景点选择。",
     "你是旅行管家，只能在候选列表内选择景点并给出游览顺序；不得修改交通、价格、人数或每日时间窗。",
     "每个非移动日必须至少选择一个候选景点；移动日可按剩余时间选择，也可以不选。",
+    "非移动日要在节奏上限内按可用时间排满景点：整天空闲时应安排到上限（例如适中节奏排到 3 个），不要把大半天留成休息；确实没有更多合适候选时才留白",
     "每天的景点必须位于当天所在地（transport[].location）：例如当天是「开封 → 沙湖 · 飞机」，只能选沙湖的候选，绝不能选开封的候选；当天所在地没有候选景点时，该天不安排景点",
     "同一天不得混排不同城市的景点",
     "同一个 candidateId 只能选择一次，不得在多个 day 重复安排同一景点；候选数量足够时优先使用尚未选择的候选。",
@@ -1259,7 +1264,7 @@ async function planWithButlerLegacy(
   for (const day of skeleton.days) {
     try {
       const content = await requestChatCompletion(
-        buildDayCopyInstructionForDay(day),
+        buildDayCopyInstructionForDay(day, input.weather[day.day - 1]),
         deps,
         apiKey,
         DAY_COPY_MAX_TOKENS,
@@ -1467,7 +1472,7 @@ export async function planWithButler(
             try {
               state.modelAttempts += 1;
               const content = await requestChatCompletion(
-                buildDayCopyInstructionForDay(day),
+                buildDayCopyInstructionForDay(day, input.weather[day.day - 1]),
                 deps,
                 apiKey,
                 DAY_COPY_MAX_TOKENS,

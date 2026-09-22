@@ -73,15 +73,26 @@ export function buildDayCopyInstruction(input: {
   day: number;
   theme: string;
   nodes: { name: string; type: string }[];
+  /** 当天天气：用于让注意事项贴合落地后的真实天气。 */
+  weather?: { tempMax?: number; tempMin?: number; precipProb?: number; windMax?: number };
 }): string {
   const nodeLines =
     input.nodes.length > 0
       ? input.nodes.map((node) => `- ${node.name}（${node.type}）`).join("\n")
       : "- 无";
 
+  const weather = input.weather;
+  const weatherLine =
+    weather && [weather.tempMin, weather.tempMax].some((value) => typeof value === "number")
+      ? `当日天气：${weather.tempMin ?? "-"}~${weather.tempMax ?? "-"}°C` +
+        (typeof weather.precipProb === "number" ? `，降水概率 ${weather.precipProb}%` : "") +
+        (typeof weather.windMax === "number" ? `，风速上限 ${weather.windMax}km/h` : "")
+      : "当日天气：未提供";
+
   return [
     `请为已冻结的第 ${input.day} 天排程撰写每日文案。`,
     `当日主题：${input.theme}`,
+    weatherLine,
     "仅依据给定节点写作，不得新增、删改或猜测行程事实：",
     nodeLines,
     "",
@@ -101,8 +112,11 @@ export function buildDayCopyInstruction(input: {
     "写作要求：",
     "1. 今日目的：用一段完整文字说明当天想达成的体验。",
     "2. 核心重点：写 3 到 5 条，每条使用「标题：说明」格式。",
-    "3. 注意事项：写 2 到 5 条，按重要性排序，优先说明安全、天气、拥堵和体力问题。",
-    "4. 历史背景：只写可核验内容，并必须在每条 history 的 source 中写明来源；给不出来源就不要写该条，不要编造。",
+    "3. 注意事项：写 2 到 5 条，按重要性排序。必须结合上面给出的当日天气与当天具体景点来写，" +
+      "例如高温要提醒防晒补水、有雨要提醒雨具与备选室内安排、户外景点要提醒排队与体力分配；不要写空泛的通用提醒。",
+    "4. 历史背景：为当天每一个景点类节点各写一条 history，title 用景点名称，" +
+      "background 用 2-4 句介绍该景点的由来、典故或文化价值，source 写出处类型（如「景区官方介绍」「地方志」）。" +
+      "无法确定的内容宁可不写，但不要因为拿不到网址就整条留空。",
     `5. day 必须为 ${input.day}。`,
   ].join("\n");
 }

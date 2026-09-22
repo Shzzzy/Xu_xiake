@@ -104,8 +104,11 @@ test("每日文案提示词只使用冻结的当日节点并要求来源", () =>
   assert.match(instruction, /注意事项/);
   assert.match(instruction, /历史背景/);
   assert.match(instruction, /仅依据给定节点/);
-  assert.match(instruction, /可核验来源/);
-  assert.match(instruction, /给不出来源/);
-  assert.match(instruction, /不要编造/);
+  assert.match(instruction, /来源/);
+  // 历史背景要求按景点逐条生成，且不再因为拿不到网址就整条留空。
+  assert.match(instruction, /不要因为拿不到网址就整条留空/);
+  // 注意事项必须结合当日天气与当天具体景点。
+  assert.match(instruction, /当日天气/);
+  assert.match(instruction, /防晒|雨具/);
   assert.match(instruction, /只输出严格 JSON/);
 });

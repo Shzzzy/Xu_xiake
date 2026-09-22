@@ -56,6 +56,9 @@ function toNode(segment: TimelineSegment, cursor: number): PlannerSkeletonNode {
   return node;
 }
 
+/** 休息与机动时间的上限：超出部分留白，避免把可用游玩时间全部算作休息。 */
+const MAX_REST_MINUTES = 90;
+
 export function buildDayTimeline(input: TimelineBuildInput): PlannerSkeletonNode[] {
   const start = parseClock(input.startTime);
   const end = parseClock(input.endTime);
@@ -161,19 +164,24 @@ export function buildDayTimeline(input: TimelineBuildInput): PlannerSkeletonNode
   }
 
   if (remaining > 0) {
+    // 剩余时间不能整段并进休息：曾出现「必要休息 5 小时」把整天玩废的排程。
+    // 休息/机动最多累计到 MAX_REST_MINUTES，其余时间留白，交给用户自行安排。
     const existingRest = restSegments.at(-1);
-    if (existingRest) {
-      existingRest.minutes += remaining;
+    const currentRest = existingRest?.minutes ?? 0;
+    const extra = Math.min(remaining, Math.max(0, MAX_REST_MINUTES - currentRest));
+    if (extra > 0 && existingRest) {
+      existingRest.minutes += extra;
       existingRest.stayMinutes = existingRest.minutes;
-    } else {
+      remaining -= extra;
+    } else if (extra > 0) {
       restSegments.push({
         type: "rest",
         name: "自由活动与休整",
-        minutes: remaining,
-        stayMinutes: remaining,
+        minutes: extra,
+        stayMinutes: extra,
       });
+      remaining -= extra;
     }
-    remaining = 0;
   }
 
   const hotelSegments: TimelineSegment[] = [];
