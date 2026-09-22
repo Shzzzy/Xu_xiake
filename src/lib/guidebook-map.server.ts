@@ -727,8 +727,9 @@ export function fitMapZoom(points: readonly AmapCoordinate[]): number {
       : Number.POSITIVE_INFINITY;
   const latitudeZoom =
     ySpan > 0 ? Math.log2(usableHeight / (256 * ySpan)) : Number.POSITIVE_INFINITY;
-  // 不再额外退一档：留白由 STATIC_MAP_PADDING_RATIO 提供，退档会让点位挤在地图中间。
-  const fitted = Math.floor(Math.min(longitudeZoom, latitudeZoom));
+  // 多留一档边距：高德静图的实际投影范围与按经纬度估算的存在偏差，
+  // 不留余量会出现"起点或终点落在画面外"的问题。
+  const fitted = Math.floor(Math.min(longitudeZoom, latitudeZoom)) - 1;
   const span = Math.max(longitudeSpan, ySpan * (180 / Math.PI));
   if (!Number.isFinite(fitted)) return 10;
   // 全国级长距离固定在较低缩放级别，确保北京、上海、大理等首末节点同时可见。

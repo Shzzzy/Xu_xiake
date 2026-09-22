@@ -337,7 +337,8 @@ async function fetchGuidebookImageDataUrl(
  * 需要地图或二维码的页各自等自己的那一张。
  */
 const GUIDEBOOK_IMAGE_CACHE_TTL_MS = 120_000;
-const GUIDEBOOK_IMAGE_CONCURRENCY = 4;
+// 高德静图有 QPS 限制，并发过高会让部分每日地图降级成示意图。
+const GUIDEBOOK_IMAGE_CONCURRENCY = 2;
 
 type GuidebookImageCacheEntry = {
   expiresAt: number;
@@ -384,7 +385,9 @@ export async function prepareGuidebookImage(
   const promise = withGuidebookImageSlot(async () => {
     const first = await fetchGuidebookImageDataUrl(value, kind, options);
     if (first || options.signal?.aborted) return first;
-    // 高德静图偶发失败：再取一次，降低瞬时抖动与限流造成的占位图。
+    // 高德静图偶发失败（含 QPS 限流）：稍等再取一次，避免当天退化成示意图。
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    if (options.signal?.aborted) return null;
     return fetchGuidebookImageDataUrl(value, kind, options);
   })
     .then((dataUrl) => {
