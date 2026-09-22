@@ -71,13 +71,11 @@ function estimateFlightMinutes(distanceKm: number): number {
   return Math.max(300, Math.ceil(180 + Math.max(0, distanceKm) / 12));
 }
 
-function isLongWanderDrive(route: RoutePlan, planLeg: TransportPlanLeg): boolean {
+function isLongTravelLeg(route: RoutePlan, planLeg: TransportPlanLeg): boolean {
   const routeLeg = routeLegById(route, planLeg.id);
   return (
-    routeLeg?.transport === "drive" &&
-    routeLeg.style === "wander" &&
-    planLeg.mode === "drive" &&
-    planLeg.distanceKm >= LONG_WANDER_DRIVE_KM
+    planLeg.distanceKm >= LONG_WANDER_DRIVE_KM &&
+    (routeLeg?.transport === "drive" || routeLeg?.style === "wander" || planLeg.mode === "drive")
   );
 }
 
@@ -133,7 +131,7 @@ export function evaluateTripFeasibility(
   input: TripFeasibilityPlanningInput,
 ): TripFeasibilityDecision | null {
   const longDriveLegIds = input.transportLegs
-    .filter((leg) => isLongWanderDrive(input.route, leg))
+    .filter((leg) => isLongTravelLeg(input.route, leg))
     .map((leg) => leg.id);
   if (longDriveLegIds.length === 0) return null;
 
@@ -225,7 +223,7 @@ export function applyTripFeasibilityChoice<T extends TripFeasibilityPlanningInpu
 ): T {
   if (choice.strategy === "direct") {
     const legIds = new Set(
-      input.transportLegs.filter((leg) => isLongWanderDrive(input.route, leg)).map((leg) => leg.id),
+      input.transportLegs.filter((leg) => isLongTravelLeg(input.route, leg)).map((leg) => leg.id),
     );
     return { ...input, route: buildDirectRoute(input, legIds) } as T;
   }
@@ -251,6 +249,7 @@ export function applyTripFeasibilityChoice<T extends TripFeasibilityPlanningInpu
     ...input,
     destination,
     route: buildFocusRoute(input, target),
+    transportLegs: [],
     transport: "flight" as const,
     seedPlaces: [],
   };

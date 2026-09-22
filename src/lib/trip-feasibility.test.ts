@@ -98,6 +98,15 @@ test("5 天 2000 公里以上沿途自驾会返回三方案而不是硬排", () 
   assert.ok(decision.summary.shortageMinutes > 0);
 });
 
+test("长距离边走边玩即使未显式写成自驾也要先做可行性决策", () => {
+  const input = longDriveInput();
+  input.route.legs[1] = { ...input.route.legs[1]!, transport: "balanced", style: "wander" };
+
+  const decision = evaluateTripFeasibility(input);
+
+  assert.ok(decision);
+  assert.deepEqual(decision.longDriveLegIds, ["outbound:1"]);
+});
 test("方案 A 只把长距离自驾腿改为直飞直达", () => {
   const adjusted = applyTripFeasibilityChoice(longDriveInput(), { strategy: "direct" });
   const changed = adjusted.route.legs.find((leg) => leg.id === "outbound:1");
