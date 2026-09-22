@@ -593,7 +593,10 @@ export async function runLivePlannerWith(
   ]);
   if (transportPlan.status !== "ready") {
     // 交通阶段未通过时 fail closed，绝不让伪造的 0km 计划进入下游。
-    throw new Error("交通规划不可用：" + transportPlan.reason);
+    const message = transportPlan.reason.startsWith("高德搜索不到")
+      ? transportPlan.reason
+      : "交通规划不可用：" + transportPlan.reason;
+    throw new Error(message);
   }
   const candidates = plannerContext.mergePlannerCandidates({
     primary: amapCandidates,

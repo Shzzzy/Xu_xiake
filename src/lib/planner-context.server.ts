@@ -916,7 +916,7 @@ export async function prepareRouteTransportPlan(
   if (missingNodes.length > 0) {
     return createDegradedTransportPlan(
       input.route,
-      "高德地理编码失败：无法定位 " + missingNodes.join("、"),
+      "高德搜索不到旅行地点「" + missingNodes.join("、") + "」。请返回更换旅行地点，或改用附近城市名称。",
     );
   }
 
