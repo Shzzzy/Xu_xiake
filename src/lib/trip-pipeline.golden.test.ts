@@ -5,10 +5,18 @@ import type { LiveItineraryInput } from "./live-planner.functions.ts";
 import { runLivePlannerWith } from "./live-planner.functions.ts";
 import { planWithButler, type ButlerPlanInput } from "./planner-orchestrator.server.ts";
 import type { PlanningStage } from "./planning-run.ts";
-import type { TransportPlanLeg } from "./transport-planner.server.ts";
+import {
+  splitTransportLegIntoSegments,
+  type TransportPlanLeg,
+} from "./transport-planner.server.ts";
 import { destinations } from "../data/planner-destinations.ts";
 import { buildTripPlanFromSkeleton } from "./plan-output-adapter.ts";
 import { renderGuidebookHtml } from "./guidebook-html.server.ts";
+import {
+  applyTripFeasibilityChoice,
+  resolveDailyDriveLimitMinutes,
+  type TripFeasibilityPlanningInput,
+} from "./trip-feasibility.ts";
 
 const sichuanPois: AmapPoi[] = [
   {
@@ -559,7 +567,6 @@ test("Golden：同日多条交通 leg 都进入时间轴与预算引用", async 
     plan.days.reduce((total, day) => total + day.estimatedCost, 0),
     plan.budget.estimatedTotal,
   );
-
 });
 test("Golden：短窗口非移动日可降级休整且不阻断整单", async () => {
   const input = buildShortWindowButlerInput();
@@ -568,7 +575,13 @@ test("Golden：短窗口非移动日可降级休整且不阻断整单", async ()
     if (content.includes("景点选择")) {
       return responseWithJson({
         selections: [
-          { day: 1, candidateId: "sc-kuanzhai", sequence: 1, stayMinutes: 150, reason: "测试物理容量不足" },
+          {
+            day: 1,
+            candidateId: "sc-kuanzhai",
+            sequence: 1,
+            stayMinutes: 150,
+            reason: "测试物理容量不足",
+          },
         ],
       });
     }
@@ -595,7 +608,10 @@ test("Golden：短窗口非移动日可降级休整且不阻断整单", async ()
   if (result.status !== "ok") return;
   const onlyDay = result.skeleton.days[0];
   assert.ok(onlyDay);
-  assert.equal(onlyDay.nodes.some((node) => node.type === "attraction"), false);
+  assert.equal(
+    onlyDay.nodes.some((node) => node.type === "attraction"),
+    false,
+  );
   assert.ok(onlyDay.nodes.some((node) => node.type === "rest"));
   assert.equal(onlyDay.theme.includes("宽窄巷子"), false);
 
@@ -675,7 +691,13 @@ test("Golden：260 分钟窗口可完整安排 150 分钟已选景点", async ()
       apiKey: "k",
       fetchImpl: buildSimpleButlerFetch({
         selections: [
-          { day: 1, candidateId: "sc-kuanzhai", sequence: 1, stayMinutes: 150, reason: "核心景点优先" },
+          {
+            day: 1,
+            candidateId: "sc-kuanzhai",
+            sequence: 1,
+            stayMinutes: 150,
+            reason: "核心景点优先",
+          },
         ],
       }),
     },
@@ -683,7 +705,11 @@ test("Golden：260 分钟窗口可完整安排 150 分钟已选景点", async ()
 
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
-  assert.ok(result.skeleton.days[0]?.nodes.some((node) => node.type === "attraction" && node.stayMinutes === 150));
+  assert.ok(
+    result.skeleton.days[0]?.nodes.some(
+      (node) => node.type === "attraction" && node.stayMinutes === 150,
+    ),
+  );
 });
 
 test("Golden：交通时长超出窗口时 timeline fail closed 且不输出节点", async () => {
@@ -708,7 +734,14 @@ test("Golden：交通时长超出窗口时 timeline fail closed 且不输出节�
         roundTrip: false,
         returnMode: null,
         legs: [
-          { id: "overflow", from: "北京", to: "成都", transport: "flight", style: "direct", kind: "outbound" },
+          {
+            id: "overflow",
+            from: "北京",
+            to: "成都",
+            transport: "flight",
+            style: "direct",
+            kind: "outbound",
+          },
         ],
       },
       weather: [{ date: "2026-10-01", code: 1, tempMax: 24, tempMin: 14 }],
@@ -726,7 +759,16 @@ test("Golden：交通时长超出窗口时 timeline fail closed 且不输出节�
         },
       ],
       transportLegs: [
-        { id: "overflow", kind: "outbound", from: "北京", to: "成都", distanceKm: 1800, mode: "flight", doorToDoorMinutes: 260, minimumPerPersonCost: 1000 },
+        {
+          id: "overflow",
+          kind: "outbound",
+          from: "北京",
+          to: "成都",
+          distanceKm: 1800,
+          mode: "flight",
+          doorToDoorMinutes: 260,
+          minimumPerPersonCost: 1000,
+        },
       ],
     },
     { apiKey: "k", fetchImpl: buildSimpleButlerFetch([]) },
@@ -737,6 +779,261 @@ test("Golden：交通时长超出窗口时 timeline fail closed 且不输出节�
   assert.equal(result.stage, "timeline");
   assert.match(result.reason, /交通时长超出每日时间窗/);
 });
+function buildLongDriveButlerInput(): {
+  input: ButlerPlanInput;
+  limit: number;
+  driveLeg: TransportPlanLeg;
+} {
+  const driveLeg: TransportPlanLeg = {
+    id: "outbound:1",
+    kind: "outbound",
+    from: "上海",
+    to: "大理洱海",
+    distanceKm: 2651.7,
+    mode: "drive",
+    doorToDoorMinutes: 1906,
+    minimumPerPersonCost: 1061,
+  };
+  const route = {
+    origin: "北京",
+    destination: "大理洱海",
+    waypoints: ["上海"],
+    roundTrip: true,
+    returnMode: "fast" as const,
+    legs: [
+      {
+        id: "outbound:0",
+        from: "北京",
+        to: "上海",
+        transport: "flight" as const,
+        style: "direct" as const,
+        kind: "outbound" as const,
+      },
+      {
+        id: "outbound:1",
+        from: "上海",
+        to: "大理洱海",
+        transport: "drive" as const,
+        style: "wander" as const,
+        kind: "outbound" as const,
+      },
+      {
+        id: "return",
+        from: "大理洱海",
+        to: "北京",
+        transport: "flight" as const,
+        style: "direct" as const,
+        kind: "return" as const,
+      },
+    ],
+  };
+  const transportLegs: TransportPlanLeg[] = [
+    {
+      id: "outbound:0",
+      kind: "outbound",
+      from: "北京",
+      to: "上海",
+      distanceKm: 1067.3,
+      mode: "flight",
+      doorToDoorMinutes: 300,
+      minimumPerPersonCost: 588,
+    },
+    driveLeg,
+    {
+      id: "return",
+      kind: "return",
+      from: "大理洱海",
+      to: "北京",
+      distanceKm: 2182,
+      mode: "flight",
+      doorToDoorMinutes: 360,
+      minimumPerPersonCost: 1201,
+    },
+  ];
+  const feasibilityInput: TripFeasibilityPlanningInput & {
+    startDate: string;
+    pace: "balanced";
+    totalBudget: number;
+    travelers: { adults: number; children: number };
+    interests: string[];
+    transport: "drive";
+    style: "wander";
+    weather: [];
+  } = {
+    origin: "北京",
+    destination: { id: "dali", name: "大理洱海", region: "云南 · 大理" },
+    days: 5,
+    dailyHours: 6,
+    startTime: "08:00",
+    endTime: "20:00",
+    route,
+    transportLegs,
+    startDate: "2026-10-01",
+    pace: "balanced",
+    totalBudget: 50000,
+    travelers: { adults: 3, children: 0 },
+    interests: ["自然山水"],
+    transport: "drive",
+    style: "wander",
+    weather: [],
+  };
+  const days = applyTripFeasibilityChoice(feasibilityInput, { strategy: "extend" }).days;
+  const limit = resolveDailyDriveLimitMinutes(feasibilityInput.dailyHours);
+  const segmentedDrive = {
+    ...driveLeg,
+    executionSegments: splitTransportLegIntoSegments(driveLeg, limit),
+  };
+  return {
+    limit,
+    driveLeg,
+    input: {
+      origin: feasibilityInput.origin,
+      destination: feasibilityInput.destination.name,
+      region: feasibilityInput.destination.region,
+      startDate: feasibilityInput.startDate,
+      days,
+      startTime: feasibilityInput.startTime,
+      endTime: feasibilityInput.endTime,
+      pace: feasibilityInput.pace,
+      totalBudget: feasibilityInput.totalBudget,
+      travelers: feasibilityInput.travelers,
+      interests: feasibilityInput.interests,
+      transport: feasibilityInput.transport,
+      style: feasibilityInput.style,
+      route,
+      weather: Array.from({ length: days }, (_, index) => ({
+        date: `2026-10-${String(index + 1).padStart(2, "0")}`,
+        code: 1,
+        tempMax: 24,
+        tempMin: 14,
+      })),
+      candidates: [
+        {
+          id: "dali-old-town",
+          name: "大理古城",
+          summary: "大理代表性古城",
+          source: "https://www.amap.com/place/dali-old-town",
+          address: "云南省大理白族自治州大理市",
+          type: "风景名胜",
+          location: [100.164, 25.695],
+          publicUrl: "https://www.amap.com/place/dali-old-town",
+          areaKey: "大理市",
+        },
+      ],
+      transportLegs: [transportLegs[0]!, segmentedDrive, transportLegs[2]!],
+    },
+  };
+}
 
+function dynamicSelectionFetch(): typeof fetch {
+  return (async (_input, init) => {
+    const content = requestText(init);
+    if (content.includes("景点选择")) {
+      const marker = '"task": "景点选择"';
+      const markerIndex = content.indexOf(marker);
+      const start = markerIndex >= 0 ? content.lastIndexOf("{", markerIndex) : -1;
+      const end = content.lastIndexOf("}");
+      const payload = JSON.parse(content.slice(start, end + 1)) as {
+        nonMovementDays?: number[];
+      };
+      return responseWithJson({
+        selections: (payload.nonMovementDays ?? []).map((day) => ({
+          day,
+          candidateId: "dali-old-town",
+          sequence: 1,
+          stayMinutes: 120,
+          reason: "只在驾驶日之外安排景点",
+        })),
+      });
+    }
+    if (content.includes("每日文案")) {
+      const day = Number(/(\d+) 天/.exec(content)?.[1] ?? 1);
+      return responseWithJson({
+        day,
+        purpose: `第 ${day} 天按已冻结时间轴执行。`,
+        highlights: ["分段驾驶：按每日上限推进", "沿途休息：保留体力", "机动停留：按现场调整"],
+        cautions: ["关注驾驶安全", "按天气调整"],
+        history: [],
+      });
+    }
+    if (content.includes("生成旅行回望与结束语")) {
+      return responseWithJson({ quoteId: null, message: "这是一段值得回味的旅程。" });
+    }
+    throw new Error(`未知请求：${content.slice(0, 80)}`);
+  }) as typeof fetch;
+}
 
+test("Golden：方案 B 的超长自驾跨天执行且总时长与交通成本守恒", async () => {
+  const { input, limit, driveLeg } = buildLongDriveButlerInput();
+  const result = await planWithButler(input, {
+    apiKey: "k",
+    fetchImpl: dynamicSelectionFetch(),
+  });
 
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+
+  const driveDays = result.skeleton.days
+    .filter((day) => day.nodes.some((node) => node.transportMode === "drive"))
+    .map((day) => day.day);
+  assert.ok(driveDays.length >= 3);
+  assert.deepEqual(
+    driveDays,
+    Array.from({ length: driveDays.length }, (_, index) => driveDays[0]! + index),
+  );
+
+  for (const day of result.skeleton.days.filter((item) => driveDays.includes(item.day))) {
+    const driveMinutes = day.nodes
+      .filter((node) => node.transportMode === "drive")
+      .reduce((total, node) => total + (node.transportMinutes ?? 0), 0);
+    assert.ok(driveMinutes <= limit);
+    assert.equal(
+      day.nodes.some((node) => node.type === "attraction"),
+      false,
+    );
+  }
+
+  const totalDriveMinutes = result.skeleton.days
+    .flatMap((day) => day.nodes)
+    .filter((node) => node.transportMode === "drive")
+    .reduce((total, node) => total + (node.transportMinutes ?? 0), 0);
+  assert.equal(totalDriveMinutes, driveLeg.doorToDoorMinutes);
+  assert.equal(result.transportLegs.length, 3);
+  assert.equal(
+    result.budget.transport,
+    result.transportLegs.reduce((total, leg) => total + leg.minimumPerPersonCost * 3, 0),
+  );
+
+  const plan = buildTripPlanFromSkeleton({
+    skeleton: result.skeleton,
+    dayCopy: result.dayCopy,
+    candidates: result.candidates,
+    failedDays: result.failedDays,
+    budgetPlan: result.budget,
+    transportLegs: result.transportLegs,
+    violations: result.violations,
+    origin: input.origin,
+    destination: {
+      ...(destinations.find((item) => item.id === "huangshan") ?? destinations[0]!),
+      id: "dali",
+      name: "大理洱海",
+      region: "云南 · 大理",
+    },
+    startDate: input.startDate,
+    travelers: input.travelers,
+    totalBudget: input.totalBudget,
+    pace: input.pace,
+    interests: input.interests,
+    roundTrip: input.route.roundTrip,
+    returnMode: input.route.returnMode ?? "fast",
+    routePlan: input.route,
+    weather: input.weather,
+    closing: result.closing,
+    transportPreference: "balanced",
+  });
+  const transportNodeCost = plan.days
+    .flatMap((day) => day.nodes)
+    .filter((node) => node.type === "transport")
+    .reduce((total, node) => total + node.estimatedCost, 0);
+  assert.equal(transportNodeCost, plan.budget.transport.amount);
+});

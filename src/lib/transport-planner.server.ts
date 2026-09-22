@@ -1,3 +1,18 @@
+import { resolveDailyDriveLimitMinutes } from "./trip-feasibility.ts";
+
+export type TransportPlanSegment = {
+  id: string;
+  legId: string;
+  order: number;
+  totalSegments: number;
+  from: string;
+  to: string;
+  distanceKm: number;
+  mode: "drive";
+  doorToDoorMinutes: number;
+  dailyLimitMinutes: number;
+};
+
 export type TransportPlanLeg = {
   id: string;
   kind: "outbound" | "return";
@@ -7,6 +22,8 @@ export type TransportPlanLeg = {
   mode: "flight" | "train" | "drive" | "bus" | "ship";
   doorToDoorMinutes: number;
   minimumPerPersonCost: number;
+  /** 超长自驾按每日驾驶上限生成的连续执行分段；预算仍只读取原始 leg。 */
+  executionSegments?: TransportPlanSegment[];
 };
 
 export type TransportPlanMode = TransportPlanLeg["mode"];
@@ -51,16 +68,10 @@ export function chooseLongDistanceMode(input: {
   crossProvince: boolean;
   distanceKm: number;
 }): TransportPlanLeg["mode"] {
-  if (
-    isExplicitTransportMode(input.explicit) &&
-    !GENERIC_TRANSPORT_MODES.has(input.explicit)
-  ) {
+  if (isExplicitTransportMode(input.explicit) && !GENERIC_TRANSPORT_MODES.has(input.explicit)) {
     return input.explicit;
   }
-  if (
-    input.crossProvince &&
-    normalizeDistance(input.distanceKm) >= LONG_DISTANCE_FLIGHT_KM
-  ) {
+  if (input.crossProvince && normalizeDistance(input.distanceKm) >= LONG_DISTANCE_FLIGHT_KM) {
     return "flight";
   }
   return "train";
@@ -121,4 +132,39 @@ export function calculateTransportLeg(
     doorToDoorMinutes: calculateDoorToDoorMinutes(input),
     minimumPerPersonCost: calculateMinimumPerPersonCost(input),
   };
+}
+export function splitTransportLegIntoSegments(
+  leg: TransportPlanLeg,
+  dailyLimitMinutes = resolveDailyDriveLimitMinutes(6),
+): TransportPlanSegment[] {
+  const safeLimit = Math.max(60, Math.round(dailyLimitMinutes));
+  const totalMinutes = Math.max(1, Math.round(leg.doorToDoorMinutes));
+  const totalSegments = Math.max(1, leg.mode === "drive" ? Math.ceil(totalMinutes / safeLimit) : 1);
+  const baseMinutes = Math.floor(totalMinutes / totalSegments);
+  const minuteRemainder = totalMinutes - baseMinutes * totalSegments;
+  const minutes = Array.from({ length: totalSegments }, (_, index) =>
+    index < minuteRemainder ? baseMinutes + 1 : baseMinutes,
+  );
+
+  let allocatedDistance = 0;
+  return minutes.map((doorToDoorMinutes, index) => {
+    const order = index + 1;
+    const isLast = order === totalSegments;
+    const distanceKm = isLast
+      ? Math.max(0, Math.round((leg.distanceKm - allocatedDistance) * 10) / 10)
+      : Math.round(((leg.distanceKm * doorToDoorMinutes) / totalMinutes) * 10) / 10;
+    allocatedDistance += distanceKm;
+    return {
+      id: `${leg.id}:segment:${order}`,
+      legId: leg.id,
+      order,
+      totalSegments,
+      from: leg.from,
+      to: leg.to,
+      distanceKm,
+      mode: "drive" as const,
+      doorToDoorMinutes,
+      dailyLimitMinutes: safeLimit,
+    };
+  });
 }

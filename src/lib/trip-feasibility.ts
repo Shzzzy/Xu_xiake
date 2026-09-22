@@ -4,6 +4,7 @@ import type { TransportPlanLeg } from "./transport-planner.server.ts";
 const LONG_WANDER_DRIVE_KM = 800;
 const STOP_EXPLORATION_MINUTES = 240;
 const MAX_TRIP_DAYS = 16;
+const MAX_DAILY_DRIVE_MINUTES = 330;
 
 export type TripFeasibilityDestination = {
   id: string;
@@ -29,7 +30,12 @@ export type TripFeasibilityChoice =
 export type TripFeasibilityOption = {
   strategy:
     | { type: "direct"; legIds: string[] }
-    | { type: "extend"; recommendedDays: number }
+    | {
+        type: "extend";
+        recommendedDays: number;
+        driveSegmentDays: number;
+        dailyDriveLimitMinutes: number;
+      }
     | { type: "focus"; targets: string[] };
   eyebrow: string;
   title: string;
@@ -50,6 +56,10 @@ export type TripFeasibilityDecision = {
     stopMinutes: number;
     requiredMinutes: number;
     shortageMinutes: number;
+    transportDays: number;
+    stopDays: number;
+    driveSegmentDays: number;
+    dailyDriveLimitMinutes: number;
   };
   longDriveLegIds: string[];
   options: TripFeasibilityOption[];
@@ -61,6 +71,25 @@ function clampDays(days: number): number {
 
 function dailyMinutes(input: Pick<TripFeasibilityPlanningInput, "dailyHours">): number {
   return Math.max(60, Math.round(input.dailyHours * 60));
+}
+
+function clockMinutes(value: string | undefined): number | null {
+  const matched = value ? /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value) : null;
+  if (!matched) return null;
+  return Number(matched[1]) * 60 + Number(matched[2]);
+}
+
+export function resolveDailyDriveLimitMinutes(
+  dailyHours: number,
+  startTime?: string,
+  endTime?: string,
+): number {
+  // 每天为住宿、用餐和机动留出至少 30 分钟，同时驾驶上限不超过 5.5 小时。
+  const start = clockMinutes(startTime);
+  const end = clockMinutes(endTime);
+  const windowMinutes = start !== null && end !== null && end > start ? end - start : Infinity;
+  const usable = Math.min(Math.max(60, Math.round(dailyHours * 60) - 30), windowMinutes - 30);
+  return Math.max(60, Math.min(MAX_DAILY_DRIVE_MINUTES, usable));
 }
 
 function routeLegById(route: RoutePlan, id: string): RouteLeg | undefined {
@@ -159,9 +188,23 @@ export function evaluateTripFeasibility(
   );
   const savedMinutes = Math.max(0, driveMinutes - directMinutes);
   const directLegLabels = longDriveLegs.map((leg) => `「${leg.from} → ${leg.to}」`);
+  const dailyDriveLimitMinutes = resolveDailyDriveLimitMinutes(
+    input.dailyHours,
+    input.startTime,
+    input.endTime,
+  );
+  const driveSegmentDays = longDriveLegs.reduce(
+    (total, leg) => total + Math.max(1, Math.ceil(leg.doorToDoorMinutes / dailyDriveLimitMinutes)),
+    0,
+  );
+  const transportDays = input.transportLegs.reduce((total, leg) => {
+    if (!longDriveLegIds.includes(leg.id)) return total + 1;
+    return total + Math.max(1, Math.ceil(leg.doorToDoorMinutes / dailyDriveLimitMinutes));
+  }, 0);
+  const stopDays = Math.max(1, Math.ceil(stopMinutes / dailyMinutes(input)));
   const recommendedDays = Math.min(
     MAX_TRIP_DAYS,
-    Math.max(clampDays(input.days) + 1, Math.ceil(requiredMinutes / dailyMinutes(input))),
+    Math.max(clampDays(input.days) + 1, transportDays + stopDays),
   );
   const focusTargets = buildFocusTargets(input);
   const routeLabel = focusTargets.join("、") || input.route.destination;
@@ -181,6 +224,10 @@ export function evaluateTripFeasibility(
       stopMinutes,
       requiredMinutes,
       shortageMinutes,
+      transportDays,
+      stopDays,
+      driveSegmentDays,
+      dailyDriveLimitMinutes,
     },
     longDriveLegIds,
     options: [
@@ -194,13 +241,22 @@ export function evaluateTripFeasibility(
         recommended: true,
       },
       {
-        strategy: { type: "extend", recommendedDays },
+        strategy: {
+          type: "extend",
+          recommendedDays,
+          driveSegmentDays,
+          dailyDriveLimitMinutes,
+        },
         eyebrow: "B / 保留自驾",
         title: "延长自驾",
         summary: `保留 ${driveLabel} 的自驾与沿途景点，把行程延长到约 ${recommendedDays} 天。`,
         detail:
           "交通方式与沿途边玩边停不变，新增天数用于分摊驾驶、休息、用餐和景点停留，避免赶路。",
-        metrics: [`建议 ${recommendedDays} 天`, "保留自驾与沿途景点"],
+        metrics: [
+          `建议 ${recommendedDays} 天`,
+          `长途拆为 ${driveSegmentDays} 个驾驶日`,
+          `每日驾驶 ≤ ${dailyDriveLimitMinutes} 分钟`,
+        ],
         recommended: false,
       },
       {

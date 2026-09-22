@@ -23,7 +23,11 @@ import type { TransportPlanLeg } from "./transport-planner.server.ts";
 import type { PlannerSkeleton } from "./planner-skeleton.ts";
 import type { PlannerDayCopy } from "./planner-day-copy.ts";
 import type { PlanViolation } from "./plan-validator.ts";
-import { evaluateTripFeasibility, type TripFeasibilityDecision } from "./trip-feasibility.ts";
+import {
+  evaluateTripFeasibility,
+  resolveDailyDriveLimitMinutes,
+  type TripFeasibilityDecision,
+} from "./trip-feasibility.ts";
 
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
@@ -596,6 +600,11 @@ export async function runLivePlannerWith(
       tavilyKey: tavilyKey ?? "",
       tavilyEndpoint: tavilyUrl,
       fetchImpl,
+      dailyDriveLimitMinutes: resolveDailyDriveLimitMinutes(
+        input.dailyHours,
+        input.startTime,
+        input.endTime,
+      ),
     }),
   ]);
   if (transportPlan.status !== "ready") {

@@ -373,10 +373,18 @@ const TRANSPORT_LABELS: Record<TransportPlanLeg["mode"], string> = {
   ship: "轮渡",
 };
 
+type ScheduledTransportLeg = TransportPlanLeg & {
+  executionId: string;
+  sourceLegId: string;
+  segmentOrder: number;
+  segmentCount: number;
+  billed: boolean;
+  dailyLimitMinutes?: number;
+};
 type DeterministicState = {
   candidates: PlannerDestinationCandidate[];
   transportLegs: TransportPlanLeg[];
-  transportByDay: Map<number, TransportPlanLeg[]>;
+  transportByDay: Map<number, ScheduledTransportLeg[]>;
   selection: AttractionSelection[];
   skeleton: PlannerSkeleton | null;
   budget: BudgetPlan | null;
@@ -402,22 +410,108 @@ function mapTransportLegsToDays(
   route: RoutePlan,
   days: number,
   transportLegs: TransportPlanLeg[],
-): Map<number, TransportPlanLeg[]> {
-  const result = new Map<number, TransportPlanLeg[]>();
-  const routeLegs = route.legs;
-  const outbound = routeLegs.filter((leg) => leg.kind === "outbound");
-  const returning = routeLegs.filter((leg) => leg.kind === "return");
-  const add = (day: number, leg: RoutePlan["legs"][number]) => {
-    const planLeg = transportLegs.find((candidate) => candidate.id === leg.id);
-    if (!planLeg) return;
+): Map<number, ScheduledTransportLeg[]> {
+  const result = new Map<number, ScheduledTransportLeg[]>();
+  const planById = new Map(transportLegs.map((leg) => [leg.id, leg]));
+  const outbound = route.legs.filter((leg) => leg.kind === "outbound");
+  const returning = route.legs.filter((leg) => leg.kind === "return");
+
+  const toExecutions = (planLeg: TransportPlanLeg): ScheduledTransportLeg[] => {
+    const segments = planLeg.executionSegments;
+    if (!segments || segments.length === 0) {
+      return [
+        {
+          ...planLeg,
+          executionId: planLeg.id,
+          sourceLegId: planLeg.id,
+          segmentOrder: 1,
+          segmentCount: 1,
+          billed: true,
+        },
+      ];
+    }
+    return segments.map((segment) => ({
+      ...planLeg,
+      id: segment.id,
+      distanceKm: segment.distanceKm,
+      doorToDoorMinutes: segment.doorToDoorMinutes,
+      executionId: segment.id,
+      sourceLegId: planLeg.id,
+      segmentOrder: segment.order,
+      segmentCount: segment.totalSegments,
+      billed: segment.order === 1,
+      dailyLimitMinutes: segment.dailyLimitMinutes,
+      executionSegments: undefined,
+    }));
+  };
+
+  const buildExecutions = (routeLegs: RoutePlan["legs"]) =>
+    routeLegs.map((routeLeg) => {
+      const planLeg = planById.get(routeLeg.id);
+      if (!planLeg) return { routeLeg, executions: [] as ScheduledTransportLeg[] };
+      const executions = toExecutions(planLeg);
+      const actualMinutes = executions.reduce((total, leg) => total + leg.doorToDoorMinutes, 0);
+      if (actualMinutes !== planLeg.doorToDoorMinutes) {
+        throw new Error(`交通 leg ${routeLeg.id} 分段时长不守恒`);
+      }
+      const actualDistance = executions.reduce((total, leg) => total + leg.distanceKm, 0);
+      if (Math.abs(actualDistance - planLeg.distanceKm) > 0.2) {
+        throw new Error(`交通 leg ${routeLeg.id} 分段距离不守恒`);
+      }
+      return { routeLeg, executions };
+    });
+
+  const outboundExecutions = buildExecutions(outbound);
+  const returnExecutions = buildExecutions(returning);
+  const totalOutboundExecutions = outboundExecutions.reduce(
+    (total, item) => total + item.executions.length,
+    0,
+  );
+  const totalReturnExecutions = returnExecutions.reduce(
+    (total, item) => total + item.executions.length,
+    0,
+  );
+  const hasMultiDayExecution = [...outboundExecutions, ...returnExecutions].some(
+    (item) => item.executions.length > 1,
+  );
+  if (totalOutboundExecutions + totalReturnExecutions > days && hasMultiDayExecution) {
+    throw new Error(
+      `延长后的 ${days} 天不足以容纳 ${totalOutboundExecutions + totalReturnExecutions} 个交通执行段，无法完成跨天自驾`,
+    );
+  }
+
+  const add = (day: number, leg: ScheduledTransportLeg) => {
     const bucket = result.get(day) ?? [];
-    bucket.push(planLeg);
+    bucket.push(leg);
     result.set(day, bucket);
   };
 
-  // 去程按路线顺序从第 1 天开始；返程固定落在最后一天，避免回程被排到中段。
-  outbound.forEach((leg, index) => add(Math.min(days, index + 1), leg));
-  returning.forEach((leg, index) => add(Math.max(1, days - returning.length + index + 1), leg));
+  if (totalOutboundExecutions + totalReturnExecutions <= days) {
+    let cursor = 1;
+    for (const item of outboundExecutions) {
+      for (const execution of item.executions) {
+        add(cursor, execution);
+        cursor += 1;
+      }
+    }
+    cursor = Math.max(1, days - totalReturnExecutions + 1);
+    for (const item of returnExecutions) {
+      for (const execution of item.executions) {
+        add(cursor, execution);
+        cursor += 1;
+      }
+    }
+  } else {
+    // 只有“每条 route leg 恰好一天”的普通交通才允许压进同一天；
+    // 超长自驾已经在上方拒绝不足天数，绝不会把多段重新塞回一天。
+    const availableOutboundDays = Math.max(1, days - returning.length);
+    outboundExecutions.forEach((item, index) => {
+      add(Math.min(availableOutboundDays, index + 1), item.executions[0]!);
+    });
+    returnExecutions.forEach((item, index) => {
+      add(Math.max(1, days - returning.length + index + 1), item.executions[0]!);
+    });
+  }
   return result;
 }
 
@@ -427,7 +521,7 @@ function mapTransportLegsToDays(
  */
 function validateTransportPlan(input: ButlerPlanInput): TransportPlanLeg[] {
   if (input.transportLegs.length === 0) {
-  if (input.route.legs.length === 0 && input.transportLegs.length === 0) return [];
+    if (input.route.legs.length === 0 && input.transportLegs.length === 0) return [];
     throw new Error("缺少确定性交通计划，禁止进入时间轴与预算");
   }
   if (input.transportLegs.length !== input.route.legs.length) {
@@ -453,7 +547,7 @@ function validateTransportPlan(input: ButlerPlanInput): TransportPlanLeg[] {
 
 function buildSelectionInstruction(
   input: ButlerPlanInput,
-  transportByDay: Map<number, TransportPlanLeg[]>,
+  transportByDay: Map<number, ScheduledTransportLeg[]>,
   repairReason?: string | null,
 ): string {
   const nonMovementDays = Array.from({ length: input.days }, (_, index) => index + 1).filter(
@@ -510,7 +604,7 @@ function formatClockMinutes(totalMinutes: number): string {
 
 function attractionCapacityMinutes(
   input: ButlerPlanInput,
-  transportByDay: Map<number, TransportPlanLeg[]>,
+  transportByDay: Map<number, ScheduledTransportLeg[]>,
   day: number,
 ): number {
   const start = parseClockMinutes(input.startTime);
@@ -526,7 +620,10 @@ function attractionCapacityMinutes(
   return Math.max(0, windowMinutes - hotelMinutes - transportUsed);
 }
 
-function allocateTransportMinutes(availableMinutes: number, legs: TransportPlanLeg[]): number[] {
+function allocateTransportMinutes(
+  availableMinutes: number,
+  legs: ScheduledTransportLeg[],
+): number[] {
   if (legs.length === 0) return [];
   const available = Math.max(legs.length, Math.round(availableMinutes));
   const requested = legs.map((leg) => Math.max(1, Math.round(leg.doorToDoorMinutes)));
@@ -549,7 +646,7 @@ function allocateTransportMinutes(availableMinutes: number, legs: TransportPlanL
 
 function expandTransportNodes(
   nodes: PlannerSkeletonNode[],
-  legs: TransportPlanLeg[],
+  legs: ScheduledTransportLeg[],
 ): PlannerSkeletonNode[] {
   if (legs.length === 0) return nodes;
   const fixedNodes = nodes.filter((node) => node.type !== "transport" && node.type !== "transfer");
@@ -572,13 +669,19 @@ function expandTransportNodes(
       type: "transport",
       startTime: formatClockMinutes(cursor),
       endTime: formatClockMinutes(cursor + minutes),
-      name: `${leg.from} → ${leg.to} · ${TRANSPORT_LABELS[leg.mode]}`,
+      name:
+        leg.segmentCount > 1
+          ? `${leg.from} → ${leg.to} · ${TRANSPORT_LABELS[leg.mode]}（第 ${leg.segmentOrder}/${leg.segmentCount} 段）`
+          : `${leg.from} → ${leg.to} · ${TRANSPORT_LABELS[leg.mode]}`,
       location: `${leg.to}交通枢纽`,
       transportMode: leg.mode,
       transportMinutes: minutes,
-      legId: leg.id,
+      legId: leg.billed ? leg.sourceLegId : undefined,
       estimatedCost: 0,
-      tips: `抵达后换乘；门到门约 ${leg.doorToDoorMinutes} 分钟，已从当天可游览容量中先行扣除。`,
+      tips:
+        leg.segmentCount > 1
+          ? `长途分段执行；本日驾驶不超过 ${leg.dailyLimitMinutes ?? leg.doorToDoorMinutes} 分钟；抵达后换乘，各分段合计保持原始 leg 的总门到门时长。`
+          : `抵达后换乘；门到门约 ${leg.doorToDoorMinutes} 分钟，已从当天可游览容量中先行扣除。`,
     };
     cursor += minutes;
     return node;
@@ -589,7 +692,7 @@ function expandTransportNodes(
 function validateSelectionCoverage(
   input: ButlerPlanInput,
   selection: AttractionSelection[],
-  transportByDay: Map<number, TransportPlanLeg[]>,
+  transportByDay: Map<number, ScheduledTransportLeg[]>,
 ): void {
   const candidateIds = new Set(input.candidates.map((candidate) => candidate.id));
   for (const item of selection) {
@@ -626,7 +729,7 @@ function buildDayRadar(pace: Pace): PlannerSkeletonDay["radar"] {
 function validateDeterministicSkeleton(
   skeleton: PlannerSkeleton,
   input: ButlerPlanInput,
-  transportByDay: Map<number, TransportPlanLeg[]>,
+  transportByDay: Map<number, ScheduledTransportLeg[]>,
   selection: AttractionSelection[],
 ): void {
   const start = parseClockMinutes(input.startTime);
@@ -658,7 +761,19 @@ function validateDeterministicSkeleton(
         throw new Error(`第 ${day.day} 天安排了候选之外的景点：${attraction.name}`);
       }
     }
-    const isMovementDay = (transportByDay.get(day.day)?.length ?? 0) > 0;
+    const dayTransport = transportByDay.get(day.day) ?? [];
+    const driveMinutes = dayTransport
+      .filter((leg) => leg.mode === "drive")
+      .reduce((total, leg) => total + leg.doorToDoorMinutes, 0);
+    const dailyDriveLimit = dayTransport.find(
+      (leg) => leg.mode === "drive" && leg.dailyLimitMinutes,
+    )?.dailyLimitMinutes;
+    if (dailyDriveLimit && driveMinutes > dailyDriveLimit) {
+      throw new Error(
+        `第 ${day.day} 天驾驶 ${driveMinutes} 分钟，超过每日上限 ${dailyDriveLimit} 分钟`,
+      );
+    }
+    const isMovementDay = dayTransport.length > 0;
     const capacity = attractionCapacityMinutes(input, transportByDay, day.day);
     const selectedFits = selection.some(
       (item) => item.day === day.day && item.stayMinutes <= capacity,

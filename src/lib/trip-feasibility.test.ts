@@ -123,6 +123,14 @@ test("方案 B 按真实门到门时间增加天数并保留自驾和沿途游�
   const extend = decision.options.find((option) => option.strategy.type === "extend");
   assert.ok(extend && extend.strategy.type === "extend");
   assert.ok(extend.strategy.recommendedDays > 5);
+  const expectedDriveSegmentDays = Math.ceil(1906 / extend.strategy.dailyDriveLimitMinutes);
+  assert.equal(extend.strategy.driveSegmentDays, expectedDriveSegmentDays);
+  assert.equal(
+    extend.strategy.recommendedDays,
+    decision.summary.transportDays + decision.summary.stopDays,
+  );
+  assert.match(extend.metrics.join(" "), /每日驾驶 ≤/);
+  assert.match(extend.metrics.join(" "), /长途拆为/);
 
   const adjusted = applyTripFeasibilityChoice(longDriveInput(), { strategy: "extend" });
   const driveLeg = adjusted.route.legs.find((leg) => leg.id === "outbound:1");

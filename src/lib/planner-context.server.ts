@@ -8,6 +8,7 @@ import {
 import {
   calculateTransportLeg,
   chooseLongDistanceMode,
+  splitTransportLegIntoSegments,
   type TransportPlanLeg,
 } from "./transport-planner.server.ts";
 import type { SearchResult } from "./live-planner.ts";
@@ -47,6 +48,8 @@ export type TransportPlanningInput = {
   tavilyKey: string;
   tavilyEndpoint?: string;
   fetchImpl?: typeof fetch;
+  /** 单日驾驶硬上限；只影响执行分段，不改变原始 leg 的总时长和总成本。 */
+  dailyDriveLimitMinutes?: number;
 };
 
 export type TransportPlanningReady = {
@@ -916,7 +919,9 @@ export async function prepareRouteTransportPlan(
   if (missingNodes.length > 0) {
     return createDegradedTransportPlan(
       input.route,
-      "高德搜索不到旅行地点「" + missingNodes.join("、") + "」。请返回更换旅行地点，或改用附近城市名称。",
+      "高德搜索不到旅行地点「" +
+        missingNodes.join("、") +
+        "」。请返回更换旅行地点，或改用附近城市名称。",
     );
   }
 
@@ -958,19 +963,27 @@ export async function prepareRouteTransportPlan(
         travelers: headcount,
         routeDurationMinutes,
       });
+      const planLeg: TransportPlanLeg = {
+        id: leg.id,
+        kind: leg.kind,
+        from: leg.from,
+        to: leg.to,
+        distanceKm: legDistanceKm,
+        mode,
+        ...calculation,
+      };
+      if (mode === "drive") {
+        const executionSegments = splitTransportLegIntoSegments(
+          planLeg,
+          input.dailyDriveLimitMinutes,
+        );
+        if (executionSegments.length > 1) planLeg.executionSegments = executionSegments;
+      }
 
       return {
         status: "ready",
         routeLeg: { ...leg, transport: mode },
-        planLeg: {
-          id: leg.id,
-          kind: leg.kind,
-          from: leg.from,
-          to: leg.to,
-          distanceKm: legDistanceKm,
-          mode,
-          ...calculation,
-        },
+        planLeg,
       };
     }),
   );

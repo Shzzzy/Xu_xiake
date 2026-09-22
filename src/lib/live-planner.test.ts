@@ -9,6 +9,10 @@ import {
 import { normalizeTavilyResults } from "./tavily.server.ts";
 import { buildRoutePlan } from "./route-planner.ts";
 import { runLivePlannerWith, type LiveItineraryInput } from "./live-planner.functions.ts";
+import {
+  applyTripFeasibilityChoice,
+  type TripFeasibilityPlanningInput,
+} from "./trip-feasibility.ts";
 import type { DiscoveredPlaceRecord, PlacePersistenceRepository } from "./place-discovery.ts";
 import type { AmapClient } from "./amap.server.ts";
 
@@ -738,5 +742,196 @@ test("交通阶段 degraded 时 live planner fail closed", async () => {
       repository: createMemoryPlaceRepository(),
     }),
     /交通规划不可用/,
+  );
+});
+function longDriveLiveInput(): LiveItineraryInput & TripFeasibilityPlanningInput {
+  return {
+    destination: { id: "dali", name: "大理洱海", region: "云南 · 大理" },
+    startDate: "2026-10-01",
+    days: 5,
+    dailyHours: 6,
+    pace: "balanced",
+    interests: ["自然山水"],
+    origin: "北京",
+    startTime: "08:00",
+    endTime: "20:00",
+    totalBudget: 50000,
+    travelers: { adults: 3, children: 0 },
+    transport: "drive",
+    style: "wander",
+    route: {
+      origin: "北京",
+      destination: "大理洱海",
+      waypoints: ["上海"],
+      roundTrip: true,
+      returnMode: "fast",
+      legs: [
+        {
+          id: "outbound:0",
+          from: "北京",
+          to: "上海",
+          transport: "flight",
+          style: "direct",
+          kind: "outbound",
+        },
+        {
+          id: "outbound:1",
+          from: "上海",
+          to: "大理洱海",
+          transport: "drive",
+          style: "wander",
+          kind: "outbound",
+        },
+        {
+          id: "return",
+          from: "大理洱海",
+          to: "北京",
+          transport: "flight",
+          style: "direct",
+          kind: "return",
+        },
+      ],
+    },
+    weather: Array.from({ length: 5 }, (_, index) => ({
+      date: `2026-10-0${index + 1}`,
+      code: 1,
+      tempMax: 24,
+      tempMin: 14,
+      precipProb: 10,
+    })),
+    seedPlaces: [],
+    transportLegs: [
+      {
+        id: "outbound:0",
+        kind: "outbound",
+        from: "北京",
+        to: "上海",
+        distanceKm: 1067.3,
+        mode: "flight",
+        doorToDoorMinutes: 300,
+        minimumPerPersonCost: 588,
+      },
+      {
+        id: "outbound:1",
+        kind: "outbound",
+        from: "上海",
+        to: "大理洱海",
+        distanceKm: 2651.7,
+        mode: "drive",
+        doorToDoorMinutes: 1906,
+        minimumPerPersonCost: 1061,
+      },
+      {
+        id: "return",
+        kind: "return",
+        from: "大理洱海",
+        to: "北京",
+        distanceKm: 2182,
+        mode: "flight",
+        doorToDoorMinutes: 360,
+        minimumPerPersonCost: 1201,
+      },
+    ],
+  };
+}
+
+function longDriveAmapClient(): AmapClient {
+  const coordinates = {
+    北京: { location: [116.407526, 39.90403] as [number, number], province: "北京市" },
+    上海: { location: [121.473701, 31.230416] as [number, number], province: "上海市" },
+    大理洱海: { location: [100.225, 25.606] as [number, number], province: "云南省" },
+  };
+  return {
+    async searchPoi() {
+      return [
+        {
+          id: "dali-old-town",
+          name: "大理古城",
+          type: "风景名胜;风景名胜",
+          address: "云南省大理白族自治州大理市大理洱海景区",
+          location: [100.164, 25.695],
+          province: "云南省",
+          city: "大理白族自治州",
+          district: "大理市",
+          adcode: "532901",
+        },
+        {
+          id: "erhai-eco",
+          name: "洱海生态廊道",
+          type: "风景名胜;风景名胜",
+          address: "云南省大理白族自治州大理市大理洱海景区",
+          location: [100.205, 25.62],
+          province: "云南省",
+          city: "大理白族自治州",
+          district: "大理市",
+          adcode: "532901",
+        },
+      ];
+    },
+    async fetchStaticMap() {
+      return new Uint8Array();
+    },
+    async route(input) {
+      return {
+        mode: input.mode,
+        origin: input.origin,
+        destination: input.destination,
+        distanceMeters: 2_651_700,
+        durationSeconds: 100_860,
+        path: [input.origin, input.destination],
+        steps: [],
+      };
+    },
+    async geocode(input) {
+      const point = coordinates[input.address.trim() as keyof typeof coordinates];
+      if (!point) return [];
+      return [
+        {
+          formattedAddress: input.address,
+          province: point.province,
+          city: input.address,
+          district: "",
+          adcode: "",
+          location: point.location,
+        },
+      ];
+    },
+    async weather() {
+      return [];
+    },
+  };
+}
+
+test("方案 B 在实时链路中自动分段且预算不重复", async () => {
+  const deps = {
+    env: { BUTLER_PLANNER: "1", DEEPSEEK_API_KEY: "k", TAVILY_API_KEY: "k" },
+    fetchImpl: fakeButlerFetch(),
+    repository: createMemoryPlaceRepository(),
+    amapClient: longDriveAmapClient(),
+  };
+  const original = longDriveLiveInput();
+  const decision = await runLivePlannerWith(original, deps);
+  assert.equal(decision.status, "needs_decision");
+
+  const adjusted = applyTripFeasibilityChoice(original, { strategy: "extend" });
+  const result = await runLivePlannerWith(adjusted, deps);
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok" || result.mode !== "butler") return;
+
+  const driveDays = result.skeleton.days.filter((day) =>
+    day.nodes.some((node) => node.transportMode === "drive"),
+  );
+  assert.ok(driveDays.length >= 3);
+  assert.equal(
+    driveDays.reduce(
+      (total, day) =>
+        total + (day.nodes.find((node) => node.transportMode === "drive")?.transportMinutes ?? 0),
+      0,
+    ),
+    1906,
+  );
+  assert.equal(
+    result.budget.transport,
+    result.transportLegs.reduce((total, leg) => total + leg.minimumPerPersonCost * 3, 0),
   );
 });

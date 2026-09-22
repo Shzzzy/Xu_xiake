@@ -104,4 +104,6 @@ test("三方案卡片显示直达、延长自驾和专注一地选择", () => {
   assert.match(html, /上海/);
   assert.match(html, /大理洱海/);
   assert.match(html, /取消调整/);
+  assert.match(html, /长途拆为/);
+  assert.match(html, /每日驾驶 ≤/);
 });

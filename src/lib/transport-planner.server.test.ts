@@ -3,10 +3,7 @@ import assert from "node:assert/strict";
 import type { AmapClient, AmapCoordinate, AmapRoute, RouteInput } from "./amap.server.ts";
 import { prepareRouteTransportPlan } from "./planner-context.server.ts";
 import type { RoutePlan, TransportMode } from "./route-planner.ts";
-import {
-  calculateTransportLeg,
-  chooseLongDistanceMode,
-} from "./transport-planner.server.ts";
+import { calculateTransportLeg, chooseLongDistanceMode } from "./transport-planner.server.ts";
 
 const coordinates: Record<string, { location: AmapCoordinate; province: string }> = {
   北京: { location: [116.407526, 39.90403], province: "北京市" },
@@ -246,7 +243,12 @@ test("缺少 AMap client 时显式 degraded 且不生成交通 leg", async () =>
 test("geocode 全失败时显式 degraded 且不生成交通 leg", async () => {
   const client = createFakeAmapClient();
   const preparation = await prepareRouteTransportPlan({
-    client: { ...client, async geocode() { return []; } },
+    client: {
+      ...client,
+      async geocode() {
+        return [];
+      },
+    },
     route: createRoute("balanced"),
     startDate: "2026-10-01",
     travelers: { adults: 2, children: 0 },
@@ -290,4 +292,30 @@ test("自驾 route 缺 duration 时显式 degraded 且不伪造时长", async ()
   assert.equal(preparation.legs.length, 0);
   assert.equal(preparation.minimumTotal, 0);
   assert.match(preparation.reason, /duration|时长|驾车|路线|高德/i);
+});
+test("超长自驾在 prepareRouteTransportPlan 中按每日上限生成守恒分段", async () => {
+  const preparation = await prepareRouteTransportPlan({
+    client: createFakeAmapClient({ distanceMeters: 2_651_700, durationSeconds: 100_860 }),
+    route: createRoute("drive"),
+    startDate: "2026-10-01",
+    travelers: { adults: 3, children: 0 },
+    tavilyKey: "test-key",
+    dailyDriveLimitMinutes: 330,
+    fetchImpl: (async () => Response.json({ results: [] })) as typeof fetch,
+  });
+
+  assert.equal(preparation.status, "ready");
+  const driveLeg = preparation.legs[0];
+  assert.ok(driveLeg?.executionSegments && driveLeg.executionSegments.length >= 3);
+  assert.ok(driveLeg.executionSegments.every((segment) => segment.doorToDoorMinutes <= 330));
+  assert.equal(
+    driveLeg.executionSegments.reduce((total, segment) => total + segment.doorToDoorMinutes, 0),
+    driveLeg.doorToDoorMinutes,
+  );
+  assert.ok(
+    Math.abs(
+      driveLeg.executionSegments.reduce((total, segment) => total + segment.distanceKm, 0) -
+        driveLeg.distanceKm,
+    ) < 0.2,
+  );
 });
