@@ -389,6 +389,25 @@ function recommendDestination(answers: UnknownAnswers, catalog: InspirationDesti
   return recommendDestinationFromCatalog(answers, catalog)?.id ?? "huangshan";
 }
 
+/**
+ * 把规划服务的异常转成用户能看懂的提示。
+ *
+ * 部署在 Netlify 等平台时，函数超时或崩溃会返回 {"errorType":"Error","errorMessage":"An unknown error has occurred"}
+ * 这类平台原始报文；直接抛给用户既看不懂也不知道怎么办。
+ */
+export function describePlannerError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  const text = raw.trim();
+  if (!text) return "实时规划服务暂时不可用，请稍后重试。";
+  if (/unknown error|"errorType"|\b504\b|timeout|timed out/i.test(text)) {
+    return "规划服务响应超时：行程越长首次生成越慢。请再点一次「生成旅行规划」，或把天数调短一些后重试。";
+  }
+  if (/fetch failed|network|ECONNRESET|ETIMEDOUT/i.test(text)) {
+    return "网络连接不稳定，规划服务暂时不可用，请稍后重试。";
+  }
+  return text;
+}
+
 function notifyDiscoveries(discoveries: DiscoveryNotice[]) {
   for (const discovery of discoveries) {
     if (discovery.status === "published") {
@@ -2139,7 +2158,7 @@ function ItineraryScreen({
         .catch((error: unknown) => {
           if (cancelled) return;
           setPlannerState("fallback");
-          setPlannerMessage(error instanceof Error ? error.message : "实时规划服务暂不可用");
+          setPlannerMessage(describePlannerError(error));
         });
     } else {
       const fallbackPlan = buildFallbackLongPlan({
