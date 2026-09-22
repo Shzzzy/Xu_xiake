@@ -18,15 +18,20 @@ import type {
 } from "./travel-plan.ts";
 
 const MAX_POI_LOOKUPS = 24;
+/** 解析出的坐标必须落在行程站点附近；超出视为地理编码歧义。 */
+const MAX_RESOLVED_PLACE_DISTANCE_KM = 300;
 const DEFAULT_ENRICHMENT_TIMEOUT_MS = 20_000;
 const ENRICHMENT_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_ENRICHMENT_CACHE_ENTRIES = 200;
 const MAX_ROUTE_MAP_POINTS = 40;
 const MAX_DAY_MAP_POINTS = 24;
+/** 当天点位允许偏离景点的最大半径；超过视为错误地理编码。 */
+const DAY_MAP_FOCUS_RADIUS_KM = 300;
 const STATIC_MAP_WIDTH = 750;
 const STATIC_MAP_HEIGHT = 500;
 const STATIC_MAP_PADDING_RATIO = 0.22;
-const MAP_OPERATION_CONCURRENCY = 6;
+// 高德 Web 服务 QPS 有上限，并发过高会返回 CUQPS_HAS_EXCEEDED_THE_LIMIT 并丢失坐标。
+const MAP_OPERATION_CONCURRENCY = 3;
 const SENSITIVE_QUERY_KEYS = new Set([
   "key",
   "api_key",
@@ -841,6 +846,18 @@ async function enrichRoute(
   };
 }
 
+/**
+ * 午餐、酒店入住、必要休息这类通用名节点没有唯一地点，
+ * 送去地理编码会落到随机城市（例如把"午餐"解析到北京），
+ * 进而把当天地图拉成全国范围。只有携带真实地名的节点才解析坐标。
+ */
+const GENERIC_NODE_NAME_PATTERN =
+  /(午餐|晚餐|早餐|用餐|吃饭|休息|自由活动|周边漫步|酒店入住|办理入住|入住与休整|退房|待确认|待生成)|^第\s*\d+\s*天/u;
+
+function isGenericNodeName(name: string): boolean {
+  return GENERIC_NODE_NAME_PATTERN.test(name.trim());
+}
+
 function cityForNode(plan: TripPlan, node: TripTimelineNode): string {
   const text = `${node.name} ${node.location ?? ""}`.trim();
   const stops = [plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination].map(cleanText);
@@ -941,10 +958,8 @@ async function enrichDays(
       }
       if (
         candidates.length < MAX_POI_LOOKUPS &&
-        (node.type === "attraction" ||
-          node.type === "night-activity" ||
-          node.type === "hotel" ||
-          node.type === "meal")
+        !isGenericNodeName(node.name) &&
+        (node.type === "attraction" || node.type === "night-activity")
       ) {
         candidates.push({
           key,
@@ -962,11 +977,24 @@ async function enrichDays(
       const routeStop = routeStops.get(cleanText(node.name));
       const coordinate = routeStop ?? (await resolver.resolvePlace(node.name, node.location, city));
       if (!coordinate) report(`地点解析失败：${node.name}`);
-      return { key, coordinate };
+      return { key, coordinate, name: node.name };
     },
   );
-  for (const { key, coordinate } of resolvedCandidates) {
-    if (coordinate) existing.set(key, coordinate);
+  const routeAnchors = [...routeStops.values()];
+  for (const { key, coordinate, name } of resolvedCandidates) {
+    if (!coordinate) continue;
+    // 「周城」这类同名地点可能被解析到别的省份，落点会离行程站点很远；
+    // 这样的坐标会把当天地图拉成全国范围，直接丢弃更安全。
+    if (
+      routeAnchors.length > 0 &&
+      !routeAnchors.some(
+        (anchor) => distanceKm(anchor, coordinate) <= MAX_RESOLVED_PLACE_DISTANCE_KM,
+      )
+    ) {
+      report(`地点解析结果偏离行程，已忽略：${name}`);
+      continue;
+    }
+    existing.set(key, coordinate);
   }
 
   const result: TripDay[] = [];
@@ -1012,8 +1040,33 @@ async function enrichDays(
     const lastNodeEnd = [...nodes].reverse().find((node) => node.coordinates)?.coordinates;
     const dayEnd = hotelEnd ?? lastNodeEnd ?? routeStops.get(plan.meta.destination) ?? dayStart;
     const points = dayMapPoints(nodes, dayStart, dayEnd, plan, route, routeStops);
+    // 当天地图要贴合当天活动区域：优先用景点做锚点；景点坐标缺失时，
+    // 退到当天交通腿经过的站点（例如返程日仍在大理出发）。
+    const attractionAnchors = nodes
+      .filter((node) => node.type === "attraction" || node.type === "night-activity")
+      .flatMap((node) => (node.coordinates ? [node.coordinates] : []));
+    const routeStopAnchors =
+      attractionAnchors.length > 0
+        ? []
+        : nodes
+            .filter((node) => node.type === "transport" || node.type === "transfer")
+            .flatMap((node) => {
+              const text = `${node.name} ${node.location ?? ""}`;
+              return [...routeStops.entries()]
+                .filter(([name]) => name && text.includes(name))
+                .map(([, coordinate]) => coordinate);
+            });
+    const focusAnchors = attractionAnchors.length > 0 ? attractionAnchors : routeStopAnchors;
+    // 剔除错误地理编码带来的偏远点（如把"午餐"解析到北京），否则地图会被拉成全国范围。
+    const focusedPoints =
+      focusAnchors.length > 0
+        ? points.filter((point) =>
+            focusAnchors.some((anchor) => distanceKm(anchor, point) <= DAY_MAP_FOCUS_RADIUS_KM),
+          )
+        : points;
+    const pointsToMap = focusedPoints.length > 0 ? focusedPoints : points;
     // 高德静图对坐标范围敏感：先剔除非法坐标，避免单个坏点导致整天没有地图。
-    const validPoints = points.filter(
+    const validPoints = pointsToMap.filter(
       ([longitude, latitude]) =>
         Number.isFinite(longitude) &&
         Number.isFinite(latitude) &&

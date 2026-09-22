@@ -325,7 +325,34 @@ function errorDetail(payload: JsonRecord): string {
   return code ? `${info}（${code}）` : info;
 }
 
+const AMAP_QPS_RETRY_DELAY_MS = 700;
+
+function isAmapQpsError(message: string): boolean {
+  return /CUQPS_HAS_EXCEEDED_THE_LIMIT|10021/u.test(message);
+}
+
+/**
+ * 高德 Web 服务按 QPS 计费限流，命中限流时整批解析会失败、当天就没了坐标。
+ * 限流是瞬时的，等待一小段时间后重试一次即可。
+ */
 async function requestAmapJson(
+  operation: string,
+  url: URL,
+  fetchImpl: typeof fetch,
+  format: AmapResponseFormat,
+): Promise<JsonRecord> {
+  try {
+    return await requestAmapJsonOnce(operation, url, fetchImpl, format);
+  } catch (error) {
+    if (error instanceof Error && isAmapQpsError(error.message)) {
+      await new Promise((resolve) => setTimeout(resolve, AMAP_QPS_RETRY_DELAY_MS));
+      return requestAmapJsonOnce(operation, url, fetchImpl, format);
+    }
+    throw error;
+  }
+}
+
+async function requestAmapJsonOnce(
   operation: string,
   url: URL,
   fetchImpl: typeof fetch,

@@ -64,7 +64,9 @@ const DAY_PAGE_ID = /^day-(\d+)-(map|summary)$/;
 
 /** 用当天节点坐标构建高德静态地图；坐标缺失或非法时返回 undefined。 */
 function buildDayStaticMapUrl(day: TripDay): string | undefined {
+  // 只用当天景点坐标：通用节点（午餐、酒店入住）可能被解析到其他城市。
   const points = day.nodes
+    .filter((node) => node.type === "attraction" || node.type === "night-activity")
     .flatMap((node) => (node.coordinates ? [node.coordinates] : []))
     .filter(
       ([longitude, latitude]) =>

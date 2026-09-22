@@ -766,3 +766,42 @@ test("fits nationwide route maps with complete stop markers and daily padding", 
     "跨城当日地图必须包含途经地坐标，不能只画起终点直线",
   );
 });
+
+test("通用名节点不参与地理编码，避免污染当天地图", async () => {
+  const plan = fixturePlan();
+  const template = plan.days[0]!.nodes[0]!;
+  plan.days = [
+    {
+      ...plan.days[0]!,
+      mapUrl: undefined,
+      nodes: [
+        { ...template, type: "meal", name: "午餐", location: undefined, coordinates: undefined },
+        {
+          ...template,
+          type: "hotel",
+          name: "第 1 天酒店入住与休整",
+          location: undefined,
+          coordinates: undefined,
+        },
+        {
+          ...template,
+          type: "attraction",
+          name: "黄山风景区",
+          location: undefined,
+          coordinates: undefined,
+        },
+      ],
+    },
+  ];
+
+  const { client, details } = fakeAmapClient();
+  await enrichGuidebookPlanWithMaps(plan, { amapClient: client });
+
+  const contexts = details().searchContexts;
+  assert.ok(!contexts.some((entry) => entry.includes("午餐")), "午餐不应参与地理编码");
+  assert.ok(!contexts.some((entry) => entry.includes("酒店入住")), "酒店入住不应参与地理编码");
+  assert.ok(
+    contexts.some((entry) => entry.includes("黄山风景区")),
+    "景点仍应正常解析",
+  );
+});
