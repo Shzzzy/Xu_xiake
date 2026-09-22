@@ -233,7 +233,7 @@ test("真实单日准备入口读取计划候选并降级自由文本提到的�
 
   assert.match(prepared.purpose, /第 1 天：/);
   assert.equal(prepared.analysisFailed, true);
-  assert.doesNotMatch(JSON.stringify(prepared), /故宫/);
+  assert.doesNotMatch(JSON.stringify(prepared), /故宫|已安全降级行程/);
   assert.match(preparedPlan.days[0]?.purpose ?? "", /第 1 天：/);
   assert.doesNotMatch(JSON.stringify(preparedPlan.days[0]), /故宫/);
 });

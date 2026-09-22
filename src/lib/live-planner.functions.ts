@@ -586,12 +586,22 @@ export async function runLivePlannerWith(
     publicUrl: place.source,
     areaKey: place.area,
   }));
-  const [amapCandidates, transportPlan] = await Promise.all([
+  const [destinationCandidates, waypointCandidateGroups, transportPlan] = await Promise.all([
     plannerContext.searchAmapDestinationCandidates({
       client: amapClient,
       destination: input.destination.name,
       region: input.destination.region,
     }),
+    Promise.all(
+      input.route.waypoints.map((waypoint) =>
+        plannerContext.searchAmapWaypointCandidates({
+          client: amapClient,
+          waypoint,
+          region: waypoint,
+          maxCandidates: 6,
+        }),
+      ),
+    ),
     plannerContext.prepareRouteTransportPlan({
       client: amapClient,
       route: input.route,
@@ -637,10 +647,14 @@ export async function runLivePlannerWith(
       };
     }
   }
+  const amapCandidates = plannerContext.mergePlannerCandidates({
+    primary: destinationCandidates,
+    fallback: waypointCandidateGroups.flat(),
+  }) as PlannerDestinationCandidate[];
   const candidates = plannerContext.mergePlannerCandidates({
     primary: amapCandidates,
     fallback: seedCandidates,
-  }) as PlannerDestinationCandidate[];
+  }).slice(0, 32) as PlannerDestinationCandidate[];
   const sources = selectPlannerSources({
     destinationSources: candidates.map((candidate) => ({
       title: candidate.name,

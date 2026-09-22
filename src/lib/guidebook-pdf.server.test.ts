@@ -564,7 +564,7 @@ test("超时时仅 theme 非法也会重建安全 theme", async () => {
 
   assert.equal(result.status, "html");
   if (result.status !== "html") return;
-  assert.match(result.html, /第 1 天安全行程/);
+  assert.doesNotMatch(result.html, /已安全降级行程|安全行程/);
   assert.doesNotMatch(result.html, /故宫/);
   assert.equal(renderPdfCalls, 0);
 });

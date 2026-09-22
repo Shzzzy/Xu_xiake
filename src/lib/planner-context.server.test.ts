@@ -8,6 +8,7 @@ import {
   prepareRouteTransportPlan,
   resolvePlannerAmapKey,
   searchAmapDestinationCandidates,
+  searchAmapWaypointCandidates,
   type DestinationCandidate,
 } from "./planner-context.server.ts";
 import type { RoutePlan, TransportMode } from "./route-planner.ts";
@@ -815,6 +816,24 @@ test("同名多 areaKey 候选只在 Tavily 补充可唯一匹配时写入", () 
 
   assert.equal(merged[0]?.summary, "杭州西湖。杭州西湖资料");
   assert.equal(merged[1]?.summary, "金华同名地点");
+});
+
+test("途经地搜索过滤行政学校 POI 并保留真实景点", async () => {
+  const client = {
+    async searchPoi() {
+      return [
+        { id: "gov", name: "内蒙古自治区人民政府", type: "政府机构;政府机关", address: "呼和浩特市", location: [111.7, 40.8] as AmapCoordinate, city: "呼和浩特市", province: "内蒙古自治区" },
+        { id: "uni", name: "内蒙古大学", type: "科教文化服务;学校;大学", address: "呼和浩特市", location: [111.71, 40.81] as AmapCoordinate, city: "呼和浩特市", province: "内蒙古自治区" },
+        { id: "grass", name: "敕勒川草原", type: "风景名胜;草原", address: "呼和浩特市新城区", location: [111.8, 40.9] as AmapCoordinate, city: "呼和浩特市", province: "内蒙古自治区" },
+      ];
+    },
+    async fetchStaticMap() { return new Uint8Array(); },
+    async route() { throw new Error("not used"); },
+    async geocode() { return []; },
+    async weather() { return []; },
+  } as AmapClient;
+  const candidates = await searchAmapWaypointCandidates({ client, waypoint: "内蒙古", region: "内蒙古自治区" });
+  assert.deepEqual(candidates.map((candidate) => candidate.name), ["敕勒川草原"]);
 });
 
 test("高德 POI 转为候选景点，来源不含 key 且优先合并", () => {

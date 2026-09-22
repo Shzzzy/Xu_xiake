@@ -75,6 +75,7 @@ const GENERIC_TRANSPORT_MODES = new Set<TransportMode>(["economy", "balanced", "
 const LONG_DISTANCE_FLIGHT_KM = 800;
 const AMAP_POI_QUERIES = ["热门景点", "风景名胜", "博物馆", "公园", "地标"];
 const MAX_DESTINATION_CANDIDATES = 16;
+const ATTRACTION_POI_TYPE_PATTERN = /风景名胜|公园|博物馆|展览馆|纪念馆|动物园|植物园|水族馆|游乐园|寺庙|教堂|古镇|旅游景点|自然保护区|海滩|湖泊|温泉|广场|地标/u;
 const MAX_TAVILY_SOURCES_PER_LEG = 3;
 const AREA_CLUSTER_RADIUS_KM = 15;
 
@@ -575,7 +576,8 @@ export function buildAmapDestinationCandidates(pois: AmapPoi[]): PlannerDestinat
 
   for (const poi of pois) {
     const poiType = poi.type.trim();
-    if (/住宿服务|餐饮服务|购物服务|生活服务|公司企业/u.test(poiType)) continue;
+    if (/住宿服务|餐饮服务|购物服务|生活服务|公司企业|政府机构|科教文化服务;学校|商务住宅/u.test(poiType)) continue;
+    if (!ATTRACTION_POI_TYPE_PATTERN.test(poiType)) continue;
 
     const id = poi.id.trim();
     const name = poi.name.trim();
@@ -742,6 +744,27 @@ export async function searchAmapDestinationCandidates(input: {
   return buildAmapDestinationCandidates(relevant);
 }
 
+export async function searchAmapWaypointCandidates(input: {
+  client: AmapClient | null;
+  waypoint: string;
+  region?: string;
+  maxCandidates?: number;
+}): Promise<PlannerDestinationCandidate[]> {
+  if (!input.client) return [];
+  const queryCity = input.region?.trim() || input.waypoint.trim();
+  const batches = await Promise.all(
+    ["热门景点", "风景名胜"].map((keywords) =>
+      input.client!.searchPoi({ keywords, city: queryCity }).catch(() => []),
+    ),
+  );
+  const target = buildAmapAdministrativeTarget(input.waypoint, input.region ?? input.waypoint);
+  const relevant = batches
+    .flat()
+    .filter((poi) => ATTRACTION_POI_TYPE_PATTERN.test(poi.type))
+    .filter((poi) => isRelevantAmapPoi(poi, input.waypoint, target));
+  const maxCandidates = Math.max(1, Math.floor(input.maxCandidates ?? 6));
+  return buildAmapDestinationCandidates(relevant).slice(0, maxCandidates);
+}
 function travelerCount(travelers: { adults: number; children: number }): number {
   return Math.max(1, Math.round(travelers.adults + travelers.children));
 }

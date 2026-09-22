@@ -9,6 +9,7 @@ import {
 import { renderGuidebookHtml } from "./guidebook-html.server.ts";
 import {
   buildFallbackDayNarrative,
+  buildFallbackDayTheme,
   prepareGuidebookNarrativePlan,
   validateDayNarrative,
 } from "./guidebook-narrative.server.ts";
@@ -553,7 +554,7 @@ function buildSafeGuidebookFallbackPlan(plan: TripPlan): TripPlan {
     } catch {
       const forced = {
         ...safeDay,
-        theme: `第 ${index + 1} 天安全行程`,
+        theme: buildFallbackDayTheme(safeDay),
         purpose: `第 ${index + 1} 天：按已冻结排程继续行程`,
         highlights: [],
         cautions: ["本页分析未能生成，已改用基础行程与本地提示。"],
@@ -569,7 +570,7 @@ function buildSafeGuidebookFallbackPlan(plan: TripPlan): TripPlan {
       } catch {
         const minimal = {
           ...forced,
-          theme: "已安全降级行程",
+          theme: forced.theme,
           purpose: "已改用基础行程与本地提示。",
         };
         validateDayNarrative(minimal, index, {

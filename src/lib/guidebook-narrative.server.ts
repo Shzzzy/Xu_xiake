@@ -232,12 +232,25 @@ export function validateDayNarrative(
   }
 }
 
+export function buildFallbackDayTheme(day: TripDay): string {
+  const attractionNames = day.nodes
+    .filter((node) => node.type === "attraction" || node.type === "night-activity")
+    .map((node) => node.name.trim())
+    .filter(Boolean);
+  if (attractionNames.length > 0) return attractionNames.slice(0, 2).join(" · ");
+  const transportNode = day.nodes.find((node) => node.type === "transport" || node.type === "transfer");
+  if (transportNode) {
+    const routeName = transportNode.name.split("·")[0]?.trim();
+    return routeName ? `交通移动 · ${routeName}` : "交通移动";
+  }
+  return "周边漫步与休整";
+}
 export function buildFallbackDayNarrative(day: TripDay, index: number): TripDay {
   // 已经带失败留痕的本地安全文案原样保留，避免预览第二次改写用户已看到的说明。
   if (day.analysisFailed) {
     return {
       ...day,
-      theme: "已安全降级行程",
+      theme: buildFallbackDayTheme(day),
       cautions: day.cautions.includes(FAILED_DAY_CAUTION)
         ? day.cautions
         : [FAILED_DAY_CAUTION, ...day.cautions],
@@ -250,7 +263,7 @@ export function buildFallbackDayNarrative(day: TripDay, index: number): TripDay 
     .map((node) => node.name);
   return {
     ...day,
-    theme: "已安全降级行程",
+    theme: buildFallbackDayTheme(day),
     purpose: `第 ${index + 1} 天：按已冻结排程继续行程`,
     highlights:
       attractionNames.length > 0
