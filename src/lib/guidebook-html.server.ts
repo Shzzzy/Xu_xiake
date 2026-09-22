@@ -318,6 +318,23 @@ function renderSegmentCard(segment: RouteSegment, index: number): string {
   return `<article class="segment-card"><div class="segment-index">${String(index + 1).padStart(2, "0")}</div><div class="segment-main"><p class="segment-route">${escapeHtml(segment.from)} <i class="ti ti-arrow-right"></i> ${escapeHtml(segment.to)}</p><div class="segment-meta"><span><i class="ti ${TRANSPORT_ICONS[segment.mode]}"></i> ${escapeHtml(TRANSPORT_LABELS[segment.mode])}</span><span><i class="ti ti-road"></i> ${escapeHtml(distance)}</span><span><i class="ti ti-clock"></i> ${escapeHtml(duration)}</span></div>${renderExternalLink(segment.navigation, "打开高德导航")}</div></article>`;
 }
 
+function routeStopNames(plan: TripPlan): string[] {
+  return uniqueValues([plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination]);
+}
+
+function renderRouteStopLegend(plan: TripPlan): string {
+  const stops = routeStopNames(plan);
+  if (stops.length < 2) return "";
+  const items = stops
+    .map((name, index) => {
+      const label = index < 26 ? String.fromCharCode(65 + index) : String(index + 1);
+      const role = index === 0 ? "起点" : index === stops.length - 1 ? "终点" : "途经地";
+      return `<span class="route-stop-item"><b>${label}</b>${escapeHtml(name)}<small>${role}</small></span>`;
+    })
+    .join("");
+  return `<div class="route-stop-legend" aria-label="路线节点图例">${items}</div>`;
+}
+
 function renderRoute(plan: TripPlan): string {
   const map = renderRouteMap(plan, "高德全程路线地图", "全程路线示意图");
   const outbound = plan.route.outboundSegments.length
@@ -326,13 +343,100 @@ function renderRoute(plan: TripPlan): string {
   const returning = plan.route.returnSegments.length
     ? plan.route.returnSegments.map(renderSegmentCard).join("")
     : `<p class="empty-copy">${plan.route.returnMode === null ? "本次行程未安排返程。" : "返程分段暂未生成，请在出发前核对返程方案。"}</p>`;
-  const body = `${renderSectionHeading("ROUTE & TRANSPORT / 路线与交通", "路线与交通")}<div class="route-summary"><span><i class="ti ti-map-pin"></i> ${escapeHtml(routeNodesText(plan))}</span><span><i class="ti ti-route"></i> ${plan.route.distanceKm > 0 ? `${formatNumber(plan.route.distanceKm)} km` : "总里程待估算"}</span><span><i class="ti ti-clock"></i> ${plan.route.durationMinutes > 0 ? formatDuration(plan.route.durationMinutes) : "总用时待估算"}</span></div>${map}<section class="route-block"><div class="route-block-heading"><h3>去程</h3><span class="route-line-legend outbound">实线 · 出发段</span></div><div class="segment-list">${outbound}</div></section><section class="route-block"><div class="route-block-heading"><h3>返程</h3><span class="route-line-legend return">${escapeHtml(returnModeLabel(plan))}</span></div><div class="segment-list">${returning}</div></section>`;
+  const body = `${renderSectionHeading("ROUTE & TRANSPORT / 路线与交通", "路线与交通")}<div class="route-summary"><span><i class="ti ti-map-pin"></i> ${escapeHtml(routeNodesText(plan))}</span><span><i class="ti ti-route"></i> ${plan.route.distanceKm > 0 ? `${formatNumber(plan.route.distanceKm)} km` : "总里程待估算"}</span><span><i class="ti ti-clock"></i> ${plan.route.durationMinutes > 0 ? formatDuration(plan.route.durationMinutes) : "总用时待估算"}</span></div>${map}${renderRouteStopLegend(plan)}<section class="route-block"><div class="route-block-heading"><h3>去程</h3><span class="route-line-legend outbound">实线 · 出发段</span></div><div class="segment-list">${outbound}</div></section><section class="route-block"><div class="route-block-heading"><h3>返程</h3><span class="route-line-legend return">${escapeHtml(returnModeLabel(plan))}</span></div><div class="segment-list">${returning}</div></section>`;
   return renderPage("route-page", "route", "路线与交通", body);
 }
 
 function categoryRange(category: BudgetCategory): string {
   if (category.min === category.max) return currency(category.amount);
   return `${currency(category.min)} - ${currency(category.max)}`;
+}
+
+type BudgetRingCategory = {
+  label: string;
+  amount: number;
+  color: string;
+};
+
+function budgetConsumption(plan: TripPlan): {
+  total: number;
+  spent: number;
+  remaining: number;
+  percent: number;
+  ringPercent: number;
+  overBudget: boolean;
+} {
+  const total = Math.max(0, finiteNumber(plan.budget.totalBudget));
+  const spent = Math.max(0, finiteNumber(plan.budget.estimatedTotal));
+  const remaining = Math.max(0, total - spent);
+  const percent = total > 0 ? (spent / total) * 100 : spent > 0 ? 100 : 0;
+  return {
+    total,
+    spent,
+    remaining,
+    percent,
+    ringPercent: Math.min(100, Math.max(0, percent)),
+    overBudget: spent > total,
+  };
+}
+
+function budgetGradient(categories: BudgetRingCategory[], total: number, spent: number): string {
+  const safeTotal = Math.max(0, total);
+  const safeSpent = Math.max(0, spent);
+  if (safeTotal <= 0) return "#e8e6dc 0% 100%";
+
+  const usedRatio = Math.min(1, safeSpent / safeTotal);
+  const amountTotal = categories.reduce(
+    (sum, category) => sum + Math.max(0, finiteNumber(category.amount)),
+    0,
+  );
+  if (usedRatio <= 0 || amountTotal <= 0) return "#e8e6dc 0% 100%";
+
+  let cursor = 0;
+  const stops: string[] = [];
+  categories.forEach((category) => {
+    const share = Math.max(0, finiteNumber(category.amount)) / amountTotal;
+    const start = cursor * 100;
+    cursor += share * usedRatio;
+    const end = cursor * 100;
+    stops.push(`${category.color} ${start.toFixed(2)}% ${end.toFixed(2)}%`);
+  });
+  if (usedRatio < 1) stops.push(`#e8e6dc ${(usedRatio * 100).toFixed(2)}% 100%`);
+  return stops.join(",");
+}
+
+function renderBudgetConsumption(categories: BudgetRingCategory[], plan: TripPlan): string {
+  const consumption = budgetConsumption(plan);
+  const roundedPercent = Math.round(consumption.percent);
+  const status = consumption.overBudget
+    ? `超出 ¥${formatNumber(consumption.spent - consumption.total)}`
+    : `剩余 ¥${formatNumber(consumption.remaining)}`;
+  return `<section class="budget-consumption" data-budget-ring="total" data-budget-spent="${Math.round(consumption.spent)}" data-budget-cap="${Math.round(consumption.total)}" data-budget-remaining="${Math.round(consumption.remaining)}" data-budget-percent="${roundedPercent}"><div class="budget-consumption-donut" style="background:conic-gradient(${budgetGradient(categories, consumption.total, consumption.spent)})" role="img" aria-label="预算消耗 ${roundedPercent}%"><div><strong>${roundedPercent}%</strong><span>预算消耗</span></div></div><div class="budget-consumption-copy"><h3>预算消耗</h3><p><span>已用</span><strong>${currency(consumption.spent)}</strong></p><p><span>总预算</span><strong>${currency(consumption.total)}</strong></p><p class="${consumption.overBudget ? "over" : ""}"><span>${consumption.overBudget ? "超支" : "剩余"}</span><strong>${status}</strong></p></div></section>`;
+}
+
+function dayBudgetCap(plan: TripPlan, day: TripDay): number {
+  const total = Math.max(0, finiteNumber(plan.budget.totalBudget));
+  const estimatedCost = Math.max(0, finiteNumber(day.estimatedCost));
+  const days = plan.days.length > 0 ? plan.days : [day];
+  const totalEstimated = days.reduce(
+    (sum, item) => sum + Math.max(0, finiteNumber(item.estimatedCost)),
+    0,
+  );
+
+  if (totalEstimated > 0) {
+    return total > 0 ? Math.max(1, Math.round((total * estimatedCost) / totalEstimated)) : 0;
+  }
+  return Math.max(0, Math.round(total / Math.max(1, days.length)));
+}
+
+function renderDayBudgetCard(plan: TripPlan, day: TripDay, nodeCost: number): string {
+  const spent = Math.max(0, finiteNumber(day.estimatedCost));
+  const cap = dayBudgetCap(plan, day);
+  const remaining = Math.max(0, cap - spent);
+  const percent = cap > 0 ? Math.round((spent / cap) * 100) : 0;
+  const ringPercent = Math.min(100, Math.max(0, percent));
+  const overBudget = spent > cap;
+  return `<section class="info-card day-budget-card" data-budget-ring="day" data-budget-spent="${Math.round(spent)}" data-budget-cap="${Math.round(cap)}" data-budget-remaining="${Math.round(remaining)}" data-budget-percent="${percent}"><div class="day-budget-ring" style="background:conic-gradient(${overBudget ? "#a0522d" : "#4a7c8a"} 0 ${ringPercent}%,#e8e6dc ${ringPercent}% 100%)"><div><strong>${percent}%</strong><span>已用</span></div></div><div class="day-budget-copy"><h3><i class="ti ti-coin"></i> 当日预算</h3><strong>${currency(spent)}</strong><p>当日上限 ${currency(cap)} · ${overBudget ? `超出 ${currency(spent - cap)}` : `剩余 ${currency(remaining)}`}</p><small>时间轴节点费用合计 ${currency(nodeCost)}</small></div></section>`;
 }
 
 function renderBudget(plan: TripPlan): string {
@@ -347,26 +451,16 @@ function renderBudget(plan: TripPlan): string {
     ...entry,
     category: plan.budget[entry.key] as BudgetCategory,
   }));
-  const ratioTotal = categories.reduce(
-    (sum, entry) => sum + Math.max(0, finiteNumber(entry.category.ratio)),
-    0,
-  );
-  let cursor = 0;
-  const gradientStops = categories.map((entry, index) => {
-    const ratio =
-      ratioTotal > 0
-        ? Math.max(0, finiteNumber(entry.category.ratio)) / ratioTotal
-        : 1 / categories.length;
-    const start = cursor * 100;
-    cursor += ratio;
-    const end = index === categories.length - 1 ? 100 : cursor * 100;
-    return `${entry.color} ${start}% ${end}%`;
-  });
+  const ringCategories = categories.map((entry) => ({
+    label: entry.label,
+    color: entry.color,
+    amount: Math.max(0, finiteNumber(entry.category.amount)),
+  }));
   const difference =
     plan.budget.overBudget > 0
       ? `超出 ${currency(plan.budget.overBudget)}`
       : `预算结余 ${currency(plan.budget.remaining)}`;
-  const body = `${renderSectionHeading("BUDGET ALLOCATION / 预算分配", "预算分配")}<div class="budget-hero"><div class="budget-total"><span>全团总预算</span><strong>${currency(plan.budget.totalBudget)}</strong><small>预估费用 ${currency(plan.budget.estimatedTotal)}</small></div><div class="budget-status ${plan.budget.overBudget > 0 ? "over" : ""}">${escapeHtml(difference)}</div></div><div class="budget-layout"><div class="budget-donut" style="background:conic-gradient(${gradientStops.join(",")})" role="img" aria-label="预算构成饼图"><div><span>预计</span><strong>${currency(plan.budget.estimatedTotal)}</strong></div></div><div class="budget-entries">${categories.map((entry) => `<div class="budget-entry"><span class="budget-dot" style="background:${entry.color}"></span><span class="budget-entry-label">${entry.label}</span><strong>${categoryRange(entry.category)}</strong><small>${Math.round(Math.max(0, finiteNumber(entry.category.ratio)) * 100)}%</small></div>`).join("")}</div></div><div class="budget-notes"><p><strong>人均预算</strong> ${currency(plan.budget.perPersonBudget)}</p><p><strong>人均预计</strong> ${currency(plan.budget.perPersonEstimated)}</p><p><strong>住宿房间</strong> ${plan.budget.rooms} 间</p></div><p class="budget-incidentals-note">杂事开销含中途打车、纪念品、零食与活动道具等零散支出，默认按前四类合计 10% 预留（最低 ¥200）。</p><div class="tips-box"><h3><i class="ti ti-info-circle"></i> 预算说明</h3><p>费用来自行程节点的结构化估算，可能随交通班次、酒店房态、门票政策和节假日价格变化。出发前请再次核对实际支付金额。</p></div>`;
+  const body = `${renderSectionHeading("BUDGET ALLOCATION / 预算分配", "预算分配")}<div class="budget-hero"><div class="budget-total"><span>全团总预算</span><strong>${currency(plan.budget.totalBudget)}</strong><small>预估费用 ${currency(plan.budget.estimatedTotal)}</small></div><div class="budget-status ${plan.budget.overBudget > 0 ? "over" : ""}">${escapeHtml(difference)}</div></div><div class="budget-layout">${renderBudgetConsumption(ringCategories, plan)}<div class="budget-entries">${categories.map((entry) => `<div class="budget-entry"><span class="budget-dot" style="background:${entry.color}"></span><span class="budget-entry-label">${entry.label}</span><strong>${categoryRange(entry.category)}</strong><small>${Math.round(Math.max(0, finiteNumber(entry.category.ratio)) * 100)}%</small></div>`).join("")}</div></div><div class="budget-notes"><p><strong>人均预算</strong> ${currency(plan.budget.perPersonBudget)}</p><p><strong>人均预计</strong> ${currency(plan.budget.perPersonEstimated)}</p><p><strong>住宿房间</strong> ${plan.budget.rooms} 间</p></div><p class="budget-incidentals-note">杂事开销含中途打车、纪念品、零食与活动道具等零散支出，默认按前四类合计 10% 预留（最低 ¥200）。</p><div class="tips-box"><h3><i class="ti ti-info-circle"></i> 预算说明</h3><p>费用来自行程节点的结构化估算，可能随交通班次、酒店房态、门票政策和节假日价格变化。出发前请再次核对实际支付金额。</p></div>`;
   return renderPage("budget-page", "budget", "预算分配", body);
 }
 
@@ -437,7 +531,7 @@ function renderDayMapPage(plan: TripPlan, day: TripDay, index: number): string {
   const navigationUrl = sanitizeUrl(day.navigationUrl);
   const lodging = hotel?.location ?? hotel?.name ?? "住宿地点待确认";
   const dailyNodeCost = day.nodes.reduce((sum, node) => sum + finiteNumber(node.estimatedCost), 0);
-  const body = `${renderSectionHeading(`DAY ${String(index + 1).padStart(2, "0")} / 左页`, "每日导航与准备")}<div class="day-heading"><div><p class="section-label">DAY ${String(index + 1).padStart(2, "0")}</p><h1>${escapeHtml(day.theme)}</h1></div><div class="day-heading-meta"><span><i class="ti ti-calendar"></i> ${escapeHtml(formatDate(day.date))}</span>${day.weather ? `<span><i class="ti ti-sun"></i> ${escapeHtml(day.weather)}</span>` : ""}</div></div><div class="day-left-top"><section class="day-map-block"><h3>高德每日地图</h3>${mapForDay(plan, day)}</section><div class="day-side-cards"><section class="info-card navigation-card"><h3><i class="ti ti-navigation"></i> 导航与二维码</h3>${renderExternalLink(navigationUrl, "打开当日导航")}${renderQrBlock(day)}</section><section class="info-card lodging-card"><h3><i class="ti ti-bed"></i> 今晚住宿</h3><strong>${escapeHtml(lodging)}</strong><p>${hotel ? escapeHtml(hotel.startTime ? `${hotel.startTime} 起可安排入住` : "按住宿节点办理入住") : "请在出发前确认房型和入住时间。"}</p></section><section class="info-card day-budget-card"><h3><i class="ti ti-coin"></i> 当日预算</h3><strong>${currency(day.estimatedCost)}</strong><p>时间轴节点费用合计 ${currency(dailyNodeCost)}</p></section></div></div><section class="radar-section"><div class="radar-heading"><div><p class="section-label">DAILY BALANCE / 当日负荷</p><h3>当日综合雷达</h3></div><span><i class="ti ti-chart-radar"></i> 五项关注度</span></div>${renderRadar(day.radar)}</section>`;
+  const body = `${renderSectionHeading(`DAY ${String(index + 1).padStart(2, "0")} / 左页`, "每日导航与准备")}<div class="day-heading"><div><p class="section-label">DAY ${String(index + 1).padStart(2, "0")}</p><h1>${escapeHtml(day.theme)}</h1></div><div class="day-heading-meta"><span><i class="ti ti-calendar"></i> ${escapeHtml(formatDate(day.date))}</span>${day.weather ? `<span><i class="ti ti-sun"></i> ${escapeHtml(day.weather)}</span>` : ""}</div></div><div class="day-left-top"><section class="day-map-block"><h3>高德每日地图</h3>${mapForDay(plan, day)}</section><div class="day-side-cards"><section class="info-card navigation-card"><h3><i class="ti ti-navigation"></i> 导航与二维码</h3>${renderExternalLink(navigationUrl, "打开当日导航")}${renderQrBlock(day)}</section><section class="info-card lodging-card"><h3><i class="ti ti-bed"></i> 今晚住宿</h3><strong>${escapeHtml(lodging)}</strong><p>${hotel ? escapeHtml(hotel.startTime ? `${hotel.startTime} 起可安排入住` : "按住宿节点办理入住") : "请在出发前确认房型和入住时间。"}</p></section>${renderDayBudgetCard(plan, day, dailyNodeCost)}</div></div><section class="radar-section"><div class="radar-heading"><div><p class="section-label">DAILY BALANCE / 当日负荷</p><h3>当日综合雷达</h3></div><span><i class="ti ti-chart-radar"></i> 五项关注度</span></div>${renderRadar(day.radar)}</section>`;
   return renderPage(
     "day-map-page",
     "day-left",
@@ -584,6 +678,9 @@ function renderXuxiakePage(plan: TripPlan): string {
 
 const GUIDEBOOK_CSS = `@page{size:A4;margin:0}*{box-sizing:border-box}:root{--parchment:#f5f4ed;--ivory:#faf9f5;--near-black:#141413;--terracotta:#c96442;--coral:#d97757;--route-blue:#4a7c8a;--food-amber:#b8860b;--stay-olive:#6b7c5e;--alert-rust:#a0522d;--nature-sage:#8fbc8f;--text-primary:#2d2b28;--text-secondary:#524f4a;--text-tertiary:#87867f;--border-cream:#e8e6dc;--border-warm:#d1cfc5;--font-serif:'Noto Serif SC','Source Han Serif SC',serif;--font-sans:'Noto Sans SC','Source Han Sans SC',sans-serif;--font-mono:'JetBrains Mono','SF Mono','Consolas',monospace}html{background:#ded9cf}body{margin:0;color:var(--text-primary);background:var(--parchment);font-family:var(--font-sans);font-size:15px;line-height:1.7}.page{position:relative;display:flex;flex-direction:column;width:210mm;min-height:297mm;margin:0 auto 18px;padding:18mm 17mm 20mm;background-color:var(--parchment);background-image:repeating-linear-gradient(120deg,transparent,transparent 2px,rgba(139,119,90,.015) 2px,rgba(139,119,90,.015) 3px),radial-gradient(ellipse at 20% 50%,rgba(201,100,66,.03) 0%,transparent 70%),radial-gradient(ellipse at 80% 20%,rgba(184,134,11,.02) 0%,transparent 60%);box-shadow:0 12px 35px rgba(45,43,40,.13);break-after:page}.page:last-child{break-after:auto}.page-content{flex:1}.page-footer{display:flex;justify-content:space-between;gap:16px;margin-top:24px;padding-top:10px;border-top:1px solid var(--border-warm);color:var(--text-tertiary);font-family:var(--font-mono);font-size:10px;letter-spacing:.03em}.section-label,.section-heading p,.eyebrow{color:var(--terracotta);font-family:var(--font-mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase}.section-heading{margin-bottom:24px}.section-heading h2{margin:4px 0 0;font-family:var(--font-serif);font-size:30px;line-height:1.25;color:var(--near-black)}h1,h2,h3,h4{font-family:var(--font-serif);line-height:1.3}h1{font-size:34px}em{color:var(--alert-rust);font-style:normal;font-weight:700}p{margin:0 0 12px}.cover{background-color:#f3efe5}.cover .page-content{display:flex;align-items:center;justify-content:center}.cover-frame{position:relative;width:100%;padding:52px 42px;border:1px solid rgba(201,100,66,.42);text-align:center;isolation:isolate}.cover-frame::before{content:"";position:absolute;inset:12px;border:1px solid rgba(201,100,66,.24);pointer-events:none;z-index:-1}.compass-rose{margin:18px auto;color:var(--text-tertiary)}.cover-title{margin:18px 0 12px;font-size:48px;color:var(--near-black)}.cover-subtitle,.cover-route,.cover-footnote{color:var(--text-secondary)}.cover-subtitle{font-family:var(--font-mono);font-size:13px}.cover-route{margin-top:16px;color:var(--terracotta);font-family:var(--font-serif);font-size:20px}.cover-tagline{max-width:440px;margin:18px auto;color:var(--text-secondary)}.cover-meta{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:24px}.cover-meta span,.chip,.route-summary span,.day-heading-meta span,.segment-meta span,.timeline-meta span{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border:1px solid var(--border-cream);border-radius:999px;background:rgba(250,249,245,.72);color:var(--text-secondary);font-family:var(--font-mono);font-size:11px}.divider{display:flex;justify-content:center;margin:28px 0;color:var(--border-warm)}.overview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.overview-item{padding:18px;border:1px solid var(--border-cream);border-radius:12px;background:var(--ivory);box-shadow:0 0 0 1px rgba(209,207,197,.35)}.overview-item i{color:var(--terracotta);font-size:20px}.overview-item span{display:block;margin-top:8px;color:var(--text-tertiary);font-size:12px}.overview-item strong{display:block;margin-top:3px;font-family:var(--font-serif);font-size:19px}.overview-block,.route-block,.timeline-section,.source-card,.reflection-card{margin-top:24px}.overview-block h3,.route-block h3,.timeline-section h3,.source-card h3,.reflection-card h3{margin:0 0 10px;color:var(--near-black);font-size:20px}.highlight-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}.highlight-list li{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-left:3px solid var(--food-amber);background:rgba(250,249,245,.78)}.highlight-list i{color:var(--food-amber);margin-top:3px}.chip-row{display:flex;flex-wrap:wrap;gap:8px}.route-page .map-figure{height:220px}.route-page .map-figure img{height:100%;object-fit:cover}.route-summary{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}.map-figure,.schematic-map,.map-placeholder{margin:0 0 18px;border:1px solid var(--border-cream);border-radius:14px;background:var(--ivory);overflow:hidden}.map-figure img,.schematic-map svg{display:block;width:100%;height:auto}.map-placeholder{display:flex;align-items:center;justify-content:center;gap:10px;min-height:180px;padding:24px;color:var(--text-tertiary)}.route-block{border-top:1px solid var(--border-warm);padding-top:18px}.route-block-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.route-line-legend{font-family:var(--font-mono);font-size:11px}.route-line-legend.outbound{color:var(--route-blue)}.route-line-legend.return{color:var(--terracotta)}.segment-list{display:grid;gap:10px}.segment-card{display:grid;grid-template-columns:38px minmax(0,1fr);gap:12px;padding:14px;border:1px solid var(--border-cream);border-radius:10px;background:rgba(250,249,245,.8)}.segment-index{color:var(--terracotta);font-family:var(--font-mono);font-size:12px}.segment-route{margin:0 0 8px;font-family:var(--font-serif);font-size:17px;color:var(--near-black)}.segment-meta,.timeline-meta{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}.action-link{display:inline-flex;align-items:center;gap:5px;color:var(--route-blue);font-family:var(--font-mono);font-size:11px;text-decoration:none}.link-disabled{display:inline-flex;align-items:center;gap:5px;color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px}.budget-hero{display:flex;align-items:stretch;gap:12px;margin-bottom:24px}.budget-total{flex:1;padding:18px 20px;border-radius:12px;background:var(--near-black);color:var(--ivory)}.budget-total span,.budget-total small{display:block;color:#d8d2c8}.budget-total strong{display:block;margin:4px 0;font-family:var(--font-serif);font-size:30px}.budget-status{display:flex;align-items:center;justify-content:center;min-width:130px;padding:12px;border:1px solid rgba(95,143,117,.35);border-radius:12px;background:#e8f1eb;color:#35634d;font-weight:700}.budget-status.over{border-color:rgba(169,74,50,.35);background:#f7e8e1;color:#a54a32}.budget-layout{display:grid;grid-template-columns:190px minmax(0,1fr);gap:22px;align-items:center}.budget-donut{display:grid;place-items:center;width:180px;height:180px;border-radius:50%;box-shadow:inset 0 0 0 25px var(--parchment),0 8px 20px rgba(45,43,40,.12)}.budget-donut div{display:grid;place-items:center;width:96px;height:96px;border-radius:50%;background:var(--ivory);text-align:center}.budget-donut span{color:var(--text-tertiary);font-size:11px}.budget-donut strong{font-family:var(--font-serif);font-size:18px}.budget-entries{display:grid;gap:8px}.budget-entry{display:grid;grid-template-columns:12px minmax(0,1fr) auto 40px;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-cream)}.budget-entry-label{color:var(--text-secondary)}.budget-entry small{color:var(--text-tertiary);text-align:right}.budget-dot{width:10px;height:10px;border-radius:50%}.budget-notes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:20px}.budget-notes p{margin:0;padding:12px;border:1px solid var(--border-cream);border-radius:10px;background:rgba(250,249,245,.72)}.tips-box{margin-top:20px;padding:16px 18px;border-left:4px solid var(--alert-rust);background:rgba(160,82,45,.08)}.tips-box h3{margin-top:0}.tips-box ul{margin:0;padding-left:20px}.day-map-page{padding:15mm 16mm 14mm}.day-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:18px}.day-heading h1{margin:2px 0 0;font-size:29px}.day-heading-meta{display:flex;flex-wrap:wrap;gap:6px}.day-heading.compact{align-items:center}.day-map-block h3,.info-card h3,.radar-heading h3{margin:0 0 10px;font-size:18px}.day-left-top{display:block}.day-side-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}.day-map-block .map-figure{height:170px;margin-bottom:0}.day-map-block .map-figure img{height:100%;object-fit:cover}.day-map-block .map-placeholder{min-height:170px}.info-card{padding:15px;border:1px solid var(--border-cream);border-radius:11px;background:rgba(250,249,245,.82);break-inside:avoid}.info-card>.action-link{margin-bottom:8px}.info-card strong{display:block;margin:4px 0;font-family:var(--font-serif);font-size:18px}.info-card p{color:var(--text-secondary);font-size:12px}.day-budget-card strong{font-size:25px;color:var(--terracotta)}.qr-figure{display:flex;align-items:center;gap:10px;margin:10px 0 0}.qr-figure img{width:74px;height:74px;object-fit:contain;border:1px solid var(--border-warm);border-radius:6px;background:white}.qr-figure figcaption{color:var(--text-tertiary);font-size:11px}.qr-placeholder{display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px;border:1px dashed var(--border-warm);border-radius:8px;color:var(--text-tertiary);font-size:11px}.qr-placeholder i{font-size:24px}.qr-placeholder small{display:block}.radar-section{margin-top:12px;padding-top:12px;border-top:1px solid var(--border-warm)}.radar-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}.radar-heading span{color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px}.radar-wrap{position:relative;max-width:300px;margin:0 auto}.radar-scale{position:absolute;right:8px;top:4px;color:var(--text-tertiary);font-family:var(--font-mono);font-size:9px}.radar-chart{display:block;width:100%;height:auto}.radar-label{fill:var(--text-secondary);font-family:var(--font-mono);font-size:11px}.radar-note{margin-top:-8px;color:var(--text-tertiary);font-size:11px;text-align:center}.timeline{position:relative;display:grid;gap:14px;margin:0;padding:0;list-style:none}.timeline::before{content:"";position:absolute;top:12px;bottom:12px;left:61px;width:2px;background:var(--border-warm)}.timeline-item{position:relative;display:grid;grid-template-columns:50px 20px minmax(0,1fr);gap:7px;align-items:start}.timeline-time{padding-top:11px;color:var(--text-tertiary);font-family:var(--font-mono);font-size:10px;text-align:right}.timeline-marker{position:relative;z-index:1;width:12px;height:12px;margin:13px auto 0;border:3px solid var(--parchment);border-radius:50%;background:var(--terracotta);box-shadow:0 0 0 2px var(--border-warm)}.timeline-card{padding:13px 14px;border:1px solid var(--border-cream);border-radius:10px;background:var(--ivory);break-inside:avoid}.timeline-card-title{display:flex;align-items:flex-start;gap:8px;margin-bottom:8px}.timeline-card-title strong{font-family:var(--font-serif);font-size:17px}.node-type{padding:2px 6px;border-radius:4px;background:#eee6da;color:var(--terracotta);font-family:var(--font-mono);font-size:9px;white-space:nowrap}.timeline-tip{margin:8px 0;color:var(--text-secondary);font-size:12px}.timeline-tip i{color:var(--food-amber)}.day-summary{margin-top:28px;padding-top:22px;border-top:2px solid var(--border-warm)}.day-summary>h3{margin:0 0 14px;font-size:26px}.summary-purpose{padding:14px 16px;border-left:4px solid var(--route-blue);background:rgba(74,124,138,.08)}.summary-purpose span{color:var(--route-blue);font-family:var(--font-mono);font-size:11px}.summary-purpose p{margin:4px 0 0}.summary-focus{margin-top:18px}.summary-focus h4,.summary-cautions h4{margin:0 0 8px;font-size:18px}.summary-focus ol{display:grid;gap:10px;margin:0;padding:0;list-style:none}.summary-focus-item{display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;padding:10px;border:1px solid var(--border-cream);border-radius:9px;background:rgba(250,249,245,.7);break-inside:avoid}.summary-number{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--terracotta);color:var(--ivory);font-family:var(--font-mono);font-weight:700}.summary-focus-item strong{font-family:var(--font-serif);font-size:16px}.summary-focus-item p{margin:4px 0 0;color:var(--text-secondary);font-size:12px}.summary-cautions{margin-top:16px;padding:12px 14px;border-left:4px solid var(--alert-rust);background:rgba(160,82,45,.07)}.summary-cautions ul{margin:0;padding-left:18px}.summary-cautions li+li{margin-top:5px}.violation-notice{margin:0 0 18px;padding:14px 16px;border-left:4px solid var(--alert-rust);background:rgba(160,82,45,.08)}.violation-notice-heading{display:flex;align-items:center;gap:8px;color:var(--alert-rust);font-family:var(--font-serif);font-size:16px;font-weight:700}.violation-notice-heading i{font-size:18px}.violation-notice ul{margin:8px 0 0;padding-left:18px}.violation-notice li+li{margin-top:4px}.violation-notice-foot{margin:8px 0 0;color:var(--text-secondary);font-size:12px}.source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.source-card{margin:0;padding:16px;border:1px solid var(--border-cream);border-radius:11px;background:rgba(250,249,245,.82);break-inside:avoid}.source-card h3 i{color:var(--terracotta)}.source-card p{color:var(--text-secondary);font-size:13px}.source-quote{margin:0;padding:10px 12px;border-left:3px solid var(--terracotta);background:rgba(201,100,66,.06)}.source-quote p{font-family:var(--font-serif);font-size:15px}.source-quote cite,.closing-quote cite{display:block;color:var(--text-tertiary);font-size:11px}.closing-map{margin-bottom:10px}.route-legend{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.route-legend span{padding:5px 9px;border:1px solid var(--border-cream);border-radius:999px;font-size:11px}.route-legend .outbound{color:var(--route-blue)}.route-legend .return{color:var(--terracotta)}.reflection-card{padding:18px;border:1px solid var(--border-cream);border-radius:12px;background:rgba(250,249,245,.82)}.reflection-card>p{font-family:var(--font-serif);font-size:18px}.reflection-stats{display:flex;flex-wrap:wrap;gap:8px;color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px}.closing-quote{margin:22px 0 0;padding:18px;border-left:4px solid var(--terracotta);background:rgba(201,100,66,.06)}.closing-quote p{margin:0 0 8px;font-family:var(--font-serif);font-size:20px}.xuxiake-page{background-color:#f2ede2}.xuxiake-page .page-content{display:flex;align-items:center;justify-content:center}.xuxiake-frame{max-width:560px;text-align:center}.xuxiake-frame h1{margin:18px 0 10px;font-size:42px}.xuxiake-theme{font-family:var(--font-serif);font-size:24px;color:var(--terracotta)}.xuxiake-rule{width:160px;height:1px;margin:22px auto;background:var(--terracotta)}.xuxiake-message{font-family:var(--font-serif);font-size:18px}.xuxiake-route{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:28px;font-family:var(--font-serif);font-size:18px}.xuxiake-date{margin-top:10px;color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px}.empty-copy{color:var(--text-tertiary);font-size:13px}@media print{html{background:white}body{background:white}.page{width:210mm;min-height:297mm;margin:0;box-shadow:none}.page,.map-figure,.qr-figure{-webkit-print-color-adjust:exact;print-color-adjust:exact}}.weather-list{display:grid;gap:8px;margin:0;padding:0;list-style:none}.weather-list li{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid var(--border-cream);border-radius:9px;background:rgba(250,249,245,.78)}.weather-list span{color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px}.weather-list strong{font-family:var(--font-serif);font-size:15px}}`;
 
+// 正式路书新增图表与图例样式；全部使用 HTML/CSS/SVG，避免 PDF 依赖外部图表库。
+const GUIDEBOOK_EXTRA_CSS = `.budget-layout{grid-template-columns:250px minmax(0,1fr)!important}.budget-consumption{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;align-items:center;min-width:0}.budget-consumption-donut{display:grid;place-items:center;width:150px;height:150px;border-radius:50%;box-shadow:inset 0 0 0 23px var(--parchment),0 8px 20px rgba(45,43,40,.12)}.budget-consumption-donut>div{display:grid;place-items:center;width:104px;height:104px;border-radius:50%;background:var(--parchment);text-align:center}.budget-consumption-donut strong{font-family:var(--font-serif);font-size:25px;line-height:1}.budget-consumption-donut span{color:var(--text-tertiary);font-size:10px}.budget-consumption-copy h3{margin:0 0 6px;font-size:13px}.budget-consumption-copy p{display:flex;justify-content:space-between;gap:8px;margin:4px 0;font-size:11px}.budget-consumption-copy p span{color:var(--text-tertiary)}.budget-consumption-copy p strong{font-family:var(--font-mono);font-size:11px;text-align:right}.budget-consumption-copy p.over strong{color:var(--alert-rust)}.route-stop-legend{display:flex;flex-wrap:wrap;gap:8px;margin:-4px 0 16px}.route-stop-item{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid var(--border-cream);border-radius:999px;background:rgba(250,249,245,.78);font-size:11px}.route-stop-item b{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--route-blue);color:var(--ivory);font-family:var(--font-mono);font-size:10px}.route-stop-item small{color:var(--text-tertiary);font-size:10px}.day-budget-card{display:grid;grid-template-columns:78px minmax(0,1fr);gap:10px;align-items:center}.day-budget-ring{display:grid;place-items:center;width:74px;height:74px;border-radius:50%;box-shadow:inset 0 0 0 11px var(--parchment)}.day-budget-ring>div{display:grid;place-items:center;width:50px;height:50px;border-radius:50%;background:var(--parchment);text-align:center}.day-budget-ring strong{font-family:var(--font-serif);font-size:14px;line-height:1}.day-budget-ring span{color:var(--text-tertiary);font-size:8px}.day-budget-copy{min-width:0}.day-budget-copy h3{white-space:nowrap}.day-budget-copy strong{font-size:20px}.day-budget-copy small{display:block;margin-top:4px;color:var(--text-tertiary);font-size:9px}.budget-consumption-donut,.day-budget-ring{-webkit-print-color-adjust:exact;print-color-adjust:exact}`;
+
 export type GuidebookPageSpec = {
   id: string;
   label: string;
@@ -636,8 +733,8 @@ export function renderGuidebookHead(
 ): string {
   const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>${escapeHtml(plan.meta.title)}</title>`;
   return options.forPreview
-    ? `${head}<style>${GUIDEBOOK_CSS}</style><style>${PREVIEW_FALLBACK_CSS}</style>`
-    : `${head}${GUIDEBOOK_FONT_LINKS}<style>${GUIDEBOOK_CSS}</style>`;
+    ? `${head}<style>${GUIDEBOOK_CSS}</style><style>${GUIDEBOOK_EXTRA_CSS}</style><style>${PREVIEW_FALLBACK_CSS}</style>`
+    : `${head}${GUIDEBOOK_FONT_LINKS}<style>${GUIDEBOOK_CSS}</style><style>${GUIDEBOOK_EXTRA_CSS}</style>`;
 }
 
 export function renderGuidebookPages(

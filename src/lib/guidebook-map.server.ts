@@ -23,6 +23,9 @@ const ENRICHMENT_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_ENRICHMENT_CACHE_ENTRIES = 200;
 const MAX_ROUTE_MAP_POINTS = 40;
 const MAX_DAY_MAP_POINTS = 24;
+const STATIC_MAP_WIDTH = 750;
+const STATIC_MAP_HEIGHT = 500;
+const STATIC_MAP_PADDING_RATIO = 0.22;
 const MAP_OPERATION_CONCURRENCY = 6;
 const SENSITIVE_QUERY_KEYS = new Set([
   "key",
@@ -696,16 +699,54 @@ async function enrichSegment(
     path,
   };
 }
-// 按路线经度/纬度跨度估算静态地图缩放级别，确保全程路线尽量完整落入画布。
+function mercatorY(latitude: number): number {
+  const clamped = Math.max(-85, Math.min(85, latitude));
+  return Math.log(Math.tan(Math.PI / 4 + (clamped * Math.PI) / 360));
+}
+
+// 按路线经纬度跨度估算静态地图缩放级别，并额外留出一级边距，避免首末标记贴边被裁切。
 function fitMapZoom(points: readonly AmapCoordinate[]): number {
-  if (points.length < 2) return 10;
+  if (points.length < 1) return 10;
   const longitudes = points.map(([longitude]) => longitude);
   const latitudes = points.map(([, latitude]) => latitude);
   const longitudeSpan = Math.max(...longitudes) - Math.min(...longitudes);
-  const latitudeSpan = Math.max(...latitudes) - Math.min(...latitudes);
-  const span = Math.max(longitudeSpan, latitudeSpan);
-  if (!Number.isFinite(span) || span <= 0) return 10;
-  return Math.max(3, Math.min(10, Math.floor(Math.log2(360 / span)) - 1));
+  const ySpan = Math.max(...latitudes.map(mercatorY)) - Math.min(...latitudes.map(mercatorY));
+  if (!Number.isFinite(longitudeSpan) || !Number.isFinite(ySpan)) return 10;
+  if (longitudeSpan <= 0 && ySpan <= 0) return 10;
+
+  const usableWidth = STATIC_MAP_WIDTH * (1 - STATIC_MAP_PADDING_RATIO * 2);
+  const usableHeight = STATIC_MAP_HEIGHT * (1 - STATIC_MAP_PADDING_RATIO * 2);
+  const longitudeZoom =
+    longitudeSpan > 0
+      ? Math.log2(usableWidth / ((256 * longitudeSpan) / 360))
+      : Number.POSITIVE_INFINITY;
+  const latitudeZoom =
+    ySpan > 0 ? Math.log2(usableHeight / (256 * ySpan)) : Number.POSITIVE_INFINITY;
+  const fitted = Math.floor(Math.min(longitudeZoom, latitudeZoom)) - 1;
+  const span = Math.max(longitudeSpan, ySpan * (180 / Math.PI));
+  if (!Number.isFinite(fitted)) return 10;
+  // 全国级长距离固定在较低缩放级别，确保北京、上海、大理等首末节点同时可见。
+  if (span >= 15) return 2;
+  return Math.max(3, Math.min(10, fitted));
+}
+
+function withSequentialRouteMarkers(
+  url: string,
+  stops: readonly { name: string; coordinate?: AmapCoordinate }[],
+): string {
+  if (stops.length === 0) return url;
+  const markers = stops
+    .map((stop, index) => {
+      if (!stop.coordinate) return null;
+      const label = index < 26 ? String.fromCharCode(65 + index) : String(index + 1);
+      return `mid,0x4A7C8A,${label}:${stop.coordinate[0]},${stop.coordinate[1]}`;
+    })
+    .filter((marker): marker is string => marker !== null);
+  if (markers.length === 0) return url;
+
+  const parsed = new URL(url);
+  parsed.searchParams.set("markers", markers.join("|"));
+  return parsed.toString();
 }
 function buildStaticMapUrlSafely(
   input: Parameters<typeof buildStaticMapUrl>[0],
@@ -754,7 +795,12 @@ async function enrichRoute(
 
   const mapOutbound = outboundPath.length > 0 ? outboundPath : plan.route.outbound;
   const mapReturnPath = returnPath.length > 0 ? returnPath : plan.route.returnPath;
-  const staticMapUrl =
+  const routeStops = new Map<string, AmapCoordinate>();
+  for (const name of [plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination]) {
+    const coordinate = await resolver.resolveAddress(name);
+    if (coordinate) routeStops.set(cleanText(name), coordinate);
+  }
+  const rawStaticMapUrl =
     mapOutbound.length > 0
       ? buildStaticMapUrlSafely(
           {
@@ -773,12 +819,12 @@ async function enrichRoute(
           report,
         )
       : sanitizePublicUrl(plan.route.staticMapUrl);
-
-  const routeStops = new Map<string, AmapCoordinate>();
-  for (const name of [plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination]) {
-    const coordinate = await resolver.resolveAddress(name);
-    if (coordinate) routeStops.set(cleanText(name), coordinate);
-  }
+  const routeStopMarkers = [plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination].map(
+    (name) => ({ name, coordinate: routeStops.get(cleanText(name)) }),
+  );
+  const staticMapUrl = rawStaticMapUrl
+    ? withSequentialRouteMarkers(rawStaticMapUrl, routeStopMarkers)
+    : undefined;
 
   return {
     route: {
@@ -805,6 +851,30 @@ function cityForNode(plan: TripPlan, node: TripTimelineNode): string {
   if (cityMatch?.[1]) return cityMatch[1];
   return plan.meta.destination;
 }
+
+function isIntercityTransportNode(node: TripTimelineNode): boolean {
+  if (node.type !== "transport") return false;
+  const mode = node.transportMode;
+  if (mode === "flight" || mode === "train" || mode === "bus" || mode === "ship") return true;
+  return mode === "drive" && (node.transportMinutes ?? 0) >= 180;
+}
+
+function intercityRoutePath(
+  nodes: TripTimelineNode[],
+  plan: TripPlan,
+  route: TripRoute,
+): AmapCoordinate[] {
+  const stops = [plan.meta.origin, ...plan.meta.waypoints, plan.meta.destination].filter(Boolean);
+  const firstTransport = nodes.find((node) => isIntercityTransportNode(node));
+  if (!firstTransport) return [];
+  const text = `${firstTransport.name} ${firstTransport.location ?? ""}`;
+  const mentionsStop = stops.some((stop) => text.includes(stop));
+  if (!mentionsStop) return [];
+
+  // 城际交通日使用当天首段交通的起终点语义；返程日优先使用返程 path，避免把去程回头路混入当天地图。
+  return text.trimStart().startsWith(plan.meta.destination) ? route.returnPath : route.outbound;
+}
+
 function dayMapPoints(
   nodes: TripTimelineNode[],
   start: AmapCoordinate | undefined,
@@ -813,7 +883,7 @@ function dayMapPoints(
   route: TripRoute,
   routeStops: Map<string, AmapCoordinate>,
 ): AmapCoordinate[] {
-  const points = uniqueCoordinates([
+  const basePoints = uniqueCoordinates([
     ...(start ? [start] : []),
     ...nodes.flatMap((node) => (node.coordinates ? [node.coordinates] : [])),
     ...(end ? [end] : []),
@@ -821,12 +891,23 @@ function dayMapPoints(
   const destination = routeStops.get(plan.meta.destination);
   const origin = routeStops.get(plan.meta.origin);
 
-  if (points.length < 2 && destination) points.push(destination);
-  if (points.length < 2 && origin) points.push(origin);
-  if (points.length < 2) points.push(...route.outbound.slice(0, 2));
-  if (points.length < 2) points.push(...route.returnPath.slice(-2));
+  const routePath = intercityRoutePath(nodes, plan, route);
+  if (routePath.length > 0) {
+    const points = uniqueCoordinates([
+      ...(start ? [start] : []),
+      ...nodes.flatMap((node) => (node.coordinates ? [node.coordinates] : [])),
+      ...routePath,
+    ]);
+    if (end && !points.some((point) => sameCoordinate(point, end))) points.push(end);
+    return points;
+  }
 
-  return uniqueCoordinates(points);
+  if (basePoints.length < 2 && destination) basePoints.push(destination);
+  if (basePoints.length < 2 && origin) basePoints.push(origin);
+  if (basePoints.length < 2) basePoints.push(...route.outbound.slice(0, 2));
+  if (basePoints.length < 2) basePoints.push(...route.returnPath.slice(-2));
+
+  return uniqueCoordinates(basePoints);
 }
 
 function buildQrCodeUrl(navigationUrl: string | undefined): string | undefined {

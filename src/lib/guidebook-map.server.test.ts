@@ -154,7 +154,9 @@ function fixturePlan(): TripPlan {
 
 function coords(): Record<string, AmapCoordinate> {
   return {
+    北京: [116.4074, 39.9042],
     上海: [121.4737, 31.2304],
+    大理洱海: [100.2676, 25.6065],
     杭州: [120.1551, 30.2741],
     黄山: [118.3376, 29.7147],
     西湖: [120.1379, 30.2458],
@@ -648,8 +650,101 @@ test("propagates upstream cancellation through preview and PDF preparation", asy
           return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
         },
       }),
-    /取消/
+    /取消/,
   );
   assert.equal(rendered, false);
   assert.equal(counts().routeCalls, 0);
+});
+
+test("fits nationwide route maps with complete stop markers and daily padding", async () => {
+  const plan = fixturePlan();
+  plan.meta = {
+    ...plan.meta,
+    origin: "北京",
+    waypoints: ["上海"],
+    destination: "大理洱海",
+    days: 1,
+  };
+  plan.route.outboundSegments = [
+    {
+      from: "北京",
+      to: "上海",
+      mode: "flight",
+      distanceKm: 1_100,
+      durationMinutes: 180,
+      navigation: "",
+    },
+    {
+      from: "上海",
+      to: "大理洱海",
+      mode: "flight",
+      distanceKm: 2_160,
+      durationMinutes: 210,
+      navigation: "",
+    },
+  ];
+  plan.route.returnSegments = [
+    {
+      from: "大理洱海",
+      to: "北京",
+      mode: "flight",
+      distanceKm: 2_180,
+      durationMinutes: 220,
+      navigation: "",
+    },
+  ];
+  plan.days = [
+    {
+      ...plan.days[0]!,
+      date: "2026-09-20",
+      mapUrl: undefined,
+      nodes: [
+        {
+          ...plan.days[0]!.nodes[0]!,
+          startTime: "08:00",
+          endTime: "11:00",
+          timeLabel: "08:00–11:00",
+          type: "transport",
+          name: "北京飞往上海",
+          location: "北京",
+          transportMode: "flight",
+          transportMinutes: 180,
+          estimatedCost: 1600,
+          navigation: null,
+        },
+        {
+          ...plan.days[0]!.nodes[0]!,
+          startTime: "13:00",
+          endTime: "16:30",
+          timeLabel: "13:00–16:30",
+          type: "transport",
+          name: "上海飞往大理洱海",
+          location: "上海",
+          transportMode: "flight",
+          transportMinutes: 210,
+          estimatedCost: 3200,
+          navigation: null,
+        },
+      ],
+    },
+  ];
+
+  const { client } = fakeAmapClient();
+  const enriched = await enrichGuidebookPlanWithMaps(plan, { amapClient: client });
+  const routeUrl = new URL(enriched.route.staticMapUrl ?? "");
+  const dayUrl = new URL(enriched.days[0]?.mapUrl ?? "");
+  const routeMarkers = decodeURIComponent(routeUrl.searchParams.get("markers") ?? "");
+  const dayMarkers = decodeURIComponent(dayUrl.searchParams.get("markers") ?? "");
+
+  assert.ok(Number(routeUrl.searchParams.get("zoom")) <= 2, "全国长距离路线必须保留足够边距");
+  assert.match(routeMarkers, /A:116\.4074,39\.9042/);
+  assert.match(routeMarkers, /B:121\.4737,31\.2304/);
+  assert.match(routeMarkers, /C:100\.2676,25\.6065/);
+  assert.match(dayMarkers, /A:116\.4074,39\.9042/);
+  assert.match(dayMarkers, /B:100\.2676,25\.6065/);
+  assert.match(
+    decodeURIComponent(dayUrl.searchParams.get("paths") ?? ""),
+    /121\.4737,31\.2304/,
+    "跨城当日地图必须包含途经地坐标，不能只画起终点直线",
+  );
 });

@@ -364,6 +364,46 @@ test("renders only sourced daily history and never promotes node tips", () => {
   assert.doesNotMatch(summaryFocus, /步道平缓/);
 });
 
+test("renders total and daily budget consumption rings with caps", () => {
+  const html = renderGuidebookHtml(fixturePlan);
+  const budgetPage = pageFragments(html, "budget")[0] ?? "";
+  const dayPages = pageFragments(html, "day-left");
+
+  assert.match(budgetPage, /data-budget-ring="total"/);
+  assert.match(budgetPage, /data-budget-spent="6480"/);
+  assert.match(budgetPage, /data-budget-cap="9000"/);
+  assert.match(budgetPage, /预算消耗/);
+  assert.match(budgetPage, /conic-gradient/);
+  assert.equal(dayPages.length, 2);
+
+  for (const page of dayPages) {
+    assert.match(page, /data-budget-ring="day"/);
+    const spent = Number(/data-budget-spent="(\d+)"/.exec(page)?.[1]);
+    const cap = Number(/data-budget-cap="(\d+)"/.exec(page)?.[1]);
+    assert.ok(Number.isFinite(spent) && Number.isFinite(cap));
+    assert.ok(cap > 0, "每日预算必须有可计算的上限");
+    assert.ok(spent <= cap, `单日费用 ${spent} 不应超过当日上限 ${cap}`);
+  }
+});
+
+test("renders sequential A/B/C route stop legend on the route page", () => {
+  const html = renderGuidebookHtml({
+    ...fixturePlan,
+    meta: {
+      ...fixturePlan.meta,
+      origin: "北京",
+      waypoints: ["上海"],
+      destination: "大理洱海",
+    },
+  });
+  const routePage = pageFragments(html, "route")[0] ?? "";
+
+  assert.match(routePage, /route-stop-legend/);
+  assert.match(routePage, /A[\s\S]*北京/);
+  assert.match(routePage, /B[\s\S]*上海/);
+  assert.match(routePage, /C[\s\S]*大理洱海/);
+});
+
 test("总览页展示未满足约束清单", () => {
   const html = renderGuidebookHtml({
     ...fixturePlan,
