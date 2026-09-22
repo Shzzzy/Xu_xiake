@@ -704,6 +704,54 @@ function expandTransportNodes(
 
   return [...expanded, ...fixedNodes];
 }
+/** 两点大圆距离（公里）：用于判断候选是否在当天所在地附近。 */
+function coordinateDistanceKm(from: [number, number], to: [number, number]): number {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const lat1 = toRadians(from[1]);
+  const lat2 = toRadians(to[1]);
+  const deltaLat = lat2 - lat1;
+  const deltaLon = toRadians(to[0] - from[0]);
+  const a =
+    Math.sin(deltaLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** 当天所在地允许的半径：超出视为异地景点。 */
+const DAY_PLACE_RADIUS_KM = 200;
+
+/** 从候选池里找到含该地名的候选坐标，作为当天所在地的锚点。 */
+function anchorForPlace(
+  candidates: readonly PlannerDestinationCandidate[],
+  place: string,
+): [number, number] | undefined {
+  return candidates.find((candidate) => candidateBelongsToPlace(candidate, place))?.location;
+}
+
+/**
+ * 判断候选是否属于目标区域。行政前缀可能写成「黄山市」或「黄山」，
+ * 比较前统一去掉「市」后缀，避免同城景点被误判成异地。
+ */
+function sameRegionPrefix(areaKey: string, regionPrefix: string): boolean {
+  if (!regionPrefix) return false;
+  const normalize = (value: string) => value.trim().replace(/市$/u, "");
+  const area = normalize(areaKey.split("-")[0] ?? "");
+  const region = normalize(regionPrefix);
+  if (!area || !region) return false;
+  return area.startsWith(region) || region.startsWith(area);
+}
+
+/**
+ * 从候选池反推某个地点归属的区域前缀（如「那拉提草原」→「伊犁哈萨克」）。
+ * 用户输入常是景区名，而候选只带行政区，靠这一步才能判断同城/异地。
+ */
+function regionPrefixForPlace(
+  candidates: readonly PlannerDestinationCandidate[],
+  place: string,
+): string {
+  const matched = candidates.find((candidate) => candidateBelongsToPlace(candidate, place));
+  return matched?.areaKey?.split("-")[0]?.trim() ?? "";
+}
+
 /** 每天的所在地：移动日取最后一段交通的到达地，静止日继承上一次到达地。 */
 function resolveDayLocations(
   input: ButlerPlanInput,
@@ -779,11 +827,20 @@ function validateSelectionCoverage(
             .join(","),
       );
     }
+    // 以当天所在地的候选坐标为锚点：远离锚点的候选就是"人在伊犁却排了四川景点"。
+    const anchor = anchorForPlace(input.candidates, location);
+    const isFarFromAnchor = (candidate: PlannerDestinationCandidate) =>
+      Boolean(
+        anchor &&
+          candidate.location &&
+          coordinateDistanceKm(anchor, candidate.location) > DAY_PLACE_RADIUS_KM,
+      );
     const mismatched = dayItems.filter((item) => {
       const candidate = candidateById.get(item.candidateId);
       if (!candidate) return false;
       if (candidateBelongsToPlace(candidate, location)) return false;
-      return belongsToAnyStop(candidate);
+      if (!isFarFromAnchor(candidate)) return false;
+      return belongsToAnyStop(candidate) || Boolean(anchor);
     });
     if (mismatched.length > 0) {
       const names = mismatched
@@ -835,9 +892,12 @@ function validateSelectionCoverage(
  * 优先同区域候选以控制空间合理性；没有可替换候选时返回 null，交回调用方按原规则处理。
  */
 function repairDuplicateSelectionsLocally(
+  input: ButlerPlanInput,
+  transportByDay: Map<number, ScheduledTransportLeg[]>,
   candidates: readonly PlannerDestinationCandidate[],
   selection: AttractionSelection[],
 ): AttractionSelection[] | null {
+  const locations = resolveDayLocations(input, transportByDay);
   const areaById = new Map(candidates.map((candidate) => [candidate.id, candidate.areaKey ?? ""]));
   const pool = candidates.map((candidate) => candidate.id);
   const usedIds = new Set<string>();
@@ -845,6 +905,8 @@ function repairDuplicateSelectionsLocally(
     left.day === right.day ? left.sequence - right.sequence : left.day - right.day,
   );
   let replaced = false;
+  // 候选总数不足以覆盖全部景点槽位时，重复不可避免，这时保留重复而不是删空当天的景点。
+  const canReuseCandidates = candidates.length < ordered.length;
   const result: AttractionSelection[] = [];
   for (const item of ordered) {
     if (!usedIds.has(item.candidateId)) {
@@ -853,12 +915,21 @@ function repairDuplicateSelectionsLocally(
       continue;
     }
     const itemArea = areaById.get(item.candidateId)?.split("-")[0] ?? "";
+    const locationRegion = regionPrefixForPlace(candidates, locations.get(item.day) ?? "");
     const unused = pool.filter((id) => !usedIds.has(id));
+    // 同区域优先；再不行就按当天所在地的区域找。绝不跨区域补位，
+    // 否则会把四川的景点塞进伊犁那一天；实在没有就删掉当天的重复项。
     const replacement =
-      unused.find((id) => (areaById.get(id)?.split("-")[0] ?? "") === itemArea) ?? unused[0];
-    if (!replacement) return null;
-    usedIds.add(replacement);
+      unused.find((id) => (areaById.get(id)?.split("-")[0] ?? "") === itemArea) ??
+      (locationRegion
+        ? unused.find((id) => sameRegionPrefix(areaById.get(id) ?? "", locationRegion))
+        : undefined);
     replaced = true;
+    if (!replacement) {
+      if (canReuseCandidates) result.push(item);
+      continue;
+    }
+    usedIds.add(replacement);
     result.push({ ...item, candidateId: replacement });
   }
   return replaced ? result : null;
@@ -885,10 +956,12 @@ function repairSelectionLocations(
   for (const item of selection) {
     const candidate = byId.get(item.candidateId);
     const location = locations.get(item.day) ?? "";
+    const anchor = anchorForPlace(candidates, location);
     const isForeign =
       candidate !== undefined &&
       !candidateBelongsToPlace(candidate, location) &&
-      tripStops.some((stop) => candidateBelongsToPlace(candidate, stop));
+      Boolean(anchor && candidate.location) &&
+      coordinateDistanceKm(anchor!, candidate.location!) > DAY_PLACE_RADIUS_KM;
     if (!isForeign) {
       result.push(item);
       continue;
@@ -1310,7 +1383,12 @@ export async function planWithButler(
               state.candidates,
               selection,
             );
-            const deduped = repairDuplicateSelectionsLocally(state.candidates, located ?? selection);
+            const deduped = repairDuplicateSelectionsLocally(
+              input,
+              state.transportByDay,
+              state.candidates,
+              located ?? selection,
+            );
             const repairedSelection = deduped ?? located;
             if (process.env.DEBUG_SELECTION_FIX === "1") {
               const brief = (items: AttractionSelection[] | null) =>

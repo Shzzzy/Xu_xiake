@@ -798,6 +798,56 @@ function isCrossProvince(from: AmapGeocode | undefined, to: AmapGeocode | undefi
   return Boolean(fromProvince && toProvince && fromProvince !== toProvince);
 }
 
+/** 把 POI 搜索结果转成地理编码结构，供后续距离与交通计算复用。 */
+function poiAsGeocode(poi: AmapPoi): AmapGeocode {
+  return {
+    formattedAddress: poi.address || poi.name,
+    province: poi.province ?? "",
+    city: poi.city ?? "",
+    district: poi.district ?? "",
+    adcode: poi.adcode ?? "",
+    location: poi.location,
+  };
+}
+
+const PLACE_SUFFIX_PATTERN = /(草原|风景区|景区|古城|古镇|度假区|旅游区|国家森林公园|森林公园|公园)$/u;
+
+/**
+ * 解析单个地点坐标：地理编码优先，失败后回退到 POI 搜索。
+ * 「那拉提草原」这类景区/自然地名的正式 POI 名可能不同（如「那拉提旅游风景区」），
+ * 只做地理编码会搜不到，导致整个行程被判为不可规划。
+ */
+async function resolveRouteNodeGeocode(
+  client: AmapClient,
+  name: string,
+): Promise<AmapGeocode | undefined> {
+  try {
+    const geocodes = await client.geocode({ address: name });
+    if (geocodes[0]) return geocodes[0];
+  } catch {
+    // 继续尝试 POI 搜索。
+  }
+
+  const tryPoi = async (keywords: string): Promise<AmapGeocode | undefined> => {
+    try {
+      const pois = await client.searchPoi({ keywords });
+      const poi = pois[0];
+      return poi ? poiAsGeocode(poi) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const byPoi = await tryPoi(name);
+  if (byPoi) return byPoi;
+
+  // 去掉「草原 / 风景区 / 古城」等后缀再搜一次，例如「那拉提草原」→「那拉提」。
+  const trimmed = name.replace(PLACE_SUFFIX_PATTERN, "").trim();
+  if (trimmed && trimmed !== name) return tryPoi(trimmed);
+
+  return undefined;
+}
+
 async function geocodeRouteNodes(
   client: AmapClient | null,
   route: RoutePlan,
@@ -805,14 +855,7 @@ async function geocodeRouteNodes(
   if (!client) return new Map();
   const names = [...new Set(route.legs.flatMap((leg) => [leg.from, leg.to]))];
   const results = await Promise.all(
-    names.map(async (name) => {
-      try {
-        const geocodes = await client.geocode({ address: name });
-        return [name, geocodes[0]] as const;
-      } catch {
-        return [name, undefined] as const;
-      }
-    }),
+    names.map(async (name) => [name, await resolveRouteNodeGeocode(client, name)] as const),
   );
   return new Map(
     results.filter((entry): entry is readonly [string, AmapGeocode] => Boolean(entry[1])),
