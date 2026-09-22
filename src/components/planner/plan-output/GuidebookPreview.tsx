@@ -10,7 +10,7 @@ import type { TripPlan } from "@/lib/travel-plan";
 import { ExportGuidebookButton } from "./ExportGuidebookButton";
 
 export const GUIDEBOOK_PREVIEW_SHELL_CLASS =
-  "guidebook-preview-scroll guidebook-preview-shell relative w-full overflow-y-auto";
+  "guidebook-preview-scroll guidebook-preview-shell relative w-full overflow-y-auto overflow-x-hidden";
 export const GUIDEBOOK_PREVIEW_FRAME_CLASS =
   "guidebook-preview-frame overflow-hidden border-0 bg-transparent shadow-none";
 export const GUIDEBOOK_PREVIEW_SCROLLING = "no";
@@ -19,7 +19,15 @@ const PAPER_WIDTH_PX = 900;
 
 type StreamEvent =
   | { type: "meta"; runId: string; total: number; title: string; head: string }
-  | { type: "page"; runId: string; index: number; id: string; label: string; checksum: string; html: string }
+  | {
+      type: "page";
+      runId: string;
+      index: number;
+      id: string;
+      label: string;
+      checksum: string;
+      html: string;
+    }
   | { type: "error"; runId: string; message: string };
 
 export async function assertGuidebookPageChecksum(html: string, checksum: string): Promise<void> {
@@ -59,11 +67,10 @@ export function shouldAcceptPage(input: {
  */
 export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: string }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const latestRunIdRef = useRef("");
-  const pageStateRef = useRef<GuidebookPageAcceptanceState>(
-    createGuidebookPageAcceptanceState(""),
-  );
+  const pageStateRef = useRef<GuidebookPageAcceptanceState>(createGuidebookPageAcceptanceState(""));
   const [total, setTotal] = useState(0);
   const [received, setReceived] = useState(0);
   const [label, setLabel] = useState<string | null>(null);
@@ -72,8 +79,9 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
 
   useEffect(() => {
     const frame = frameRef.current;
+    const stage = stageRef.current;
     const shell = shellRef.current;
-    if (!frame || !shell) return;
+    if (!frame || !stage || !shell) return;
 
     let cancelled = false;
     const requestRunId =
@@ -95,10 +103,7 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
     const measure = () => {
       const doc = frame.contentDocument;
       if (!doc) return;
-      const height = Math.max(
-        doc.documentElement?.scrollHeight ?? 0,
-        doc.body?.scrollHeight ?? 0,
-      );
+      const height = Math.max(doc.documentElement?.scrollHeight ?? 0, doc.body?.scrollHeight ?? 0);
       if (height <= 0) return;
       frame.dataset.contentHeight = String(height);
       applyScale();
@@ -108,9 +113,17 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
       const width = shell.clientWidth;
       const contentHeight = Number(frame.dataset.contentHeight ?? "0");
       const nextScale = width > 0 ? Math.min(1, width / PAPER_WIDTH_PX) : 1;
+      // 缩放只改视觉，因此外层容器必须同步改成缩放后的高度，
+      // 否则预览尾部会多出一段空白，横向占位也会多出 900px 的滚动条。
+      const scaledWidth = PAPER_WIDTH_PX * nextScale;
+      stage.style.height = contentHeight > 0 ? `${contentHeight * nextScale}px` : "0px";
+      stage.style.overflow = "hidden";
+      frame.style.position = "absolute";
+      frame.style.top = "0";
+      frame.style.left = `${Math.max(0, (width - scaledWidth) / 2)}px`;
       frame.style.width = `${PAPER_WIDTH_PX}px`;
       frame.style.transformOrigin = "top left";
-      frame.style.marginLeft = `${Math.max(0, (width - PAPER_WIDTH_PX * nextScale) / 2)}px`;
+      frame.style.marginLeft = "0";
       frame.style.overflow = "hidden";
       frame.style.transform = `scale(${nextScale})`;
       if (contentHeight > 0) {
@@ -268,21 +281,25 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
         <ExportGuidebookButton
           plan={plan}
           disabled={!ready}
-          disabledHint={
-            error ? "路书生成失败，请先处理上方问题" : "路书全部页面生成完成后即可导出"
-          }
+          disabledHint={error ? "路书生成失败，请先处理上方问题" : "路书全部页面生成完成后即可导出"}
         />
       </div>
 
-      <div ref={shellRef} className={GUIDEBOOK_PREVIEW_SHELL_CLASS} style={{ height: "clamp(420px, 78vh, 900px)", overflowAnchor: "none" }}>
-        <iframe
-          ref={frameRef}
-          title="路书预览"
-          sandbox="allow-same-origin"
-          scrolling={GUIDEBOOK_PREVIEW_SCROLLING}
-          className={GUIDEBOOK_PREVIEW_FRAME_CLASS}
-          style={{ width: PAPER_WIDTH_PX, height: 0 }}
-        />
+      <div
+        ref={shellRef}
+        className={GUIDEBOOK_PREVIEW_SHELL_CLASS}
+        style={{ height: "clamp(420px, 78vh, 900px)", overflowAnchor: "none" }}
+      >
+        <div ref={stageRef} className="relative w-full" style={{ height: 0, overflow: "hidden" }}>
+          <iframe
+            ref={frameRef}
+            title="路书预览"
+            sandbox="allow-same-origin"
+            scrolling={GUIDEBOOK_PREVIEW_SCROLLING}
+            className={GUIDEBOOK_PREVIEW_FRAME_CLASS}
+            style={{ width: PAPER_WIDTH_PX, height: 0 }}
+          />
+        </div>
       </div>
     </section>
   );

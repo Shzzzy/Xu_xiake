@@ -133,9 +133,14 @@ export async function* streamGuidebookPages(
         const day = prepared.days[dayIndex];
         const images = dayImages[dayIndex];
         if (day && images) {
+          // 当日地图取不到时（占位 SVG）退到全程路线图，避免用户看到"地图暂不可用"。
+          const dayMap = await images.map;
+          // 只有当日地图缺图时才等待全程路线图，避免每页都多等一次。
+          const mapUrl =
+            dayMap && !dayMap.startsWith("data:image/svg+xml") ? dayMap : await routeMap;
           const preparedDay = {
             ...day,
-            mapUrl: await images.map,
+            mapUrl,
             qrCodeUrl: await images.qrCode,
           };
           prepared = {

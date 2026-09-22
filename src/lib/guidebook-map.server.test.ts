@@ -568,11 +568,29 @@ test("limits map and QR image preparation to a shared concurrency ceiling", asyn
   assert.ok(maximum <= 4, `并发上限失效，实际 ${maximum}`);
 });
 
-test("does not cache failed image placeholders", async () => {
+test("首次失败会自动重试并直接返回真实地图", async () => {
   let calls = 0;
   const fetchImpl = (async () => {
     calls += 1;
     if (calls === 1) return new Response("offline", { status: 503 });
+    return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+      headers: { "content-type": "image/png" },
+    });
+  }) as typeof fetch;
+  const url = `https://restapi.amap.com/v3/staticmap?zoom=10&retry=${Date.now()}`;
+
+  const result = await prepareGuidebookImage(url, "map", { fetchImpl, amapKey: "retry-key" });
+
+  assert.match(result ?? "", /^data:image\/png;base64,/);
+  assert.equal(calls, 2);
+});
+
+test("重试后仍失败才回退占位图，且占位图不会被缓存", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    // 前两次（首次 + 重试）都失败，之后才恢复。
+    if (calls <= 2) return new Response("offline", { status: 503 });
     return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
       headers: { "content-type": "image/png" },
     });
@@ -584,7 +602,7 @@ test("does not cache failed image placeholders", async () => {
 
   assert.match(first ?? "", /^data:image\/svg\+xml;base64,/);
   assert.match(second ?? "", /^data:image\/png;base64,/);
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
 });
 
 test("merges missing navigation and QR fields into a partially mapped plan", async () => {

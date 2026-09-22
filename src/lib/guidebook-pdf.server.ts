@@ -25,7 +25,7 @@ const ALLOWED_GUIDEBOOK_ASSET_HOSTS = [
 const AMAP_STATIC_MAP_HOST = "restapi.amap.com";
 const AMAP_STATIC_MAP_PATH = "/v3/staticmap";
 const TRUSTED_GUIDEBOOK_QR_HOSTS = ["api.qrserver.com"] as const;
-const GUIDEBOOK_IMAGE_TIMEOUT_MS = 10_000;
+const GUIDEBOOK_IMAGE_TIMEOUT_MS = 15_000;
 const GUIDEBOOK_IMAGE_MAX_BYTES = 5_000_000;
 const MAX_GUIDEBOOK_IMAGE_REDIRECTS = 3;
 const SENSITIVE_IMAGE_QUERY_KEYS = [
@@ -381,7 +381,12 @@ export async function prepareGuidebookImage(
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
 
-  const promise = withGuidebookImageSlot(() => fetchGuidebookImageDataUrl(value, kind, options))
+  const promise = withGuidebookImageSlot(async () => {
+    const first = await fetchGuidebookImageDataUrl(value, kind, options);
+    if (first || options.signal?.aborted) return first;
+    // 高德静图偶发失败：再取一次，降低瞬时抖动与限流造成的占位图。
+    return fetchGuidebookImageDataUrl(value, kind, options);
+  })
     .then((dataUrl) => {
       if (!dataUrl) {
         if (cache.get(cacheKey)?.promise === promise) cache.delete(cacheKey);
