@@ -727,7 +727,8 @@ export function fitMapZoom(points: readonly AmapCoordinate[]): number {
       : Number.POSITIVE_INFINITY;
   const latitudeZoom =
     ySpan > 0 ? Math.log2(usableHeight / (256 * ySpan)) : Number.POSITIVE_INFINITY;
-  const fitted = Math.floor(Math.min(longitudeZoom, latitudeZoom)) - 1;
+  // 不再额外退一档：留白由 STATIC_MAP_PADDING_RATIO 提供，退档会让点位挤在地图中间。
+  const fitted = Math.floor(Math.min(longitudeZoom, latitudeZoom));
   const span = Math.max(longitudeSpan, ySpan * (180 / Math.PI));
   if (!Number.isFinite(fitted)) return 10;
   // 全国级长距离固定在较低缩放级别，确保北京、上海、大理等首末节点同时可见。

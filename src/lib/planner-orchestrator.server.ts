@@ -557,6 +557,8 @@ function buildSelectionInstruction(
   const nonMovementDays = Array.from({ length: input.days }, (_, index) => index + 1).filter(
     (day) => (transportByDay.get(day)?.length ?? 0) === 0,
   );
+  // 每天所在地：移动日取到达地，静止日继承上一次到达地。
+  const dayLocations = resolveDayLocations(input, transportByDay);
   const payload = {
     task: "景点选择",
     brief: {
@@ -569,17 +571,23 @@ function buildSelectionInstruction(
       interests: input.interests,
       travelers: input.travelers,
     },
-    transport: [...transportByDay.entries()].map(([day, legs]) => ({
-      day,
-      legs: legs.map((leg) => ({
-        id: leg.id,
-        from: leg.from,
-        to: leg.to,
-        mode: leg.mode,
-        distanceKm: leg.distanceKm,
-        doorToDoorMinutes: leg.doorToDoorMinutes,
-      })),
-    })),
+    // 每一天都要给出所在地（含不移动的日子），否则模型不知道该把景点安排在哪座城市。
+    transport: Array.from({ length: input.days }, (_, index) => {
+      const day = index + 1;
+      const legs = transportByDay.get(day) ?? [];
+      return {
+        day,
+        location: dayLocations.get(day),
+        legs: legs.map((leg) => ({
+          id: leg.id,
+          from: leg.from,
+          to: leg.to,
+          mode: leg.mode,
+          distanceKm: leg.distanceKm,
+          doorToDoorMinutes: leg.doorToDoorMinutes,
+        })),
+      };
+    }),
     nonMovementDays,
     candidates: input.candidates.map((candidate) => ({
       id: candidate.id,
@@ -595,6 +603,8 @@ function buildSelectionInstruction(
       : "请完成景点选择。",
     "你是旅行管家，只能在候选列表内选择景点并给出游览顺序；不得修改交通、价格、人数或每日时间窗。",
     "每个非移动日必须至少选择一个候选景点；移动日可按剩余时间选择，也可以不选。",
+    "每天的景点必须位于当天所在地（transport[].location）：例如当天是「开封 → 沙湖 · 飞机」，只能选沙湖的候选，绝不能选开封的候选；当天所在地没有候选景点时，该天不安排景点",
+    "同一天不得混排不同城市的景点",
     "同一个 candidateId 只能选择一次，不得在多个 day 重复安排同一景点；候选数量足够时优先使用尚未选择的候选。",
     "只输出严格 JSON 对象：{ selections: [...] }，每个 selection 只能包含 day、candidateId、sequence、stayMinutes、reason。",
     "candidateId 必须逐字来自 candidates.id，不得输出名称代替 ID，不得输出 URL 或价格。",
@@ -694,6 +704,39 @@ function expandTransportNodes(
 
   return [...expanded, ...fixedNodes];
 }
+/** 每天的所在地：移动日取最后一段交通的到达地，静止日继承上一次到达地。 */
+function resolveDayLocations(
+  input: ButlerPlanInput,
+  transportByDay: Map<number, ScheduledTransportLeg[]>,
+): Map<number, string> {
+  const locations = new Map<number, string>();
+  let current = input.origin.trim();
+  for (let day = 1; day <= input.days; day += 1) {
+    const arrival = (transportByDay.get(day) ?? []).at(-1)?.to?.trim();
+    if (arrival) current = arrival;
+    locations.set(day, current);
+  }
+  return locations;
+}
+
+/**
+ * 候选是否属于某个地点：用户输入的地点名通常出现在候选的名称、地址或行政区里。
+ * 用于拦截"飞往沙湖当天还在玩开封府"这类地点错配。
+ */
+function candidateBelongsToPlace(
+  candidate: Pick<PlannerDestinationCandidate, "name" | "address" | "areaKey">,
+  place: string,
+): boolean {
+  const needle = place.trim();
+  if (!needle) return false;
+  const haystack = `${candidate.name} ${candidate.address} ${candidate.areaKey ?? ""}`;
+  if (haystack.includes(needle)) return true;
+  // 用户输入的可能是一整个景区名（如「黄山风景区」），而候选只带行政区（如「黄山市-黄山区」），
+  // 用城市级别的两字前缀再匹配一次，避免把当地景点全部误判成异地。
+  const city = needle.replace(/(风景区|景区|古城|古镇|度假区|旅游区|公园|湖|山)$/u, "").slice(0, 2);
+  return city.length >= 2 && (candidate.areaKey ?? "").includes(city);
+}
+
 function validateSelectionCoverage(
   input: ButlerPlanInput,
   selection: AttractionSelection[],
@@ -706,6 +749,47 @@ function validateSelectionCoverage(
     }
     if (item.day < 1 || item.day > input.days) {
       throw new Error(`景点选择 day ${item.day} 超出本次行程范围`);
+    }
+  }
+
+  // 景点必须位于当天所在地：否则会出现"已飞往沙湖，下午却安排开封府"的矛盾排程。
+  const dayLocations = resolveDayLocations(input, transportByDay);
+  const candidateById = new Map(input.candidates.map((candidate) => [candidate.id, candidate]));
+  const tripStops = [input.origin, ...input.route.waypoints, input.destination]
+    .map((stop) => stop.trim())
+    .filter(Boolean);
+  // 只有"明确属于某个行程站点"的候选才能判定异地；场景自带景区名可能不含行政区，不能据此误伤。
+  const belongsToAnyStop = (candidate: PlannerDestinationCandidate) =>
+    tripStops.some((stop) => candidateBelongsToPlace(candidate, stop));
+  for (let day = 1; day <= input.days; day += 1) {
+    const dayItems = selection.filter((item) => item.day === day);
+    if (dayItems.length === 0) continue;
+    const location = dayLocations.get(day) ?? "";
+    if (process.env.DEBUG_SELECTION_FIX === "1") {
+      console.log(
+        "[day-location] day=" +
+          day +
+          " location=" +
+          location +
+          " candidates=" +
+          input.candidates.map((candidate) => `${candidate.areaKey}:${candidate.name}`).join("|") +
+          " selected=" +
+          dayItems
+            .map((item) => candidateById.get(item.candidateId)?.name ?? item.candidateId)
+            .join(","),
+      );
+    }
+    const mismatched = dayItems.filter((item) => {
+      const candidate = candidateById.get(item.candidateId);
+      if (!candidate) return false;
+      if (candidateBelongsToPlace(candidate, location)) return false;
+      return belongsToAnyStop(candidate);
+    });
+    if (mismatched.length > 0) {
+      const names = mismatched
+        .map((item) => candidateById.get(item.candidateId)?.name ?? item.candidateId)
+        .join("、");
+      throw new Error(`第 ${day} 天所在地是${location}，不能安排其他城市的景点：${names}`);
     }
   }
 
@@ -727,10 +811,20 @@ function validateSelectionCoverage(
 
   for (let day = 1; day <= input.days; day += 1) {
     if ((transportByDay.get(day)?.length ?? 0) > 0) continue;
-    if (
-      attractionCapacityMinutes(input, transportByDay, day) >= MIN_ATTRACTION_CAPACITY_MINUTES &&
-      !selection.some((item) => item.day === day)
-    ) {
+    if (selection.some((item) => item.day === day)) continue;
+    if (attractionCapacityMinutes(input, transportByDay, day) < MIN_ATTRACTION_CAPACITY_MINUTES) {
+      continue;
+    }
+    // 只有当地还有没用过的候选时才强制安排景点；
+    // 当地景点已被前几天用完（例如沙湖只有几个可选景点却要停留多天）时允许改为休整。
+    const location = dayLocations.get(day) ?? "";
+    const usedBefore = new Set(
+      selection.filter((item) => item.day < day).map((item) => item.candidateId),
+    );
+    const hasUnusedLocal = input.candidates.some(
+      (candidate) => candidateBelongsToPlace(candidate, location) && !usedBefore.has(candidate.id),
+    );
+    if (hasUnusedLocal) {
       throw new Error(`第 ${day} 天容量足够但没有选择候选景点`);
     }
   }
@@ -768,6 +862,46 @@ function repairDuplicateSelectionsLocally(
     result.push({ ...item, candidateId: replacement });
   }
   return replaced ? result : null;
+}
+
+/**
+ * 地点错配的本地兜底：把不属于当天所在地的景点换成本地尚未使用的候选；
+ * 当天没有任何本地候选（例如飞回北京的返程日）时直接移除该项。
+ */
+function repairSelectionLocations(
+  input: ButlerPlanInput,
+  transportByDay: Map<number, ScheduledTransportLeg[]>,
+  candidates: readonly PlannerDestinationCandidate[],
+  selection: AttractionSelection[],
+): AttractionSelection[] | null {
+  const locations = resolveDayLocations(input, transportByDay);
+  const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const tripStops = [input.origin, ...input.route.waypoints, input.destination]
+    .map((stop) => stop.trim())
+    .filter(Boolean);
+  const used = new Set(selection.map((item) => item.candidateId));
+  let changed = false;
+  const result: AttractionSelection[] = [];
+  for (const item of selection) {
+    const candidate = byId.get(item.candidateId);
+    const location = locations.get(item.day) ?? "";
+    const isForeign =
+      candidate !== undefined &&
+      !candidateBelongsToPlace(candidate, location) &&
+      tripStops.some((stop) => candidateBelongsToPlace(candidate, stop));
+    if (!isForeign) {
+      result.push(item);
+      continue;
+    }
+    const replacement = candidates.find(
+      (entry) => !used.has(entry.id) && candidateBelongsToPlace(entry, location),
+    );
+    changed = true;
+    if (!replacement) continue;
+    used.add(replacement.id);
+    result.push({ ...item, candidateId: replacement.id });
+  }
+  return changed ? result : null;
 }
 
 function buildDayRadar(pace: Pace): PlannerSkeletonDay["radar"] {
@@ -1168,12 +1302,33 @@ export async function planWithButler(
             content,
             new Set(state.candidates.map((candidate) => candidate.id)),
           );
-          // 第二次尝试后仍跨天重复时，用未占用的候选本地替换，保证用户拿到不重复的排程。
+          // 第二次尝试后仍错配时本地兜底：先去错误地点、再去跨天重复，保证交付可用排程。
           if (attempt > 0) {
-            const repairedSelection = repairDuplicateSelectionsLocally(
+            const located = repairSelectionLocations(
+              input,
+              state.transportByDay,
               state.candidates,
               selection,
             );
+            const deduped = repairDuplicateSelectionsLocally(state.candidates, located ?? selection);
+            const repairedSelection = deduped ?? located;
+            if (process.env.DEBUG_SELECTION_FIX === "1") {
+              const brief = (items: AttractionSelection[] | null) =>
+                (items ?? []).map((item) => {
+                  const candidate = state.candidates.find((entry) => entry.id === item.candidateId);
+                  return `D${item.day}:${candidate?.name ?? item.candidateId}`;
+                });
+              console.log(
+                "[selection-fallback] attempt=" +
+                  attempt +
+                  " before=" +
+                  brief(selection).join(",") +
+                  " located=" +
+                  brief(located).join(",") +
+                  " repaired=" +
+                  brief(repairedSelection).join(","),
+              );
+            }
             if (repairedSelection) {
               validateSelectionCoverage(input, repairedSelection, state.transportByDay);
               state.selection = repairedSelection;
