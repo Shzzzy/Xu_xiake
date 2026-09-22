@@ -219,7 +219,7 @@ test("Golden：北京到四川、5 人、5 天往返走确定性飞行与预算"
     result.budget.transport >= 10_800,
     `交通预算应至少为 10800，实际 ${result.budget.transport}`,
   );
-  assert.equal(result.budget.provenance.lodging.quantity, 12);
+  assert.equal(result.budget.provenance.lodging.quantity, 20); // 5 位成人按 5 间房 × 4 晚
   assert.equal(result.skeleton.days.length, 5);
 
   const attractionDays = result.skeleton.days
@@ -237,11 +237,11 @@ test("Golden：北京到四川、5 人、5 天往返走确定性飞行与预算"
   const firstTransport = result.skeleton.days[0]?.nodes.find((node) => node.type === "transport");
   assert.match(firstTransport?.name ?? "", /飞机/);
   assert.equal(result.budget.transport, 10_810);
-  assert.equal(result.budget.lodging, 6_000);
+  assert.equal(result.budget.lodging, 10_000);
   assert.equal(result.budget.food, 5_500);
   assert.equal(result.budget.tickets, 1_200);
-  assert.equal(result.budget.other, 2_351);
-  assert.equal(result.budget.estimatedTotal, 25_861);
+  assert.equal(result.budget.other, 2_751);
+  assert.equal(result.budget.estimatedTotal, 30_261);
 
   const destination = {
     ...(destinations.find((item) => item.id === "huangshan") ?? destinations[0]),
@@ -276,10 +276,10 @@ test("Golden：北京到四川、5 人、5 天往返走确定性飞行与预算"
     plan.budget.estimatedTotal,
   );
   assert.equal(plan.budget.transport.amount, 10_810);
-  assert.equal(plan.budget.lodging.amount, 6_000);
+  assert.equal(plan.budget.lodging.amount, 10_000);
   assert.equal(plan.budget.food.amount, 5_500);
   assert.equal(plan.budget.tickets.amount, 1_200);
-  assert.equal(plan.budget.other.amount, 2_351);
+  assert.equal(plan.budget.other.amount, 2_751);
 });
 
 function buildMinimalButlerInput(): ButlerPlanInput {
@@ -737,3 +737,6 @@ test("Golden：交通时长超出窗口时 timeline fail closed 且不输出节�
   assert.equal(result.stage, "timeline");
   assert.match(result.reason, /交通时长超出每日时间窗/);
 });
+
+
+
