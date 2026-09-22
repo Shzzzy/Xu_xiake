@@ -97,6 +97,7 @@ import {
 import { TravelDatePicker } from "./TravelDatePicker";
 import { TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
 import { requestAndApplyBudget } from "./plan-output/budget-advice-apply";
+import { recommendDestination as recommendDestinationFromCatalog } from "@/lib/destination-recommendation";
 import { WeatherStrip } from "./WeatherStrip";
 
 /**
@@ -385,29 +386,7 @@ function parseRouteAnswer(value: string) {
 }
 
 function recommendDestination(answers: UnknownAnswers, catalog: InspirationDestination[]) {
-  const mood = answers.mood.trim().toLowerCase();
-  const days = answers.days ?? 2;
-  if (mood === "water-town" || answers.interest === "古村古镇") return "jiangnan";
-  if (mood === "mountain" && days >= 4) return "guilin";
-  if (mood === "mountain") return "huangshan";
-
-  if (mood && mood !== "anything") {
-    const directMatch = catalog.find((destination) =>
-      [destination.name, destination.region, ...destination.tags].some((term) => {
-        const normalizedTerm = term.trim().toLowerCase();
-        return normalizedTerm && (normalizedTerm.includes(mood) || mood.includes(normalizedTerm));
-      }),
-    );
-    if (directMatch) return directMatch.id;
-
-    if (/海|岛|沙滩|潜水|椰林|海岸/.test(mood)) return "sanya";
-    if (/草原|牧场|沙漠|星空|公路/.test(mood)) return "hulunbuir";
-    if (/雪山|冰川|盐湖|高原|湖泊/.test(mood)) return "chaka-salt-lake";
-    if (/古镇|水乡|园林|街巷|老街/.test(mood)) return "jiangnan";
-    if (/山|峰|云海|峡谷|森林/.test(mood)) return days >= 4 ? "guilin" : "huangshan";
-  }
-
-  return days >= 4 ? "guilin" : "huangshan";
+  return recommendDestinationFromCatalog(answers, catalog)?.id ?? "huangshan";
 }
 
 function notifyDiscoveries(discoveries: DiscoveryNotice[]) {
