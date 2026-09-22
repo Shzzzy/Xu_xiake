@@ -23,6 +23,7 @@ import type { TransportPlanLeg } from "./transport-planner.server.ts";
 import type { PlannerSkeleton } from "./planner-skeleton.ts";
 import type { PlannerDayCopy } from "./planner-day-copy.ts";
 import type { PlanViolation } from "./plan-validator.ts";
+import { evaluateTripFeasibility, type TripFeasibilityDecision } from "./trip-feasibility.ts";
 
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
@@ -88,6 +89,12 @@ export type LivePlanResult =
   | {
       status: "needs_configuration";
       missing: string[];
+    }
+  | {
+      status: "needs_decision";
+      decision: TripFeasibilityDecision;
+      route: RoutePlan;
+      transportLegs: TransportPlanLeg[];
     }
   | {
       status: "ok";
@@ -598,6 +605,29 @@ export async function runLivePlannerWith(
       : "交通规划不可用：" + transportPlan.reason;
     throw new Error(message);
   }
+  const butlerEnabled = readLiveEnv(deps, "BUTLER_PLANNER") !== "0";
+  if (butlerEnabled) {
+    const feasibility = evaluateTripFeasibility({
+      origin: input.origin,
+      destination: input.destination,
+      days: input.days,
+      dailyHours: input.dailyHours,
+      startTime: input.startTime,
+      endTime: input.endTime,
+      route: transportPlan.route,
+      transportLegs: transportPlan.legs,
+      seedPlaces: input.seedPlaces,
+    });
+    if (feasibility) {
+      // 长途自驾在真实门到门时间下不可行时，必须先由用户选择调整方案。
+      return {
+        status: "needs_decision",
+        decision: feasibility,
+        route: transportPlan.route,
+        transportLegs: transportPlan.legs,
+      };
+    }
+  }
   const candidates = plannerContext.mergePlannerCandidates({
     primary: amapCandidates,
     fallback: seedCandidates,
@@ -626,7 +656,7 @@ export async function runLivePlannerWith(
     model: readLiveEnv(deps, "DEEPSEEK_MODEL")?.trim(),
   };
 
-  if (readLiveEnv(deps, "BUTLER_PLANNER") !== "0") {
+  if (butlerEnabled) {
     return runButlerPlan(input, deps, context);
   }
 

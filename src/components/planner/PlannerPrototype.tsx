@@ -55,6 +55,12 @@ import {
   type TravelStyle,
 } from "@/lib/route-planner";
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
+import {
+  applyTripFeasibilityChoice,
+  type TripFeasibilityChoice,
+  type TripFeasibilityDecision,
+  type TripFeasibilityPlanningInput,
+} from "@/lib/trip-feasibility";
 import { recommendBudget } from "@/lib/budget-advice.functions";
 import {
   buildPlannedDaysFromSkeleton,
@@ -97,6 +103,7 @@ import { WeatherStrip } from "./WeatherStrip";
  * 路书预览只在结果页用到，懒加载避免首页提前下载预览与导出代码。
  */
 import { GuidebookStage } from "./plan-output/GuidebookStage";
+import { TripFeasibilityCards } from "./plan-output/TripFeasibilityCards";
 
 const GuidebookPreview = lazy(async () => {
   const module = await import("./plan-output/GuidebookPreview");
@@ -1803,7 +1810,7 @@ function UnknownPlanScreen({
 
 function ItineraryScreen({
   variant,
-  brief,
+  brief: baseBrief,
   saved,
   onBack,
   onEdit,
@@ -1818,7 +1825,42 @@ function ItineraryScreen({
 }) {
   const inspirationCatalog = useInspirationCatalog();
   const refreshInspirationCatalog = useInspirationCatalogRefresh();
-  const destination = resolveTripDestination(brief, inspirationCatalog);
+  const [planningOverride, setPlanningOverride] = useState<{
+    days?: number;
+    destination?: Pick<Destination, "id" | "name" | "region">;
+    route?: RoutePlan;
+  } | null>(null);
+  const [feasibilityDecision, setFeasibilityDecision] = useState<TripFeasibilityDecision | null>(
+    null,
+  );
+  const [feasibilityTransportLegs, setFeasibilityTransportLegs] = useState<
+    TripFeasibilityPlanningInput["transportLegs"]
+  >([]);
+  const brief = useMemo(() => {
+    if (!planningOverride) return baseBrief;
+    return {
+      ...baseBrief,
+      days: planningOverride.days ?? baseBrief.days,
+      destinationId: planningOverride.destination?.id ?? baseBrief.destinationId,
+      destinationName: planningOverride.destination?.name ?? baseBrief.destinationName,
+      waypoints: planningOverride.route?.waypoints ?? baseBrief.waypoints,
+      roundTrip: planningOverride.route?.roundTrip ?? baseBrief.roundTrip,
+      returnMode: planningOverride.route?.returnMode ?? baseBrief.returnMode,
+    };
+  }, [baseBrief, planningOverride]);
+  const baseDestination = resolveTripDestination(brief, inspirationCatalog);
+  const destination: Destination = planningOverride?.destination
+    ? {
+        ...baseDestination,
+        ...planningOverride.destination,
+        places:
+          planningOverride.destination.id === baseDestination.id ? baseDestination.places : [],
+        weatherLocation:
+          planningOverride.destination.id === baseDestination.id
+            ? baseDestination.weatherLocation
+            : undefined,
+      }
+    : baseDestination;
   const forecastFn = useServerFn(getOpenMeteoForecast);
   const livePlannerFn = useServerFn(generateLiveItinerary);
   const longPlannerFn = useServerFn(generateLongItinerary);
@@ -1828,9 +1870,9 @@ function ItineraryScreen({
   const [livePlan, setLivePlan] = useState<GeneratedItinerary | null>(null);
   const [liveClosing, setLiveClosing] = useState<TripClosing | null>(null);
   const [longPlan, setLongPlan] = useState<LongPlan | null>(null);
-  const [plannerState, setPlannerState] = useState<"idle" | "loading" | "ready" | "fallback">(
-    "idle",
-  );
+  const [plannerState, setPlannerState] = useState<
+    "idle" | "loading" | "ready" | "fallback" | "needs_decision"
+  >("idle");
   const [plannerMessage, setPlannerMessage] = useState("");
   const [liveSourceCount, setLiveSourceCount] = useState<number | null>(null);
   const [butlerResult, setButlerResult] = useState<ButlerPlanResult | null>(null);
@@ -1855,7 +1897,7 @@ function ItineraryScreen({
   const forecastWindow = Math.min(16, Math.max(brief.days, offset + brief.days));
   const weatherLatitude = destination.weatherLocation?.latitude;
   const weatherLongitude = destination.weatherLocation?.longitude;
-  const routePlan = useMemo(() => {
+  const builtRoutePlan = useMemo(() => {
     try {
       return buildRoutePlan({
         origin: brief.origin,
@@ -1878,7 +1920,45 @@ function ItineraryScreen({
     brief.roundTrip,
     brief.waypoints,
   ]);
+  const routePlan = planningOverride?.route ?? builtRoutePlan;
   const resolvedRoutePlan = plannedRoute ?? routePlan;
+
+  const handleTripFeasibilityChoice = (choice: TripFeasibilityChoice) => {
+    const activeRoute = plannedRoute ?? routePlan;
+    if (!activeRoute) return;
+    const adjusted = applyTripFeasibilityChoice(
+      {
+        origin: brief.origin,
+        destination: { id: destination.id, name: destination.name, region: destination.region },
+        days: brief.days,
+        dailyHours: brief.dailyHours,
+        startTime: brief.startTime,
+        endTime: brief.endTime,
+        route: activeRoute,
+        transportLegs: feasibilityTransportLegs,
+        seedPlaces: destinationPlaces,
+      },
+      choice,
+    );
+    setFeasibilityDecision(null);
+    setFeasibilityTransportLegs([]);
+    setPlannedRoute(null);
+    setPlannerState("loading");
+    setPlannerMessage("正在按你选择的方案重新规划…");
+    setPlanningOverride({
+      days: adjusted.days,
+      destination: choice.strategy === "focus" ? adjusted.destination : undefined,
+      route: adjusted.route,
+    });
+  };
+
+  const handleTripFeasibilityCancel = () => {
+    setFeasibilityDecision(null);
+    setFeasibilityTransportLegs([]);
+    setPlannedRoute(null);
+    setPlannerState("fallback");
+    setPlannerMessage("已取消方案选择，当前没有生成新的路书。");
+  };
   // 目的地地点与天气数组在渲染中可能换引用；用内容签名稳定规划 effect，避免无限重跑。
   const destinationPlacesSignature = destination.places
     .map((place) => `${place.id}:${place.name}`)
@@ -1976,6 +2056,14 @@ function ItineraryScreen({
       })
         .then((result) => {
           if (cancelled) return;
+          if (result.status === "needs_decision") {
+            setPlannedRoute(result.route);
+            setFeasibilityTransportLegs(result.transportLegs);
+            setFeasibilityDecision(result.decision);
+            setPlannerState("needs_decision");
+            setPlannerMessage(result.decision.reason);
+            return;
+          }
           if (result.status === "ok" && result.mode === "legacy") {
             setLivePlan(result.plan);
             setLiveClosing(result.closing);
@@ -2309,17 +2397,28 @@ function ItineraryScreen({
 
       {detailedTrip ? (
         <div className="space-y-4">
-          <GuidebookStage state={plannerState} message={plannerMessage}>
-            <Suspense
-              fallback={
-                <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-6 text-sm text-[var(--v-muted)]">
-                  正在加载路书预览…
-                </div>
-              }
+          {feasibilityDecision ? (
+            <TripFeasibilityCards
+              decision={feasibilityDecision}
+              onSelect={handleTripFeasibilityChoice}
+              onCancel={handleTripFeasibilityCancel}
+            />
+          ) : (
+            <GuidebookStage
+              state={plannerState === "needs_decision" ? "fallback" : plannerState}
+              message={plannerMessage}
             >
-              <GuidebookPreview plan={executionPlan} runId={previewRunId} />
-            </Suspense>
-          </GuidebookStage>
+              <Suspense
+                fallback={
+                  <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-6 text-sm text-[var(--v-muted)]">
+                    正在加载路书预览…
+                  </div>
+                }
+              >
+                <GuidebookPreview plan={executionPlan} runId={previewRunId} />
+              </Suspense>
+            </GuidebookStage>
+          )}
         </div>
       ) : null}
 
