@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildBudgetAdvice,
   buildBudgetAdviceMessages,
   parseBudgetAdvice,
+  parseBudgetAdviceNote,
   requestBudgetAdvice,
   type BudgetAdviceInput,
 } from "./budget-advice.server.ts";
@@ -17,12 +19,181 @@ const input: BudgetAdviceInput = {
   roundTrip: true,
   returnMode: "fast",
   routeLegs: [
-    { from: "上海", to: "北京", transport: "flight", kind: "outbound", style: "direct" },
-    { from: "北京", to: "上海", transport: "flight", kind: "return", style: "direct" },
+    {
+      from: "上海",
+      to: "北京",
+      transport: "flight",
+      kind: "outbound",
+      style: "direct",
+      unitCost: 1_000,
+      costBasis: "per-person",
+    },
+    {
+      from: "北京",
+      to: "上海",
+      transport: "flight",
+      kind: "return",
+      style: "direct",
+      unitCost: 1_000,
+      costBasis: "per-person",
+    },
   ],
   pace: "balanced",
   interests: ["人文建筑"],
+  costs: {
+    lodgingPerRoomPerNight: 600,
+    foodPerPersonPerDay: 150,
+    adultTicketPrice: 200,
+    childTicketPrice: 100,
+    uncertainty: "medium",
+  },
 };
+
+test("本地确定性基线按房间数、人数和全部去返程成本计算", () => {
+  const advice = buildBudgetAdvice({
+    ...input,
+    days: 5,
+    travelers: { adults: 3, children: 1 },
+    routeLegs: [
+      {
+        from: "上海",
+        to: "北京",
+        transport: "flight",
+        kind: "outbound",
+        style: "direct",
+        unitCost: 1_200,
+        costBasis: "per-person",
+      },
+      {
+        from: "北京",
+        to: "上海",
+        transport: "drive",
+        kind: "return",
+        style: "direct",
+        unitCost: 1_500,
+        costBasis: "vehicle",
+      },
+    ],
+    costs: {
+      lodgingPerRoomPerNight: 500,
+      foodPerPersonPerDay: 100,
+      adultTicketPrice: 200,
+      childTicketPrice: 100,
+      uncertainty: "low",
+    },
+  });
+
+  assert.deepEqual(advice.categories, {
+    transport: 6_940,
+    lodging: 8_812,
+    food: 2_203,
+    tickets: 771,
+    other: 1_874,
+  });
+  assert.equal(advice.baseTotal, 18_700);
+  assert.equal(advice.bufferRate, 0.1);
+  assert.equal(advice.recommendedTotal, 20_600);
+  assert.equal(advice.total, advice.recommendedTotal);
+  assert.equal(
+    Object.values(advice.categories).reduce((sum, amount) => sum + amount, 0),
+    advice.total,
+  );
+});
+
+test("高不确定性预算按 20% 缓冲并取整到百元", () => {
+  const advice = buildBudgetAdvice({
+    ...input,
+    days: 2,
+    roundTrip: false,
+    routeLegs: [
+      {
+        ...input.routeLegs[0]!,
+        totalCost: 2_000,
+      },
+    ],
+    costs: {
+      lodgingPerRoomPerNight: 500,
+      foodPerPersonPerDay: 100,
+      adultTicketPrice: 0,
+      childTicketPrice: 0,
+      uncertainty: "high",
+    },
+  });
+
+  assert.equal(advice.bufferRate, 0.2);
+  assert.equal(advice.recommendedTotal % 100, 0);
+  assert.equal(advice.recommendedTotal, 5_500);
+});
+
+test("缺少显式价格时按里程估算单人交通成本", () => {
+  const advice = buildBudgetAdvice({
+    ...input,
+    days: 2,
+    roundTrip: false,
+    routeLegs: [
+      {
+        ...input.routeLegs[0]!,
+        distanceKm: 1_000,
+        unitCost: undefined,
+        totalCost: undefined,
+      },
+    ],
+    costs: {
+      lodgingPerRoomPerNight: 600,
+      foodPerPersonPerDay: 150,
+      adultTicketPrice: 200,
+      childTicketPrice: 100,
+      uncertainty: "low",
+    },
+  });
+
+  // 1,000 km 飞机的单人参考价为 550 元，3 位成人共 1,650 元。
+  assert.equal(advice.baseTotal, 5_445);
+  assert.equal(advice.recommendedTotal, 6_000);
+});
+
+test("DeepSeek 只能整理 note，不能修改本地金额", async () => {
+  const baseline = buildBudgetAdvice(input);
+  const fetchImpl = (async () =>
+    Response.json({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              note: "含全部往返交通、3 间房和景点门票",
+              total: 1,
+              recommendedTotal: 1,
+              categories: {
+                transport: 1,
+                lodging: 1,
+                food: 1,
+                tickets: 1,
+                other: 1,
+              },
+            }),
+          },
+        },
+      ],
+    })) as typeof fetch;
+
+  const advice = await requestBudgetAdvice(input, { apiKey: "test-key", fetchImpl });
+
+  assert.equal(advice.total, baseline.total);
+  assert.deepEqual(advice.categories, baseline.categories);
+  assert.equal(advice.baseTotal, baseline.baseTotal);
+  assert.equal(advice.recommendedTotal, baseline.recommendedTotal);
+  assert.equal(advice.note, "含全部往返交通、3 间房和景点门票");
+});
+
+test("缺少 DeepSeek 时仍返回本地确定性预算", async () => {
+  const advice = await requestBudgetAdvice(input, { apiKey: " " });
+  assert.deepEqual(advice, buildBudgetAdvice(input));
+});
+
+test("预算解释必须是合法 JSON note", () => {
+  assert.equal(parseBudgetAdviceNote('```json\n{"note":"交通按往返计算"}\n```'), "交通按往返计算");
+  assert.throws(() => parseBudgetAdviceNote(JSON.stringify({ note: "" })));
+});
 
 test("预算建议解析合法 JSON 并保留分类", () => {
   const advice = parseBudgetAdvice(
@@ -48,22 +219,35 @@ test("预算建议拒绝缺少分类或负数", () => {
   );
 });
 
-test("预算建议提示词要求全团中值并解释杂事开销", () => {
-  const messages = JSON.stringify(buildBudgetAdviceMessages(input));
+test("预算建议提示词只要求整理本地基线说明", () => {
+  const messages = buildBudgetAdviceMessages(input) as {
+    role: string;
+    content: string;
+  }[];
+  const serialized = JSON.stringify(messages);
+  const userMessage = JSON.parse(messages[1]!.content) as {
+    input: {
+      roundTrip: boolean;
+      routeLegs: { kind: string }[];
+      hotelRooms: number;
+      tripNights: number;
+    };
+  };
 
-  assert.match(messages, /全团/);
-  assert.match(messages, /区间中值/);
-  assert.match(messages, /杂事开销/);
-  assert.match(messages, /上海/);
-  assert.match(messages, /北京/);
-  assert.match(messages, /往返/);
-  assert.match(messages, /返程/);
-  assert.match(messages, /flight/);
-  assert.match(messages, /1 晚/);
-  assert.match(messages, /分类合计.*total|total.*分类合计/);
+  assert.match(serialized, /本地确定性公式/);
+  assert.match(serialized, /只能整理/);
+  assert.match(serialized, /不得修改/);
+  assert.match(serialized, /每位同行者一间房/);
+  assert.match(serialized, /上海/);
+  assert.match(serialized, /北京/);
+  assert.equal(userMessage.input.roundTrip, true);
+  assert.equal(userMessage.input.routeLegs.at(-1)?.kind, "return");
+  assert.equal(userMessage.input.hotelRooms, 3);
+  assert.equal(userMessage.input.tripNights, 1);
+  assert.match(serialized, /flight/);
 });
 
-test("预算建议请求使用 DeepSeek JSON 合同并解析结果", async () => {
+test("预算建议请求使用 DeepSeek 说明合同且金额来自本地基线", async () => {
   const requests: { input: RequestInfo | URL; init?: RequestInit }[] = [];
   const fetchImpl = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
     requests.push({ input: requestInput, init });
@@ -96,7 +280,8 @@ test("预算建议请求使用 DeepSeek JSON 合同并解析结果", async () =>
     temperature: number;
   };
 
-  assert.equal(advice.categories.lodging, 2800);
+  assert.equal(advice.categories.lodging, buildBudgetAdvice(input).categories.lodging);
+  assert.equal(advice.note, "含黄山门票与山上住宿");
   assert.equal(body.response_format.type, "json_object");
   assert.equal(body.max_tokens, 800);
   assert.equal(body.temperature, 0.2);
@@ -104,34 +289,38 @@ test("预算建议请求使用 DeepSeek JSON 合同并解析结果", async () =>
 });
 
 test("预算建议把总额校正为分类合计", () => {
-  const advice = parseBudgetAdvice(JSON.stringify({
-    total: 4200,
-    categories: {
-      transport: 6600,
-      lodging: 900,
-      food: 900,
-      tickets: 300,
-      other: 650,
-    },
-    note: "往返高铁、2 晚住宿与门票餐饮",
-  }));
+  const advice = parseBudgetAdvice(
+    JSON.stringify({
+      total: 4200,
+      categories: {
+        transport: 6600,
+        lodging: 900,
+        food: 900,
+        tickets: 300,
+        other: 650,
+      },
+      note: "往返高铁、2 晚住宿与门票餐饮",
+    }),
+  );
 
   assert.equal(advice.total, 9350);
 });
 
 test("预算建议忽略模型 JSON 外层包装字段", () => {
-  const advice = parseBudgetAdvice(JSON.stringify({
-    type: "json_object",
-    total: 10800,
-    categories: {
-      transport: 7200,
-      lodging: 800,
-      food: 1500,
-      tickets: 800,
-      other: 500,
-    },
-    note: "含往返交通与 1 晚住宿",
-  }));
+  const advice = parseBudgetAdvice(
+    JSON.stringify({
+      type: "json_object",
+      total: 10800,
+      categories: {
+        transport: 7200,
+        lodging: 800,
+        food: 1500,
+        tickets: 800,
+        other: 500,
+      },
+      note: "含往返交通与 1 晚住宿",
+    }),
+  );
 
   assert.equal(advice.total, 10800);
   assert.equal(advice.categories.transport, 7200);

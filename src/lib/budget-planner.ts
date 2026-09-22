@@ -14,6 +14,10 @@ export type PriceReference = {
   legId?: string;
   /** 门票显式类别优先于名称关键词。 */
   category?: TicketPriceCategory;
+  /** 交通价格基准：按人计价时乘人数，车辆总价时不乘人数。 */
+  costBasis?: "per-person" | "vehicle";
+  /** 车辆成本为单车价格时，可显式指定车辆数量。 */
+  vehicleCount?: number;
 };
 
 export type BudgetPriceReference = {
@@ -156,15 +160,23 @@ export function calculateBudget(input: BudgetPlanInput): BudgetPlan {
     const amount = priceReference
       ? normalizeAmount(priceReference.amount)
       : normalizeAmount(leg.minimumPerPersonCost);
+    const costBasis = priceReference?.costBasis ?? "per-person";
+    const vehicleCount =
+      costBasis === "vehicle" ? Math.max(1, normalizeCount(priceReference?.vehicleCount ?? 1)) : 0;
+    const quantity = costBasis === "vehicle" ? vehicleCount : travelerCount;
     const reference = createReference({
       kind: "transport",
-      label: priceReference?.label ?? `${leg.from}至${leg.to}交通单人最低价`,
+      label:
+        priceReference?.label ??
+        (leg.mode === "drive"
+          ? `${leg.from}至${leg.to}自驾车辆成本（按人数分摊）`
+          : `${leg.from}至${leg.to}交通单人最低价`),
       amount,
       currency: "CNY",
       confidence: priceReference?.confidence ?? "fallback",
       legId: leg.id,
-      quantity: travelerCount,
-      total: amount * travelerCount,
+      quantity,
+      total: amount * quantity,
     });
     if (priceReference) {
       if (priceReference.source !== undefined) reference.source = priceReference.source;
@@ -175,7 +187,8 @@ export function calculateBudget(input: BudgetPlanInput): BudgetPlan {
   });
   const transport = transportReferences.reduce((sum, reference) => sum + reference.total, 0);
 
-  const rooms = travelerCount > 0 ? Math.ceil(travelerCount / 2) : 0;
+  // 已确认的住宿规则：每位同行者一间房，不再按两人一间折算。
+  const rooms = travelerCount;
   const lodgingPrice = resolvePrice(
     input.lodgingPerNight,
     (amount) => `住宿每晚 ${amount} 元（${rooms} 间 × ${nights} 晚）`,

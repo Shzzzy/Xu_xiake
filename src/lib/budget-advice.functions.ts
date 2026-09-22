@@ -26,27 +26,38 @@ const budgetAdviceInputSchema = z
             transport: z.string().trim().min(1),
             kind: z.enum(["outbound", "return"]),
             style: z.enum(["direct", "wander"]),
+            distanceKm: z.number().nonnegative().optional(),
+            unitCost: z.number().nonnegative().optional(),
+            totalCost: z.number().nonnegative().optional(),
+            costBasis: z.enum(["per-person", "vehicle"]).optional(),
           })
           .strict(),
       )
       .max(14),
     pace: z.string().trim().min(1),
     interests: z.array(z.string().trim().min(1)),
+    costs: z
+      .object({
+        lodgingPerRoomPerNight: z.number().nonnegative().optional(),
+        foodPerPersonPerDay: z.number().nonnegative().optional(),
+        adultTicketPrice: z.number().nonnegative().optional(),
+        childTicketPrice: z.number().nonnegative().optional(),
+        uniformTicketPrice: z.number().nonnegative().optional(),
+        uncertainty: z.enum(["low", "medium", "high"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
 export const recommendBudget = createServerFn({ method: "POST" })
   .validator(budgetAdviceInputSchema)
   .handler(async ({ data }) => {
-    const key = process.env.DEEPSEEK_API_KEY?.trim();
-    if (!key) {
-      return { status: "needs_configuration" as const, message: "缺少 DEEPSEEK_API_KEY" };
-    }
-
     try {
       return {
         status: "ok" as const,
-        advice: await requestBudgetAdvice(data, { apiKey: key }),
+        // 本地确定性金额始终可用；DeepSeek Key 只影响说明文案是否由模型整理。
+        advice: await requestBudgetAdvice(data),
       };
     } catch (error) {
       return {

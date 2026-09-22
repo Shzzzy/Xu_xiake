@@ -51,10 +51,12 @@ test("5 人往返交通按单人价格乘人数和段数", () => {
   });
 
   assert.equal(budget.transport, 10_000);
-  assert.equal(budget.lodging, 6_000);
+  assert.equal(budget.lodging, 10_000);
   assert.equal(budget.food, 3_750);
   assert.equal(budget.tickets, 0);
-  assert.equal(budget.other, 1_975);
+  assert.equal(budget.other, 2_375);
+  assert.equal(budget.provenance.lodging.quantity, 20);
+  assert.match(budget.provenance.lodging.label, /5 间 × 4 晚/);
   assert.equal(
     budget.estimatedTotal,
     budget.transport + budget.lodging + budget.food + budget.tickets + budget.other,
@@ -72,10 +74,56 @@ test("成人儿童门票分别按人数计价", () => {
   });
 
   assert.equal(budget.tickets, 500);
-  assert.equal(budget.lodging, 1_200);
+  assert.equal(budget.lodging, 1_800);
   assert.equal(budget.food, 720);
-  assert.equal(budget.other, 242);
-  assert.equal(budget.estimatedTotal, 2_662);
+  assert.equal(budget.other, 302);
+  assert.equal(budget.estimatedTotal, 3_322);
+});
+
+test("3 位成人按 3 间房计算住宿", () => {
+  const budget = calculateBudget({
+    travelers: { adults: 3, children: 0 },
+    days: 3,
+    transport: [],
+    ticketPrices: [],
+    lodgingPerNight: 500,
+    foodPerPersonPerDay: 0,
+  });
+
+  assert.equal(budget.lodging, 3_000);
+  assert.equal(budget.provenance.lodging.quantity, 6);
+  assert.match(budget.provenance.lodging.label, /3 间 × 2 晚/);
+});
+
+test("自驾车辆成本按车辆总额计算，不重复乘同行人数", () => {
+  const vehiclePrice: PriceReference = {
+    kind: "transport",
+    label: "上海至大理自驾车辆成本",
+    amount: 1_500,
+    currency: "CNY",
+    source: "amap:drive",
+    confidence: "verified",
+    costBasis: "vehicle",
+  };
+  const budget = calculateBudget({
+    travelers: { adults: 3, children: 0 },
+    days: 1,
+    transport: [
+      {
+        ...outboundFlight,
+        mode: "drive",
+        minimumPerPersonCost: 500,
+        priceReference: vehiclePrice,
+      },
+    ],
+    ticketPrices: [],
+    lodgingPerNight: 0,
+    foodPerPersonPerDay: 0,
+  });
+
+  assert.equal(budget.transport, 1_500);
+  assert.equal(budget.provenance.transport[0]?.quantity, 1);
+  assert.equal(budget.provenance.transport[0]?.total, 1_500);
 });
 
 test("价格引用保留来源与置信度且低置信价格标记为参考价", () => {
