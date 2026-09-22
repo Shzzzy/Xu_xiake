@@ -376,3 +376,33 @@ test("history.source 的 host 和 hash 也参与未安排景点校验", async ()
   assert.equal(prepared.analysisFailed, true);
   assert.equal(prepared.history?.length ?? 0, 0);
 });
+
+test("交通路线里的目的地名不会被当成未安排景点", () => {
+  const day = plan.days[0];
+  assert.ok(day);
+  const template = day.nodes[0];
+  assert.ok(template);
+  // 桂林飞布达拉宫的当天没有景点，但文案与交通节点都会写到目的地名。
+  const travelDay = {
+    ...day,
+    theme: "交通移动 · 桂林至布达拉宫",
+    purpose: "今天从桂林飞往布达拉宫，抵达后办理入住并适应海拔。",
+    highlights: ["桂林飞往布达拉宫，抵达后入住休息", "抵达当天以适应海拔为主", "视体力决定是否外出"],
+    cautions: ["抵达高原后避免剧烈活动，多补充水分", "随身携带证件与常用药品"],
+    nodes: [
+      {
+        ...template,
+        type: "transport" as const,
+        name: "桂林 → 布达拉宫 · 飞机",
+        timeLabel: "09:00–14:00",
+        location: "布达拉宫交通枢纽",
+        transportMode: "flight" as const,
+        transportMinutes: 300,
+      },
+    ],
+  };
+
+  assert.doesNotThrow(() =>
+    validateDayNarrative(travelDay, 0, { knownAttractions: ["布达拉宫", "布达拉宫广场"] }),
+  );
+});

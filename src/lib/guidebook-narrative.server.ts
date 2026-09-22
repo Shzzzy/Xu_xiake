@@ -208,6 +208,13 @@ export function validateDayNarrative(
     day.purpose,
     ...historyTexts,
   ].map(normalizeNarrativeLabel);
+  // 交通节点天然会写「桂林 → 布达拉宫」，这是路线而不是排入的景点；
+  // 不排除就会把交通日文案误判成"提到未安排的景点"，连降级文案都过不了校验。
+  const transportTexts = day.nodes
+    .filter((node) => node.type === "transport" || node.type === "transfer")
+    .flatMap((node) => [node.name, node.location ?? ""])
+    .map(normalizeNarrativeLabel)
+    .filter((value) => value.length > 0);
   for (const knownAttraction of options.knownAttractions ?? []) {
     const normalizedKnown = normalizeNarrativeLabel(knownAttraction);
     if (!normalizedKnown) continue;
@@ -215,6 +222,7 @@ export function validateDayNarrative(
       (scheduled) => scheduled.includes(normalizedKnown) || normalizedKnown.includes(scheduled),
     );
     if (scheduledToday) continue;
+    if (transportTexts.some((value) => value.includes(normalizedKnown))) continue;
     if (normalizedTexts.some((text) => text.includes(normalizedKnown))) {
       throw new Error(`第 ${index + 1} 天摘要提到当天未安排的景点：${knownAttraction}`);
     }
