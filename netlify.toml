@@ -1,0 +1,12 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # 让 Nitro 产出 Netlify 函数而不是 Vercel 产物。
+  NITRO_PRESET = "netlify"
+  NODE_VERSION = "22"
+
+[dev]
+  command = "npm run dev"
+  targetPort = 8080

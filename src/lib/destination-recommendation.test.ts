@@ -21,6 +21,7 @@ function destination(
     summary: tags.join("、"),
     scene: "test",
     accent: "#000000",
+    art: "mountain",
     tags,
   };
 }

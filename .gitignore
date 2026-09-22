@@ -23,3 +23,7 @@ Thumbs.db
 .agents/
 AGENTS.project.md
 skills-lock.json
+
+# 构建产物
+dist/
+.netlify/
