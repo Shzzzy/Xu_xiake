@@ -10,6 +10,7 @@ const migrationNames = [
   "0003_clear_discovered_route_context.sql",
   "0004_commercial_accounts.sql",
   "0005_username_auth.sql",
+  "0006_credit_reservation_idempotency.sql",
 ] as const;
 
 const commercialTables = [
@@ -46,6 +47,7 @@ const requiredIndexes = [
   "payment_orders_provider_order_id_unique_idx",
   "payment_orders_provider_transaction_id_unique_idx",
   "user_username_unique_idx",
+  "credit_reservations_wallet_plan_unique_idx",
 ] as const;
 
 async function createMigratedDatabase() {

@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { Sql } from "./db.ts";
 import type { CreditLedgerEntry, CreditReservation, CreditWallet } from "./credits/types.ts";
 
 type Row = Record<string, unknown>;
-type CreditSql = Pick<Sql, "query">;
+type CreditSql = {
+  query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
+  transaction<T>(fn: (tx: CreditSql) => Promise<T>): Promise<T>;
+};
+type ConsumeReservationResult =
+  { entry: CreditLedgerEntry } | { expired: true } | { error: string };
 
 export type CreditsService = {
   ensureWallet(userId: string): Promise<CreditWallet>;
@@ -60,9 +64,43 @@ function mapReservation(row: Row): CreditReservation {
   };
 }
 
+function availableBalance(wallet: Row): number {
+  return Number(wallet.balance) - Number(wallet.reserved);
+}
+
+function reservationExpiry(ttlMinutes: number): string {
+  return new Date(Date.now() + ttlMinutes * 60_000).toISOString();
+}
+
+async function lockWalletByUserId(sql: CreditSql, userId: string): Promise<Row> {
+  const rows = await sql.query<Row>("select * from credit_wallets where user_id = $1 for update", [
+    userId,
+  ]);
+  const wallet = rows[0];
+  if (!wallet) throw new Error("钱包不存在");
+  return wallet;
+}
+
+async function lockWalletById(sql: CreditSql, walletId: string): Promise<Row> {
+  const rows = await sql.query<Row>("select * from credit_wallets where id = $1 for update", [
+    walletId,
+  ]);
+  const wallet = rows[0];
+  if (!wallet) throw new Error("钱包不存在");
+  return wallet;
+}
+
+async function reservationWalletId(sql: CreditSql, reservationId: string): Promise<string | null> {
+  const rows = await sql.query<{ wallet_id: string }>(
+    "select wallet_id from credit_reservations where id = $1",
+    [reservationId],
+  );
+  return rows[0]?.wallet_id ?? null;
+}
+
 /**
- * 使用注入的 Sql.query() 构造钱包服务。
- * 生产入口注入 getSql()，测试可注入真实 PGlite，两者执行同一套原子 SQL。
+ * 使用注入的 Sql.query()/transaction() 构造钱包服务。
+ * 生产入口注入 getSql()，测试可注入真实 PGlite，两者执行同一套原子逻辑。
  */
 export function createCreditsService(sql: CreditSql): CreditsService {
   /** 读取钱包；不存在时原子创建，重复调用始终返回同一钱包。 */
@@ -121,8 +159,8 @@ export function createCreditsService(sql: CreditSql): CreditsService {
   }
 
   /**
-   * 原子预留 1 点。条件更新钱包行让并发请求串行化，
-   * `balance - reserved >= 1` 保证可用点数不会被双花。
+   * 原子预留 1 点。事务先锁钱包，再按 (wallet_id, plan_id) 锁既有预留：
+   * reserved/consumed 直接返回原记录；released/expired 复用原记录重新预留。
    */
   async function reserveCredit(
     userId: string,
@@ -133,116 +171,307 @@ export function createCreditsService(sql: CreditSql): CreditsService {
       throw new Error("预留有效期必须大于 0");
     }
 
-    const rows = await sql.query<Row>(
-      `with updated as (
-         update credit_wallets
+    return sql.transaction(async (tx) => {
+      const wallet = await lockWalletByUserId(tx, userId);
+      const walletId = String(wallet.id);
+      const existingRows = await tx.query<Row>(
+        `select * from credit_reservations
+         where wallet_id = $1 and plan_id = $2
+         for update`,
+        [walletId, planId],
+      );
+      const existing = existingRows[0];
+
+      if (existing) {
+        const status = String(existing.status);
+        if (status === "reserved" || status === "consumed") {
+          return mapReservation(existing);
+        }
+        if (status !== "released" && status !== "expired") {
+          throw new Error("点数预留状态异常");
+        }
+        if (availableBalance(wallet) < 1) throw new Error("点数不足");
+
+        const walletUpdate = await tx.query<{ id: string }>(
+          `update credit_wallets
+           set reserved = reserved + 1,
+               version = version + 1,
+               updated_at = now()
+           where id = $1
+           returning id`,
+          [walletId],
+        );
+        if (walletUpdate.length !== 1) throw new Error("钱包预占更新数量异常");
+
+        const reactivatedRows = await tx.query<Row>(
+          `update credit_reservations
+           set status = 'reserved',
+               expires_at = $2,
+               updated_at = now()
+           where id = $1
+           returning *`,
+          [existing.id, reservationExpiry(ttlMinutes)],
+        );
+        const reactivated = reactivatedRows[0];
+        if (!reactivated) throw new Error("预留重新激活失败");
+        return mapReservation(reactivated);
+      }
+
+      if (availableBalance(wallet) < 1) throw new Error("点数不足");
+
+      const walletUpdate = await tx.query<{ id: string }>(
+        `update credit_wallets
          set reserved = reserved + 1,
              version = version + 1,
              updated_at = now()
-         where user_id = $1 and balance - reserved >= 1
-         returning id
-       ), reservation as (
-         insert into credit_reservations (id, wallet_id, plan_id, status, expires_at)
-         select $2, id, $3, 'reserved',
-                now() + ($4::double precision * interval '1 minute')
-         from updated
-         returning *
-       )
-       select * from reservation`,
-      [userId, randomUUID(), planId, ttlMinutes],
-    );
-    const reservation = rows[0];
-    if (!reservation) throw new Error("点数不足或钱包不存在");
-    return mapReservation(reservation);
+         where id = $1
+         returning id`,
+        [walletId],
+      );
+      if (walletUpdate.length !== 1) throw new Error("钱包预占更新数量异常");
+
+      const insertedRows = await tx.query<Row>(
+        `insert into credit_reservations (
+           id, wallet_id, plan_id, status, expires_at
+         ) values ($1, $2, $3, 'reserved', $4)
+         returning *`,
+        [randomUUID(), walletId, planId, reservationExpiry(ttlMinutes)],
+      );
+      const inserted = insertedRows[0];
+      if (!inserted) throw new Error("点数预留创建失败");
+      return mapReservation(inserted);
+    });
   }
 
   /**
-   * 原子消费预留。预留状态条件更新确保同一预留只能成功一次，
-   * 钱包余额与预占同时扣减，并写入唯一一条消费流水。
+   * 原子消费预留。事务按 wallet -> reservation 顺序加锁；
+   * consumed 重试返回原流水，reserved 才扣余额/预占并写 generation 流水。
    */
   async function consumeReservation(
     reservationId: string,
     planId: string,
   ): Promise<CreditLedgerEntry> {
-    const rows = await sql.query<Row>(
-      `with consumed as (
-         update credit_reservations
-         set status = 'consumed', plan_id = $2, updated_at = now()
-         where id = $1
-           and status = 'reserved'
-           and expires_at > now()
-           and plan_id = $2
-         returning wallet_id, plan_id
-       ), wallet_update as (
-         update credit_wallets w
-         set balance = w.balance - 1,
-             reserved = w.reserved - 1,
-             version = w.version + 1,
+    const result = await sql.transaction<ConsumeReservationResult>(async (tx) => {
+      const walletId = await reservationWalletId(tx, reservationId);
+      if (!walletId) throw new Error("点数预留不存在、已消费或已过期");
+
+      const wallet = await lockWalletById(tx, walletId);
+      const reservationRows = await tx.query<Row>(
+        "select * from credit_reservations where id = $1 for update",
+        [reservationId],
+      );
+      const reservation = reservationRows[0];
+      if (!reservation) throw new Error("点数预留不存在、已消费或已过期");
+      if (String(reservation.wallet_id) !== walletId) throw new Error("点数预留归属异常");
+      if (nullableString(reservation.plan_id) !== planId) {
+        throw new Error("点数预留与行程不匹配");
+      }
+
+      const status = String(reservation.status);
+      if (status === "consumed") {
+        const ledgerRows = await tx.query<Row>(
+          `select * from credit_ledger
+           where wallet_id = $1 and plan_id = $2 and reason = 'generation'
+           order by created_at desc, id desc
+           limit 1`,
+          [walletId, planId],
+        );
+        const ledger = ledgerRows[0];
+        if (!ledger) throw new Error("已消费预留缺少生成流水");
+        return { entry: mapLedger(ledger) };
+      }
+      if (status === "released" || status === "expired") {
+        return { error: "点数预留不存在、已消费或已过期" };
+      }
+      if (status !== "reserved") throw new Error("点数预留状态异常");
+
+      const expiresAt = new Date(String(reservation.expires_at)).getTime();
+      if (expiresAt <= Date.now()) {
+        if (Number(wallet.reserved) < 1) throw new Error("钱包预占状态异常");
+        const expiredUpdate = await tx.query<{ id: string }>(
+          `update credit_reservations
+           set status = 'expired', updated_at = now()
+           where id = $1 and status = 'reserved'
+           returning id`,
+          [reservationId],
+        );
+        if (expiredUpdate.length !== 1) throw new Error("预留过期更新数量异常");
+        const walletUpdate = await tx.query<{ id: string }>(
+          `update credit_wallets
+           set reserved = reserved - 1,
+               version = version + 1,
+               updated_at = now()
+           where id = $1 and reserved >= 1
+           returning id`,
+          [walletId],
+        );
+        if (walletUpdate.length !== 1) throw new Error("钱包预占更新数量异常");
+        return { expired: true };
+      }
+
+      if (Number(wallet.balance) < 1 || Number(wallet.reserved) < 1) {
+        throw new Error("钱包余额或预占状态异常");
+      }
+
+      const consumedUpdate = await tx.query<{ id: string }>(
+        `update credit_reservations
+         set status = 'consumed', updated_at = now()
+         where id = $1 and status = 'reserved'
+         returning id`,
+        [reservationId],
+      );
+      if (consumedUpdate.length !== 1) throw new Error("预留消费更新数量异常");
+
+      const walletUpdate = await tx.query<{ balance: number }>(
+        `update credit_wallets
+         set balance = balance - 1,
+             reserved = reserved - 1,
+             version = version + 1,
              updated_at = now()
-         from consumed c
-         where w.id = c.wallet_id
-         returning w.id, w.balance
-       ), ledger as (
-         insert into credit_ledger (
+         where id = $1 and balance >= 1 and reserved >= 1
+         returning balance`,
+        [walletId],
+      );
+      const updatedWallet = walletUpdate[0];
+      if (!updatedWallet) throw new Error("钱包扣点更新数量异常");
+
+      const ledgerRows = await tx.query<Row>(
+        `insert into credit_ledger (
            id, wallet_id, delta, balance_after, reason, plan_id, note
-         )
-         select $3, u.id, -1, u.balance, 'generation', c.plan_id, '生成旅行方案'
-         from wallet_update u
-         join consumed c on c.wallet_id = u.id
-         returning *
-       )
-       select * from ledger`,
-      [reservationId, planId, randomUUID()],
-    );
-    const entry = rows[0];
-    if (!entry) throw new Error("点数预留不存在、已消费或已过期");
-    return mapLedger(entry);
+         ) values ($1, $2, -1, $3, 'generation', $4, '生成旅行方案')
+         returning *`,
+        [randomUUID(), walletId, updatedWallet.balance, planId],
+      );
+      const ledger = ledgerRows[0];
+      if (!ledger) throw new Error("生成流水写入失败");
+      return { entry: mapLedger(ledger) };
+    });
+
+    if ("error" in result) throw new Error(result.error);
+    if ("expired" in result) throw new Error("点数预留不存在、已消费或已过期");
+    return result.entry;
   }
 
   /** 原子释放预留；重复释放是安全 no-op，不会重复归还预占。 */
   async function releaseReservation(reservationId: string): Promise<void> {
-    await sql.query(
-      `with released as (
-         update credit_reservations
+    await sql.transaction(async (tx) => {
+      const walletId = await reservationWalletId(tx, reservationId);
+      if (!walletId) return;
+
+      const wallet = await lockWalletById(tx, walletId);
+      const reservationRows = await tx.query<Row>(
+        "select * from credit_reservations where id = $1 for update",
+        [reservationId],
+      );
+      const reservation = reservationRows[0];
+      if (!reservation) return;
+      if (String(reservation.wallet_id) !== walletId) {
+        throw new Error("点数预留归属异常");
+      }
+      if (String(reservation.status) !== "reserved") return;
+      if (Number(wallet.reserved) < 1) throw new Error("钱包预占状态异常");
+
+      const walletUpdate = await tx.query<{ id: string }>(
+        `update credit_wallets
+         set reserved = reserved - 1,
+             version = version + 1,
+             updated_at = now()
+         where id = $1 and reserved >= 1
+         returning id`,
+        [walletId],
+      );
+      if (walletUpdate.length !== 1) throw new Error("钱包预占更新数量异常");
+
+      const releasedRows = await tx.query<{ id: string }>(
+        `update credit_reservations
          set status = 'released', updated_at = now()
          where id = $1 and status = 'reserved'
-         returning wallet_id
-       )
-       update credit_wallets w
-       set reserved = w.reserved - 1,
-           version = w.version + 1,
-           updated_at = now()
-       from released r
-       where w.id = r.wallet_id and w.reserved > 0`,
-      [reservationId],
-    );
+         returning id`,
+        [reservationId],
+      );
+      if (releasedRows.length !== 1) throw new Error("预留释放更新数量异常");
+    });
   }
 
-  /** 批量回收已过期预留，并返回本次实际过期的预留数量。 */
+  /** 批量回收已过期预留；任何钱包预占不变量异常都会让事务整体回滚。 */
   async function expireReservations(now = new Date()): Promise<number> {
-    const rows = await sql.query<{ count: number }>(
-      `with expired as (
-         update credit_reservations
-         set status = 'expired', updated_at = now()
+    return sql.transaction(async (tx) => {
+      const candidates = await tx.query<{ id: string; wallet_id: string }>(
+        `select id, wallet_id
+         from credit_reservations
          where status = 'reserved' and expires_at <= $1
-         returning wallet_id
-       ), grouped as (
-         select wallet_id, count(*)::int as count
-         from expired
-         group by wallet_id
-       ), wallet_update as (
-         update credit_wallets w
-         set reserved = w.reserved - g.count,
-             version = w.version + 1,
-             updated_at = now()
-         from grouped g
-         where w.id = g.wallet_id and w.reserved >= g.count
-         returning w.id
-       )
-       select count(*)::int as count from expired`,
-      [now.toISOString()],
-    );
-    return Number(rows[0]?.count ?? 0);
+         order by wallet_id, id`,
+        [now.toISOString()],
+      );
+      if (candidates.length === 0) return 0;
+
+      const walletIds = [...new Set(candidates.map((row) => row.wallet_id))].sort();
+      const wallets = new Map<string, Row>();
+      for (const walletId of walletIds) {
+        wallets.set(walletId, await lockWalletById(tx, walletId));
+      }
+
+      const expiredRows: Array<{ id: string; walletId: string }> = [];
+      for (const candidate of candidates) {
+        const rows = await tx.query<Row>(
+          "select * from credit_reservations where id = $1 for update",
+          [candidate.id],
+        );
+        const reservation = rows[0];
+        if (!reservation) continue;
+        if (String(reservation.wallet_id) !== candidate.wallet_id) {
+          throw new Error("点数预留归属异常");
+        }
+        if (
+          String(reservation.status) === "reserved" &&
+          new Date(String(reservation.expires_at)).getTime() <= now.getTime()
+        ) {
+          expiredRows.push({ id: candidate.id, walletId: candidate.wallet_id });
+        }
+      }
+      if (expiredRows.length === 0) return 0;
+
+      const counts = new Map<string, number>();
+      for (const row of expiredRows) {
+        counts.set(row.walletId, (counts.get(row.walletId) ?? 0) + 1);
+      }
+
+      for (const walletId of [...counts.keys()].sort()) {
+        const count = counts.get(walletId)!;
+        const wallet = wallets.get(walletId);
+        if (!wallet) throw new Error("钱包不存在");
+        if (Number(wallet.reserved) < count) {
+          throw new Error("钱包预占状态异常，已回滚过期操作");
+        }
+        const walletUpdate = await tx.query<{ id: string }>(
+          `update credit_wallets
+           set reserved = reserved - $2,
+               version = version + 1,
+               updated_at = now()
+           where id = $1 and reserved >= $2
+           returning id`,
+          [walletId, count],
+        );
+        if (walletUpdate.length !== 1) {
+          throw new Error("钱包预占更新数量异常，已回滚过期操作");
+        }
+      }
+
+      for (const row of expiredRows) {
+        const reservationUpdate = await tx.query<{ id: string }>(
+          `update credit_reservations
+           set status = 'expired', updated_at = now()
+           where id = $1 and status = 'reserved'
+           returning id`,
+          [row.id],
+        );
+        if (reservationUpdate.length !== 1) {
+          throw new Error("预留过期更新数量异常，已回滚过期操作");
+        }
+      }
+
+      return expiredRows.length;
+    });
   }
 
   return {
@@ -286,7 +515,7 @@ export function claimFreeTrial(userId: string, planId: string | null): Promise<C
   return getDefaultService().then((service) => service.claimFreeTrial(userId, planId));
 }
 
-/** 原子预留 1 点；通过条件更新阻止并发双花。 */
+/** 原子预留 1 点；同一行程重复或并发调用返回同一预留。 */
 export function reserveCredit(
   userId: string,
   planId: string,
@@ -295,7 +524,7 @@ export function reserveCredit(
   return getDefaultService().then((service) => service.reserveCredit(userId, planId, ttlMinutes));
 }
 
-/** 原子消费预留，成功时同步扣减余额、预占并写流水。 */
+/** 原子消费预留；重复消费返回原流水。 */
 export function consumeReservation(
   reservationId: string,
   planId: string,
