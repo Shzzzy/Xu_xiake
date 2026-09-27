@@ -1,10 +1,6 @@
 /**
- * Local email/password sign-in (this app's Better Auth DB — not the broker).
+ * 本应用自有的邮箱密码登录能力（不走共享认证代理）。
  *
- * Off by default. To enable: set `emailAndPasswordEnabled` to `true` below,
- * then build sign-up / sign-in forms with `authClient.signUp.email` /
- * `authClient.signIn.email` from `@/lib/auth/client` (see the auth skill).
- *
- * Do NOT edit `server.ts` for this — that file is frozen pre-wired config.
+ * 手机号注册会转换为内部邮箱后复用该能力；用户名插件只在服务端负责手机号登录。
  */
-export const emailAndPasswordEnabled = false;
+export const emailAndPasswordEnabled = true;
