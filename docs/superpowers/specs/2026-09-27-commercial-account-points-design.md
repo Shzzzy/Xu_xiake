@@ -1,7 +1,8 @@
 # 商业化账号、点数与支付系统设计
 
-> 状态：待用户最终审核  
+> 状态：已确认，进入实施计划  
 > 日期：2026-09-27  
+> 开发计划：[2026-09-27-commercial-account-points.md](../plans/2026-09-27-commercial-account-points.md)  
 > 基线分支：`codex/ai-butler-guidebook`  
 > 关联原型：  
 > - `public/prototypes/commercial-payment-directions.html`  
