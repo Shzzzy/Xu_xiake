@@ -14,6 +14,25 @@ type AuthBookPageProps = {
   returnTo?: string;
 };
 
+
+function authErrorDetails(error: unknown) {
+  const source = (error ?? {}) as {
+    name?: unknown;
+    message?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    cause?: unknown;
+  };
+  const cause = source.cause;
+  return {
+    name: typeof source.name === "string" ? source.name : undefined,
+    message: typeof source.message === "string" ? source.message : String(error ?? ""),
+    status: typeof source.status === "number" ? source.status : undefined,
+    statusCode: typeof source.statusCode === "number" ? source.statusCode : undefined,
+    cause: cause instanceof Error ? cause.message : cause ? String(cause) : undefined,
+  };
+}
+
 export function AuthBookPage({ returnTo }: AuthBookPageProps) {
   const register = useServerFn(registerWithPhone);
   const [mode, setMode] = useState<AuthMode>("login");
@@ -82,6 +101,8 @@ export function AuthBookPage({ returnTo }: AuthBookPageProps) {
         window.location.assign(destination);
       }
     } catch (err) {
+      // 只记录认证错误元数据，便于定位部署环境问题，不记录手机号或密码。
+      console.error("[auth] sign-in failed", authErrorDetails(err));
       setError(readableAuthError(err, mode));
     } finally {
       setPending(false);
