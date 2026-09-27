@@ -1,5 +1,5 @@
 import type { CreditLedgerEntry, CreditReservation } from "./credits/types.ts";
-import { createCreditsService } from "./credits.server.ts";
+import { createCreditsService, ensureWallet } from "./credits.server.ts";
 import {
   getTravelPlanWithSql,
   saveTravelPlanWithSql,
@@ -12,6 +12,39 @@ type EntitlementSql = {
   transaction<T>(fn: (tx: EntitlementSql) => Promise<T>): Promise<T>;
 };
 
+export type GenerationDecision =
+  | { kind: "guest" }
+  | { kind: "free"; userId: string }
+  | { kind: "needs_confirmation"; userId: string }
+  | { kind: "needs_login" }
+  | { kind: "needs_purchase" };
+
+export type GenerationPermission =
+  | { kind: "guest" }
+  | { kind: "free"; userId: string }
+  | { kind: "paid"; reservationId: string }
+  | { kind: "needs_login" }
+  | { kind: "needs_purchase" };
+
+/** 根据钱包状态决定本次生成先走免费、确认扣点还是购买。 */
+export function decideGenerationPermission(input: {
+  userId: string | null;
+  wallet: { balance: number; reserved: number; freeTrialClaimed: boolean } | null;
+}): GenerationDecision {
+  if (!input.userId) return { kind: "guest" };
+  if (!input.wallet) return { kind: "needs_purchase" };
+  if (!input.wallet.freeTrialClaimed) return { kind: "free", userId: input.userId };
+  if (input.wallet.balance - input.wallet.reserved >= 1) {
+    return { kind: "needs_confirmation", userId: input.userId };
+  }
+  return { kind: "needs_purchase" };
+}
+
+/** 访客权益只按 Cookie 是否用过判断，便于单测覆盖真实分支。 */
+export function resolveGuestGenerationDecision(hasUsedCookie: boolean): GenerationDecision {
+  return hasUsedCookie ? { kind: "needs_login" } : { kind: "guest" };
+}
+
 export type ClaimFirstFreePlanInput = {
   userId: string;
   planId: string;
@@ -22,6 +55,7 @@ export type FinishPaidPlanInput = {
   userId: string;
   reservationId: string;
   planId: string;
+  plan: TripPlan;
 };
 
 export type EntitlementsService = {
@@ -29,6 +63,7 @@ export type EntitlementsService = {
   getTravelPlan(userId: string, planId: string): Promise<TripPlan | null>;
   claimFirstFreePlan(input: ClaimFirstFreePlanInput): Promise<{ planId: string }>;
   reservePaidPlan(userId: string, planId: string): Promise<CreditReservation>;
+  releasePaidPlan(userId: string, reservationId: string): Promise<void>;
   finishPaidPlan(input: FinishPaidPlanInput): Promise<CreditLedgerEntry>;
 };
 
@@ -69,6 +104,10 @@ export function createEntitlementsService(sql: EntitlementSql): EntitlementsServ
     }
 
     return sql.transaction(async (tx) => {
+      // 已经保存过的行程说明权益已处理，重复调用直接返回，保证 PDF/分享入口可安全重试。
+      const existingPlan = await getTravelPlanWithSql(tx, input.userId, input.planId);
+      if (existingPlan) return { planId: input.planId };
+
       await saveTravelPlanWithSql(tx, {
         userId: input.userId,
         planId: input.planId,
@@ -102,31 +141,52 @@ export function createEntitlementsService(sql: EntitlementSql): EntitlementsServ
     });
   }
 
-  /** 付费预留前先确认行程属于当前用户，避免把点数预留绑定到他人行程。 */
+  /**
+   * 付费生成在 plan 尚未存在时先预占点数。
+   * 预留的 plan_id 先为空，finish 成功保存 plan 后再关联，避免创建半成品行程。
+   */
   async function reservePaidPlan(userId: string, planId: string): Promise<CreditReservation> {
     return sql.transaction(async (tx) => {
-      const plan = await getTravelPlanWithSql(tx, userId, planId);
-      if (!plan) throw new Error("行程不存在或无权访问");
-      return createCreditsService(tx).reserveCredit(userId, planId);
+      const txCredits = createCreditsService(tx);
+      await txCredits.ensureWallet(userId);
+      return txCredits.reserveCreditForGeneration(userId, planId);
+    });
+  }
+
+  /** 生成失败时释放预占；只允许预留所属账号执行。 */
+  async function releasePaidPlan(userId: string, reservationId: string): Promise<void> {
+    if (!userId || !reservationId) throw new Error("缺少用户身份或预留标识");
+    await sql.transaction(async (tx) => {
+      const ownerUserId = await reservationOwnerUserId(tx, reservationId);
+      if (!ownerUserId) throw new Error("点数预留不存在或已消费");
+      if (ownerUserId !== userId) throw new Error("点数预留无权访问");
+      await createCreditsService(tx).releaseReservation(reservationId);
     });
   }
 
   /**
-   * 完成付费生成时必须显式传入当前用户，并同时校验预留账号和行程归属。
+   * 完成付费生成时先保存最终 plan，再在同一事务内关联并消费预留。
+   * 任一步失败都会整体回滚，重复调用返回原 generation 流水。
    */
   async function finishPaidPlan(input: FinishPaidPlanInput): Promise<CreditLedgerEntry> {
     if (!input?.userId) throw new Error("缺少用户身份");
-    if (!input.reservationId || !input.planId) throw new Error("缺少预留或行程标识");
+    if (!input.reservationId || !input.planId || !input.plan) {
+      throw new Error("缺少预留、行程标识或最终计划");
+    }
 
     return sql.transaction(async (tx) => {
       const ownerUserId = await reservationOwnerUserId(tx, input.reservationId);
       if (!ownerUserId) throw new Error("点数预留不存在、已消费或已过期");
       if (ownerUserId !== input.userId) throw new Error("行程不存在或无权访问");
 
-      const plan = await getTravelPlanWithSql(tx, input.userId, input.planId);
-      if (!plan) throw new Error("行程不存在或无权访问");
-
-      return createCreditsService(tx).consumeReservation(input.reservationId, input.planId);
+      await saveTravelPlanWithSql(tx, {
+        userId: input.userId,
+        planId: input.planId,
+        plan: input.plan,
+      });
+      const txCredits = createCreditsService(tx);
+      await txCredits.associateReservationPlan(input.userId, input.reservationId, input.planId);
+      return txCredits.consumeReservation(input.reservationId, input.planId);
     });
   }
 
@@ -135,6 +195,7 @@ export function createEntitlementsService(sql: EntitlementSql): EntitlementsServ
     getTravelPlan,
     claimFirstFreePlan,
     reservePaidPlan,
+    releasePaidPlan,
     finishPaidPlan,
   };
 }
@@ -167,12 +228,67 @@ export function claimFirstFreePlan(input: ClaimFirstFreePlanInput): Promise<{ pl
   return getDefaultService().then((service) => service.claimFirstFreePlan(input));
 }
 
-/** 为当前用户的已有行程预留一点。 */
+/** 为当前用户的待保存行程预留一点。 */
 export function reservePaidPlan(userId: string, planId: string): Promise<CreditReservation> {
   return getDefaultService().then((service) => service.reservePaidPlan(userId, planId));
+}
+
+/** 生成失败时释放当前用户拥有的预留。 */
+export function releasePaidPlan(userId: string, reservationId: string): Promise<void> {
+  return getDefaultService().then((service) => service.releasePaidPlan(userId, reservationId));
 }
 
 /** 完成当前用户的付费生成消费。 */
 export function finishPaidPlan(input: FinishPaidPlanInput): Promise<CreditLedgerEntry> {
   return getDefaultService().then((service) => service.finishPaidPlan(input));
+}
+
+const GUEST_GENERATION_COOKIE = "guest_generation_used";
+
+/** 访客首次生成时写入 HttpOnly Cookie；第二次生成要求登录。 */
+export async function claimGuestGenerationAttempt(): Promise<GenerationDecision> {
+  const { getCookie, setCookie } = await import("@tanstack/react-start/server");
+  const decision = resolveGuestGenerationDecision(Boolean(getCookie(GUEST_GENERATION_COOKIE)));
+  if (decision.kind !== "guest") return decision;
+  setCookie(GUEST_GENERATION_COOKIE, "1", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 60 * 60 * 24,
+    path: "/",
+  });
+  return decision;
+}
+
+/** 访客生成失败时回滚 Cookie，避免一次失败就锁死免费体验。 */
+export async function releaseGuestGenerationAttempt(): Promise<void> {
+  const { deleteCookie } = await import("@tanstack/react-start/server");
+  deleteCookie(GUEST_GENERATION_COOKIE, { path: "/" });
+}
+
+/** 生成前只做权益判断；付费用户必须先经过前端确认再单独预留。 */
+export async function preparePlanGeneration(
+  userId: string | null,
+  planId: string,
+): Promise<GenerationDecision> {
+  if (!planId) throw new Error("缺少生成标识");
+  if (!userId) return claimGuestGenerationAttempt();
+  const wallet = await ensureWallet(userId);
+  return decideGenerationPermission({
+    userId,
+    wallet: {
+      balance: wallet.balance,
+      reserved: wallet.reserved,
+      freeTrialClaimed: wallet.freeTrialClaimed,
+    },
+  });
+}
+
+/** 已确认扣点后执行预留。 */
+export async function reservePaidGeneration(
+  userId: string,
+  planId: string,
+): Promise<GenerationPermission> {
+  const reservation = await reservePaidPlan(userId, planId);
+  return { kind: "paid", reservationId: reservation.id };
 }

@@ -1,6 +1,16 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import {
+  claimCurrentPlan,
+  finishPaidGeneration,
+  preparePlanGeneration,
+  releaseGuestGeneration,
+  releasePlanGeneration,
+  reservePlanGeneration,
+} from "@/lib/entitlements.functions";
+import type { GenerationDecision, GenerationPermission } from "@/lib/entitlements.server";
 import {
   ArrowLeft,
   ArrowRight,
@@ -99,6 +109,7 @@ import { TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
 import { requestAndApplyBudget } from "./plan-output/budget-advice-apply";
 import { recommendDestination as recommendDestinationFromCatalog } from "@/lib/destination-recommendation";
 import { WeatherStrip } from "./WeatherStrip";
+import { clearPendingPlanClaim, readPendingPlanClaim } from "./plan-output/use-guidebook-export";
 
 /**
  * 路书预览只在结果页用到，懒加载避免首页提前下载预览与导出代码。
@@ -434,6 +445,8 @@ function readSaved() {
 
 function PlannerPrototypeContent() {
   const variant: DesignVariant = "scroll";
+  const { user, isPending } = useCurrentUserState();
+  const claimPendingPlanFn = useServerFn(claimCurrentPlan);
   const [screen, setScreen] = useState<Screen>("landing");
   const [resultOrigin, setResultOrigin] = useState<"known" | "unknown">("known");
   const [brief, setBrief] = useState<TripBrief>(createDefaultBrief);
@@ -445,6 +458,27 @@ function PlannerPrototypeContent() {
   useEffect(() => {
     setSavedIds(readSaved());
   }, []);
+
+  // 未登录点击 PDF/分享后会把待领取计划放入 sessionStorage，登录回跳时在这里幂等 claim。
+  useEffect(() => {
+    if (isPending || !user) return;
+    const pending = readPendingPlanClaim();
+    if (!pending) return;
+    let cancelled = false;
+    void claimPendingPlanFn({ data: pending })
+      .then(() => {
+        if (cancelled) return;
+        clearPendingPlanClaim();
+        toast.success("登录成功，本次路书已保存到账号。");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toast.error(error instanceof Error ? error.message : "保存登录前生成的路书失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [claimPendingPlanFn, isPending, user]);
 
   const currentVariant = designVariants[0];
   const saveId = `${brief.destinationId}-${brief.startDate}-${brief.days}`;
@@ -1763,8 +1797,10 @@ function UnknownPlanScreen({
                     `${travelerInput.adults + travelerInput.children} 人`,
                     `${answers.days ?? 2} 天`,
                     transportLabels[normalizeTransportAnswer(answers.transport ?? "balanced")],
-                    findInspiration(recommendDestination(answers, inspirationCatalog), inspirationCatalog)
-                      ?.name ?? "未定目的地",
+                    findInspiration(
+                      recommendDestination(answers, inspirationCatalog),
+                      inspirationCatalog,
+                    )?.name ?? "未定目的地",
                   ],
                   onRequest: requestWizardBudgetAdvice,
                 }}
@@ -1927,6 +1963,12 @@ function ItineraryScreen({
   const forecastFn = useServerFn(getOpenMeteoForecast);
   const livePlannerFn = useServerFn(generateLiveItinerary);
   const longPlannerFn = useServerFn(generateLongItinerary);
+  const prepareGenerationFn = useServerFn(preparePlanGeneration);
+  const reserveGenerationFn = useServerFn(reservePlanGeneration);
+  const releaseGenerationFn = useServerFn(releasePlanGeneration);
+  const releaseGuestFn = useServerFn(releaseGuestGeneration);
+  const finishPaidGenerationFn = useServerFn(finishPaidGeneration);
+  const claimCurrentPlanFn = useServerFn(claimCurrentPlan);
   const [weather, setWeather] = useState<WeatherDay[]>([]);
   const [weatherState, setWeatherState] = useState<"loading" | "ready" | "error">("loading");
   const [weatherError, setWeatherError] = useState<string | null>(null);
@@ -1934,9 +1976,25 @@ function ItineraryScreen({
   const [liveClosing, setLiveClosing] = useState<TripClosing | null>(null);
   const [longPlan, setLongPlan] = useState<LongPlan | null>(null);
   const [plannerState, setPlannerState] = useState<
-    "idle" | "loading" | "ready" | "fallback" | "needs_decision"
+    | "idle"
+    | "loading"
+    | "saving"
+    | "ready"
+    | "fallback"
+    | "needs_decision"
+    | "needs_confirmation"
+    | "needs_login"
+    | "needs_purchase"
   >("idle");
   const [plannerMessage, setPlannerMessage] = useState("");
+  const [generationGateRevision, setGenerationGateRevision] = useState(0);
+  const [finalizeRevision, setFinalizeRevision] = useState(0);
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
+  const generationGateRef = useRef<{
+    planId: string;
+    permission: GenerationDecision | GenerationPermission;
+  } | null>(null);
+  const finalizedPlanRef = useRef<string | null>(null);
   const [liveSourceCount, setLiveSourceCount] = useState<number | null>(null);
   const [butlerResult, setButlerResult] = useState<ButlerPlanResult | null>(null);
   const [plannedRoute, setPlannedRoute] = useState<RoutePlan | null>(null);
@@ -2031,6 +2089,24 @@ function ItineraryScreen({
     [destination.id, destinationPlacesSignature],
   );
 
+  // 同一次输入变化对应一个稳定 planId；重试同一 run 不会重复扣点。
+  const generationInputsKey = useMemo(
+    () =>
+      JSON.stringify({
+        brief,
+        routePlan,
+        detailedTrip,
+        places: destinationPlacesSignature,
+      }),
+    [brief, destinationPlacesSignature, detailedTrip, routePlan],
+  );
+  const planId = useMemo(
+    () =>
+      globalThis.crypto?.randomUUID?.() ||
+      `generation-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    [generationInputsKey],
+  );
+
   useEffect(() => {
     let cancelled = false;
     setWeatherState("loading");
@@ -2076,6 +2152,7 @@ function ItineraryScreen({
     let cancelled = false;
     setPlannerState("loading");
     setPlannerMessage("");
+    setFinalizeError(null);
     setLivePlan(null);
     setLiveClosing(null);
     setLongPlan(null);
@@ -2089,122 +2166,170 @@ function ItineraryScreen({
       return;
     }
 
-    if (detailedTrip) {
-      // 天气是增强信息，不是规划前置条件；省级/宽泛目的地地理编码失败时仍要继续生成路书。
-      if (weatherState === "loading") return;
+    // 天气是增强信息，不是规划前置条件；省级/宽泛目的地地理编码失败时仍要继续生成路书。
+    if (detailedTrip && weatherState === "loading") return;
 
-      livePlannerFn({
-        data: {
-          destination: {
-            id: destination.id,
-            name: destination.name,
-            region: destination.region,
-          },
-          startDate: brief.startDate,
-          days: brief.days,
-          dailyHours: brief.dailyHours,
-          pace: brief.pace,
-          interests: brief.interests,
-          weather: weatherState === "ready" ? weather : [],
-          seedPlaces: destinationPlaces,
-          route: routePlan,
-          origin: brief.origin,
-          startTime: brief.startTime,
-          endTime: brief.endTime,
-          totalBudget: brief.totalBudget,
-          travelers: { adults: brief.adults, children: brief.children },
-          transport: routePlan.legs[0]?.transport ?? null,
-          style: routePlan.legs[0]?.style,
-        },
-      })
-        .then((result) => {
-          if (cancelled) return;
-          if (result.status === "needs_decision") {
-            setPlannedRoute(result.route);
-            setFeasibilityTransportLegs(result.transportLegs);
-            setFeasibilityDecision(result.decision);
-            setPlannerState("needs_decision");
-            setPlannerMessage(result.decision.reason);
-            return;
-          }
-          if (result.status === "ok" && result.mode === "legacy") {
-            setLivePlan(result.plan);
-            setLiveClosing(result.closing);
-            setPlannedRoute(result.route);
-            setLiveSourceCount(result.sources.length);
-            setPlannerState("ready");
-            notifyDiscoveryOnce(result.discoveries);
-            if (result.discoveries.some((discovery) => discovery.status === "published")) {
-              void refreshInspirationCatalog();
-            }
-            return;
-          }
-          if (result.status === "ok") {
-            // 管家模式：把骨架、逐日文案与校验结果落到状态，executionPlan 与提示条由下方 useMemo 组装。
-            setButlerResult(result);
-            setLiveClosing(result.closing);
-            setPlannedRoute(result.route);
-            setLiveSourceCount(result.sources.length);
-            setPlannerState("ready");
-            notifyDiscoveryOnce(result.discoveries);
-            if (result.discoveries.some((discovery) => discovery.status === "published")) {
-              void refreshInspirationCatalog();
-            }
-            return;
-          }
-          setPlannerState("fallback");
-          setPlannerMessage(`缺少配置：${result.missing.join("、")}`);
-        })
-        .catch((error: unknown) => {
-          if (cancelled) return;
-          setPlannerState("fallback");
-          setPlannerMessage(describePlannerError(error));
-        });
-    } else {
-      const fallbackPlan = buildFallbackLongPlan({
-        destinationName: destination.name,
-        region: destination.region,
-        days: brief.days,
-        seedPlaces: destination.places.map((place) => place.name),
-      });
+    const handleGenerationFailure = async (message: string) => {
+      if (cancelled) return;
+      const permission = generationGateRef.current?.permission;
+      if (permission?.kind === "paid") {
+        try {
+          await releaseGenerationFn({ data: { reservationId: permission.reservationId } });
+        } catch (releaseError) {
+          console.error("释放点数预留失败", releaseError);
+        }
+      }
+      if (permission?.kind === "guest") {
+        try {
+          await releaseGuestFn();
+        } catch (releaseError) {
+          console.error("清理访客生成标记失败", releaseError);
+        }
+      }
+      generationGateRef.current = null;
+      setPlannerState("fallback");
+      setPlannerMessage(message);
+    };
 
-      longPlannerFn({
-        data: {
-          destination: {
-            id: destination.id,
-            name: destination.name,
-            region: destination.region,
+    const startGeneration = async () => {
+      let gate = generationGateRef.current?.planId === planId ? generationGateRef.current : null;
+      if (!gate) {
+        const decision = await prepareGenerationFn({ data: { planId } });
+        if (cancelled) return;
+        gate = { planId, permission: decision };
+        generationGateRef.current = gate;
+      }
+
+      const permission = gate.permission;
+      if (permission.kind === "needs_confirmation") {
+        setPlannerState("needs_confirmation");
+        setPlannerMessage("本次生成将消耗 1 点，确认后开始规划。");
+        return;
+      }
+      if (permission.kind === "needs_login") {
+        setPlannerState("needs_login");
+        setPlannerMessage("访客完整体验已使用，登录后可继续生成。");
+        return;
+      }
+      if (permission.kind === "needs_purchase") {
+        setPlannerState("needs_purchase");
+        setPlannerMessage("点数不足，请先获取点数后重新生成。");
+        return;
+      }
+
+      if (detailedTrip) {
+        livePlannerFn({
+          data: {
+            destination: {
+              id: destination.id,
+              name: destination.name,
+              region: destination.region,
+            },
+            startDate: brief.startDate,
+            days: brief.days,
+            dailyHours: brief.dailyHours,
+            pace: brief.pace,
+            interests: brief.interests,
+            weather: weatherState === "ready" ? weather : [],
+            seedPlaces: destinationPlaces,
+            route: routePlan,
+            origin: brief.origin,
+            startTime: brief.startTime,
+            endTime: brief.endTime,
+            totalBudget: brief.totalBudget,
+            travelers: { adults: brief.adults, children: brief.children },
+            transport: routePlan.legs[0]?.transport ?? null,
+            style: routePlan.legs[0]?.style,
           },
-          startDate: brief.startDate,
-          days: brief.days,
-          pace: brief.pace,
-          interests: brief.interests,
-          seedPlaces: destination.places.map((place) => place.name),
-          route: routePlan,
-        },
-      })
-        .then((result) => {
-          if (cancelled) return;
-          if (result.status === "ok") {
-            setLongPlan(result.plan);
-            setPlannerState("ready");
-            notifyDiscoveryOnce(result.discoveries);
-            if (result.discoveries.some((discovery) => discovery.status === "published")) {
-              void refreshInspirationCatalog();
-            }
-            return;
-          }
-          setLongPlan(fallbackPlan);
-          setPlannerState("fallback");
-          setPlannerMessage(`缺少配置：${result.missing.join("、")}`);
         })
-        .catch((error: unknown) => {
-          if (cancelled) return;
-          setLongPlan(fallbackPlan);
-          setPlannerState("fallback");
-          setPlannerMessage(error instanceof Error ? error.message : "长线规划服务暂不可用");
-        });
-    }
+          .then(async (result) => {
+            if (cancelled) return;
+            if (result.status === "needs_decision") {
+              setPlannedRoute(result.route);
+              setFeasibilityTransportLegs(result.transportLegs);
+              setFeasibilityDecision(result.decision);
+              setPlannerState("needs_decision");
+              setPlannerMessage(result.decision.reason);
+              if (permission.kind === "paid") {
+                await releaseGenerationFn({ data: { reservationId: permission.reservationId } });
+              } else if (permission.kind === "guest") {
+                await releaseGuestFn();
+              }
+              generationGateRef.current = null;
+              return;
+            }
+            if (result.status === "ok" && result.mode === "legacy") {
+              setLivePlan(result.plan);
+              setLiveClosing(result.closing);
+              setPlannedRoute(result.route);
+              setLiveSourceCount(result.sources.length);
+              setPlannerState("saving");
+              notifyDiscoveryOnce(result.discoveries);
+              if (result.discoveries.some((discovery) => discovery.status === "published")) {
+                void refreshInspirationCatalog();
+              }
+              return;
+            }
+            if (result.status === "ok") {
+              // 管家模式：把骨架、逐日文案与校验结果落到状态，executionPlan 与提示条由下方 useMemo 组装。
+              setButlerResult(result);
+              setLiveClosing(result.closing);
+              setPlannedRoute(result.route);
+              setLiveSourceCount(result.sources.length);
+              setPlannerState("saving");
+              notifyDiscoveryOnce(result.discoveries);
+              if (result.discoveries.some((discovery) => discovery.status === "published")) {
+                void refreshInspirationCatalog();
+              }
+              return;
+            }
+            await handleGenerationFailure(`缺少配置：${result.missing.join("、")}`);
+          })
+          .catch(async (error: unknown) => {
+            if (cancelled) return;
+            await handleGenerationFailure(describePlannerError(error));
+          });
+      } else {
+        longPlannerFn({
+          data: {
+            destination: {
+              id: destination.id,
+              name: destination.name,
+              region: destination.region,
+            },
+            startDate: brief.startDate,
+            days: brief.days,
+            pace: brief.pace,
+            interests: brief.interests,
+            seedPlaces: destination.places.map((place) => place.name),
+            route: routePlan,
+          },
+        })
+          .then(async (result) => {
+            if (cancelled) return;
+            if (result.status === "ok") {
+              setLongPlan(result.plan);
+              setPlannerState("saving");
+              notifyDiscoveryOnce(result.discoveries);
+              if (result.discoveries.some((discovery) => discovery.status === "published")) {
+                void refreshInspirationCatalog();
+              }
+              return;
+            }
+            await handleGenerationFailure(`缺少配置：${result.missing.join("、")}`);
+          })
+          .catch(async (error: unknown) => {
+            if (cancelled) return;
+            await handleGenerationFailure(
+              error instanceof Error ? error.message : "长线规划服务暂不可用",
+            );
+          });
+      }
+    };
+
+    void startGeneration().catch(async (error: unknown) => {
+      await handleGenerationFailure(describePlannerError(error));
+    });
 
     return () => {
       cancelled = true;
@@ -2221,17 +2346,23 @@ function ItineraryScreen({
     brief.startDate,
     brief.startTime,
     brief.totalBudget,
-    detailedTrip,
     destination.id,
     destination.name,
-    destinationPlaces,
     destination.region,
+    destinationPlaces,
+    detailedTrip,
+    generationGateRevision,
     livePlannerFn,
     longPlannerFn,
+    planId,
+    prepareGenerationFn,
     refreshInspirationCatalog,
+    releaseGenerationFn,
+    releaseGuestFn,
     routePlan,
     weatherState,
   ]);
+
   const plannedDays = useMemo(() => {
     if (butlerResult) {
       // 管家模式：每日行程卡片直接由骨架映射，保证与 executionPlan 同源。
@@ -2317,6 +2448,77 @@ function ItineraryScreen({
     resolvedRoutePlan,
     weather,
   ]);
+  useEffect(() => {
+    if (plannerState !== "saving") return;
+    if (finalizedPlanRef.current === planId) {
+      setPlannerState("ready");
+      return;
+    }
+    const gate = generationGateRef.current;
+    if (!gate || gate.planId !== planId) {
+      setFinalizeError("保存路书时缺少权益上下文，请重新生成。");
+      return;
+    }
+
+    let cancelled = false;
+    const finalize = async () => {
+      try {
+        if (gate.permission.kind === "free") {
+          await claimCurrentPlanFn({ data: { planId, plan: executionPlan } });
+        } else if (gate.permission.kind === "paid") {
+          await finishPaidGenerationFn({
+            data: {
+              reservationId: gate.permission.reservationId,
+              planId,
+              plan: executionPlan,
+            },
+          });
+        }
+        if (cancelled) return;
+        finalizedPlanRef.current = planId;
+        setFinalizeError(null);
+        setPlannerState("ready");
+      } catch (error) {
+        if (cancelled) return;
+        const message = describePlannerError(error);
+        setFinalizeError(message);
+        setPlannerMessage(message);
+      }
+    };
+
+    void finalize();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    claimCurrentPlanFn,
+    executionPlan,
+    finalizeRevision,
+    finishPaidGenerationFn,
+    planId,
+    plannerState,
+  ]);
+
+  const handleConfirmPaidGeneration = async () => {
+    const gate = generationGateRef.current;
+    if (!gate || gate.planId !== planId || gate.permission.kind !== "needs_confirmation") return;
+    setPlannerState("loading");
+    setPlannerMessage("正在预留 1 点并开始规划…");
+    try {
+      const paid = await reserveGenerationFn({ data: { planId } });
+      generationGateRef.current = { planId, permission: paid };
+      setGenerationGateRevision((value) => value + 1);
+    } catch (error) {
+      setPlannerState("fallback");
+      setPlannerMessage(describePlannerError(error));
+    }
+  };
+
+  const handleRetryFinalize = () => {
+    setFinalizeError(null);
+    setFinalizeRevision((value) => value + 1);
+  };
+
   // 每次执行计划变化都分配新的预览 runId，旧流即使晚到也无法写入当前纸张。
   const previewRunId = useMemo(
     () =>
@@ -2466,21 +2668,92 @@ function ItineraryScreen({
               onSelect={handleTripFeasibilityChoice}
               onCancel={handleTripFeasibilityCancel}
             />
-          ) : (
-            <GuidebookStage
-              state={plannerState === "needs_decision" ? "fallback" : plannerState}
-              message={plannerMessage}
-            >
-              <Suspense
-                fallback={
-                  <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-6 text-sm text-[var(--v-muted)]">
-                    正在加载路书预览…
-                  </div>
+          ) : plannerState === "needs_confirmation" ? (
+            <section className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-5">
+              <p className="text-xs tracking-[0.22em] text-[var(--v-accent)]">
+                CREDIT CONFIRMATION
+              </p>
+              <h3 className="mt-2 font-serif text-xl text-[var(--v-ink)]">本次生成将消耗 1 点</h3>
+              <p className="mt-2 text-sm leading-7 text-[var(--v-muted)]">
+                首次免费体验已经使用。确认后会先预留 1
+                点，只有最终路书保存成功才会正式扣除；生成失败会自动释放。
+              </p>
+              <Button
+                className="mt-4"
+                type="button"
+                onClick={() => void handleConfirmPaidGeneration()}
+              >
+                确认消耗 1 点并生成
+              </Button>
+            </section>
+          ) : plannerState === "needs_login" ? (
+            <section className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-5">
+              <p className="text-xs tracking-[0.22em] text-[var(--v-accent)]">ACCOUNT REQUIRED</p>
+              <h3 className="mt-2 font-serif text-xl text-[var(--v-ink)]">登录后继续生成</h3>
+              <p className="mt-2 text-sm leading-7 text-[var(--v-muted)]">
+                访客完整体验已经使用。登录后可以继续规划、保存路书并管理点数。
+              </p>
+              <Button
+                className="mt-4"
+                type="button"
+                onClick={() =>
+                  window.location.assign(
+                    `/auth?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`,
+                  )
                 }
               >
-                <GuidebookPreview plan={executionPlan} runId={previewRunId} />
-              </Suspense>
-            </GuidebookStage>
+                去登录
+              </Button>
+            </section>
+          ) : plannerState === "needs_purchase" ? (
+            <section className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-5">
+              <p className="text-xs tracking-[0.22em] text-[var(--v-accent)]">POINTS REQUIRED</p>
+              <h3 className="mt-2 font-serif text-xl text-[var(--v-ink)]">点数不足，先获取点数</h3>
+              <p className="mt-2 text-sm leading-7 text-[var(--v-muted)]">
+                当前没有可用点数，也没有未使用的首次免费体验。获取点数后即可继续生成。
+              </p>
+              <Button
+                className="mt-4"
+                type="button"
+                onClick={() =>
+                  window.location.assign(
+                    `/pricing?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`,
+                  )
+                }
+              >
+                查看点数
+              </Button>
+            </section>
+          ) : (
+            <div className="space-y-3">
+              <GuidebookStage
+                state={
+                  finalizeError
+                    ? "fallback"
+                    : plannerState === "ready"
+                      ? "ready"
+                      : plannerState === "fallback" || plannerState === "needs_decision"
+                        ? "fallback"
+                        : "loading"
+                }
+                message={finalizeError ?? plannerMessage}
+              >
+                <Suspense
+                  fallback={
+                    <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-6 text-sm text-[var(--v-muted)]">
+                      正在加载路书预览…
+                    </div>
+                  }
+                >
+                  <GuidebookPreview plan={executionPlan} planId={planId} runId={previewRunId} />
+                </Suspense>
+              </GuidebookStage>
+              {finalizeError ? (
+                <Button type="button" variant="outline" onClick={handleRetryFinalize}>
+                  重试保存路书
+                </Button>
+              ) : null}
+            </div>
           )}
         </div>
       ) : null}

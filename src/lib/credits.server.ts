@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { CreditLedgerEntry, CreditReservation, CreditWallet } from "./credits/types.ts";
 
 type Row = Record<string, unknown>;
@@ -14,6 +14,16 @@ export type CreditsService = {
   getWalletSummary(userId: string): Promise<{ wallet: CreditWallet; ledger: CreditLedgerEntry[] }>;
   claimFreeTrial(userId: string, planId: string | null): Promise<CreditLedgerEntry>;
   reserveCredit(userId: string, planId: string, ttlMinutes?: number): Promise<CreditReservation>;
+  reserveCreditForGeneration(
+    userId: string,
+    planId: string,
+    ttlMinutes?: number,
+  ): Promise<CreditReservation>;
+  associateReservationPlan(
+    userId: string,
+    reservationId: string,
+    planId: string,
+  ): Promise<CreditReservation>;
   consumeReservation(reservationId: string, planId: string): Promise<CreditLedgerEntry>;
   releaseReservation(reservationId: string): Promise<void>;
   expireReservations(now?: Date): Promise<number>;
@@ -96,6 +106,12 @@ async function reservationWalletId(sql: CreditSql, reservationId: string): Promi
     [reservationId],
   );
   return rows[0]?.wallet_id ?? null;
+}
+
+/** 生成流程的预留 ID 由 userId + planId 稳定派生，保证网络重试不会重复预留。 */
+function generationReservationId(userId: string, planId: string): string {
+  const digest = createHash("sha256").update(`${userId}:${planId}`).digest("hex").slice(0, 32);
+  return `reservation_${digest}`;
 }
 
 /**
@@ -241,6 +257,119 @@ export function createCreditsService(sql: CreditSql): CreditsService {
       if (!inserted) throw new Error("点数预留创建失败");
       return mapReservation(inserted);
     });
+  }
+
+  /**
+   * 为尚未保存的生成计划预留点数。
+   * plan_id 先保持 null，等最终 plan 在 finish 阶段保存成功后再关联，避免提前创建空行程。
+   */
+  async function reserveCreditForGeneration(
+    userId: string,
+    planId: string,
+    ttlMinutes = 15,
+  ): Promise<CreditReservation> {
+    if (!Number.isFinite(ttlMinutes) || ttlMinutes <= 0) {
+      throw new Error("预留有效期必须大于 0");
+    }
+
+    return sql.transaction(async (tx) => {
+      const wallet = await lockWalletByUserId(tx, userId);
+      const walletId = String(wallet.id);
+      const reservationId = generationReservationId(userId, planId);
+      const existingRows = await tx.query<Row>(
+        "select * from credit_reservations where id = $1 for update",
+        [reservationId],
+      );
+      const existing = existingRows[0];
+
+      if (existing) {
+        if (String(existing.wallet_id) !== walletId) {
+          throw new Error("点数预留归属异常");
+        }
+        const existingPlanId = nullableString(existing.plan_id);
+        if (existingPlanId !== null && existingPlanId !== planId) {
+          throw new Error("点数预留与行程不匹配");
+        }
+        const status = String(existing.status);
+        if (status === "reserved" || status === "consumed") return mapReservation(existing);
+        if (status !== "released" && status !== "expired") {
+          throw new Error("点数预留状态异常");
+        }
+        if (availableBalance(wallet) < 1) throw new Error("点数不足");
+
+        const walletUpdate = await tx.query<{ id: string }>(
+          `update credit_wallets
+           set reserved = reserved + 1,
+               version = version + 1,
+               updated_at = now()
+           where id = $1 and balance - reserved >= 1
+           returning id`,
+          [walletId],
+        );
+        if (walletUpdate.length !== 1) throw new Error("点数不足");
+
+        const reactivatedRows = await tx.query<Row>(
+          `update credit_reservations
+           set plan_id = null,
+               status = 'reserved',
+               expires_at = $2,
+               updated_at = now()
+           where id = $1
+           returning *`,
+          [reservationId, reservationExpiry(ttlMinutes)],
+        );
+        const reactivated = reactivatedRows[0];
+        if (!reactivated) throw new Error("预留重新激活失败");
+        return mapReservation(reactivated);
+      }
+
+      if (availableBalance(wallet) < 1) throw new Error("点数不足");
+
+      const walletUpdate = await tx.query<{ id: string }>(
+        `update credit_wallets
+         set reserved = reserved + 1,
+             version = version + 1,
+             updated_at = now()
+         where id = $1 and balance - reserved >= 1
+         returning id`,
+        [walletId],
+      );
+      if (walletUpdate.length !== 1) throw new Error("点数不足");
+
+      const insertedRows = await tx.query<Row>(
+        `insert into credit_reservations (
+           id, wallet_id, plan_id, status, expires_at
+         ) values ($1, $2, null, 'reserved', $3)
+         returning *`,
+        [reservationId, walletId, reservationExpiry(ttlMinutes)],
+      );
+      const inserted = insertedRows[0];
+      if (!inserted) throw new Error("点数预留创建失败");
+      return mapReservation(inserted);
+    });
+  }
+
+  /** 在最终 plan 保存成功后，将预留关联到真实 planId。 */
+  async function associateReservationPlan(
+    userId: string,
+    reservationId: string,
+    planId: string,
+  ): Promise<CreditReservation> {
+    const rows = await sql.query<Row>(
+      `update credit_reservations r
+       set plan_id = $3,
+           updated_at = now()
+       from credit_wallets w
+       where r.id = $1
+         and r.wallet_id = w.id
+         and w.user_id = $2
+         and (r.plan_id is null or r.plan_id = $3)
+       returning r.*`,
+      [reservationId, userId, planId],
+    );
+    const reservation = rows[0];
+    if (!reservation) throw new Error("点数预留不存在或无权访问");
+    return mapReservation(reservation);
   }
 
   /**
@@ -479,6 +608,8 @@ export function createCreditsService(sql: CreditSql): CreditsService {
     getWalletSummary,
     claimFreeTrial,
     reserveCredit,
+    reserveCreditForGeneration,
+    associateReservationPlan,
     consumeReservation,
     releaseReservation,
     expireReservations,

@@ -65,7 +65,15 @@ export function shouldAcceptPage(input: {
  * 服务端按页推送 NDJSON，每收到一页就追加进同源 iframe，因此用户能一页页看到
  * 路书成形；全部页面到齐后才允许导出 PDF。
  */
-export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: string }) {
+export function GuidebookPreview({
+  plan,
+  planId,
+  runId,
+}: {
+  plan: TripPlan;
+  planId: string;
+  runId?: string;
+}) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -280,6 +288,7 @@ export function GuidebookPreview({ plan, runId }: { plan: TripPlan; runId?: stri
         </div>
         <ExportGuidebookButton
           plan={plan}
+          planId={planId}
           previewFrameRef={frameRef}
           disabled={!ready}
           disabledHint={error ? "路书生成失败，请先处理上方问题" : "路书全部页面生成完成后即可导出"}

@@ -1,6 +1,9 @@
 import { useCallback, useRef, useState, type RefObject } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { claimCurrentPlan } from "@/lib/entitlements.functions";
+import { resolveGuidebookExportGate } from "@/lib/guidebook-access";
 import type { TripPlan } from "@/lib/travel-plan";
 import { exportGuidebook } from "@/lib/travel-plan.functions";
 import {
@@ -10,6 +13,47 @@ import {
 
 /** 下载地址保留一段时间，确保浏览器把文件写完再回收。 */
 const DOWNLOAD_URL_RELEASE_MS = 60_000;
+const PENDING_PLAN_CLAIM_KEY = "xuxiake:pending-plan-claim:v1";
+
+export type PendingPlanClaim = {
+  planId: string;
+  plan: TripPlan;
+};
+
+/** 未登录点击 PDF/分享时，把最终计划暂存在当前标签页，登录回跳后可以领取。 */
+export function storePendingPlanClaim(planId: string, plan: TripPlan): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(PENDING_PLAN_CLAIM_KEY, JSON.stringify({ planId, plan }));
+}
+
+/** 读取待领取计划；损坏数据直接忽略，不能让登录回跳流程崩溃。 */
+export function readPendingPlanClaim(): PendingPlanClaim | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed = JSON.parse(
+      window.sessionStorage.getItem(PENDING_PLAN_CLAIM_KEY) ?? "null",
+    ) as PendingPlanClaim | null;
+    if (!parsed || typeof parsed.planId !== "string" || !parsed.plan) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingPlanClaim(): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(PENDING_PLAN_CLAIM_KEY);
+}
+
+function redirectToAuth(): void {
+  const returnTo = `${window.location.pathname}${window.location.search}`;
+  window.location.assign(`/auth?returnTo=${encodeURIComponent(returnTo)}`);
+}
+
+function redirectToPricing(): void {
+  const returnTo = `${window.location.pathname}${window.location.search}`;
+  window.location.assign(`/pricing?returnTo=${encodeURIComponent(returnTo)}`);
+}
 
 type PreparedPdf = {
   filename: string;
@@ -62,7 +106,9 @@ function printPreviewDocument(frame: HTMLIFrameElement | null): "printed" | "blo
   if (printWindow.document.readyState === "complete") {
     window.setTimeout(triggerPrint, 500);
   } else {
-    printWindow.addEventListener("load", () => window.setTimeout(triggerPrint, 500), { once: true });
+    printWindow.addEventListener("load", () => window.setTimeout(triggerPrint, 500), {
+      once: true,
+    });
   }
   return "printed";
 }
@@ -82,8 +128,11 @@ function fallbackPdfFilename(plan: TripPlan): string {
 export function useGuidebookExport(
   plan: TripPlan,
   previewFrameRef?: RefObject<HTMLIFrameElement | null>,
+  planId = "",
 ): GuidebookExportController {
+  const { user, isPending } = useCurrentUserState();
   const exportGuidebookFn = useServerFn(exportGuidebook);
+  const claimPlanFn = useServerFn(claimCurrentPlan);
   const [state, setState] = useState<GuidebookGenerationState>({
     stage: "idle",
     progress: 0,
@@ -107,6 +156,37 @@ export function useGuidebookExport(
     runRef.current = runId;
     setPreparedPdf(null);
     setState((current) => advanceGuidebookProgress(current, "preparing"));
+
+    const accessGate = resolveGuidebookExportGate({ isPending, hasUser: Boolean(user) });
+    if (accessGate === "wait") {
+      toast.info("正在确认账号状态，请稍候。");
+      return;
+    }
+    if (accessGate === "login") {
+      if (planId) storePendingPlanClaim(planId, plan);
+      redirectToAuth();
+      return;
+    }
+
+    try {
+      if (!planId) throw new Error("缺少行程标识，无法保存路书");
+      // 已登录也必须经过服务端幂等 claim：免费首次领取、已保存计划直接通过，未用权益会提示购买。
+      await claimPlanFn({ data: { planId, plan } });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("免费体验已使用")) {
+        toast.info("本次生成尚未保存，请先购买点数后重新生成。");
+        redirectToPricing();
+        return;
+      }
+      setState((current) =>
+        advanceGuidebookProgress(
+          current,
+          "failed",
+          error instanceof Error ? error.message : "保存路书失败，请重试。",
+        ),
+      );
+      return;
+    }
 
     // 部署到 serverless（如 Netlify）时没有可用的无头浏览器，
     // 直接把预览内容交给用户浏览器的打印功能，质量更好也不需要额外依赖。
@@ -173,7 +253,16 @@ export function useGuidebookExport(
     } finally {
       window.clearTimeout(finalizeTimer);
     }
-  }, [downloadBlob, exportGuidebookFn, plan, previewFrameRef]);
+  }, [
+    claimPlanFn,
+    downloadBlob,
+    exportGuidebookFn,
+    isPending,
+    plan,
+    planId,
+    previewFrameRef,
+    user,
+  ]);
 
   const download = useCallback(() => {
     if (!preparedPdf) {

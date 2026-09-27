@@ -206,32 +206,30 @@ test("claim failure rolls back the saved plan", async () => {
   }
 });
 
-test("reserve paid plan rejects a plan owned by another user", async () => {
+test("reserve paid plan can precede plan persistence without creating a plan", async () => {
   const { pg, sql, credits, entitlements } = await createTestContext();
   try {
-    const ownerUserId = await createUser(sql);
-    const otherUserId = await createUser(sql);
-    const saved = await entitlements.saveTravelPlan({
-      userId: ownerUserId,
-      planId: randomUUID(),
-      plan: samplePlan("他人行程"),
-    });
-    await credits.ensureWallet(otherUserId);
-    await fundWallet(sql, otherUserId, 1);
+    const userId = await createUser(sql);
+    const planId = randomUUID();
+    await credits.ensureWallet(userId);
+    await fundWallet(sql, userId, 1);
 
-    await assert.rejects(
-      () => entitlements.reservePaidPlan(otherUserId, saved.id),
-      /行程不存在或无权访问/,
-    );
+    const reservation = await entitlements.reservePaidPlan(userId, planId);
 
-    const reservations = await sql.query<{ count: number }>(
-      "select count(*)::int as count from credit_reservations where plan_id = $1",
-      [saved.id],
+    const plans = await sql.query<{ count: number }>(
+      "select count(*)::int as count from travel_plans where id = $1",
+      [planId],
     );
-    assert.equal(reservations[0]?.count, 0);
-    const summary = await credits.getWalletSummary(otherUserId);
+    const reservations = await sql.query<{ count: number; plan_id: string | null }>(
+      "select count(*)::int as count, min(plan_id) as plan_id from credit_reservations where id = $1",
+      [reservation.id],
+    );
+    assert.equal(plans[0]?.count, 0);
+    assert.equal(reservations[0]?.count, 1);
+    assert.equal(reservations[0]?.plan_id, null);
+    const summary = await credits.getWalletSummary(userId);
     assert.equal(summary.wallet.balance, 1);
-    assert.equal(summary.wallet.reserved, 0);
+    assert.equal(summary.wallet.reserved, 1);
   } finally {
     await pg.close();
   }
@@ -242,11 +240,7 @@ test("finish paid plan rejects a mismatched owner and consumes the matching plan
   try {
     const ownerUserId = await createUser(sql);
     const otherUserId = await createUser(sql);
-    const ownPlan = await entitlements.saveTravelPlan({
-      userId: ownerUserId,
-      planId: randomUUID(),
-      plan: samplePlan("本人行程"),
-    });
+    const ownPlanId = randomUUID();
     const otherPlan = await entitlements.saveTravelPlan({
       userId: otherUserId,
       planId: randomUUID(),
@@ -254,13 +248,14 @@ test("finish paid plan rejects a mismatched owner and consumes the matching plan
     });
     await credits.ensureWallet(ownerUserId);
     await fundWallet(sql, ownerUserId, 1);
-    const reservation = await entitlements.reservePaidPlan(ownerUserId, ownPlan.id);
+    const reservation = await entitlements.reservePaidPlan(ownerUserId, ownPlanId);
 
     await assert.rejects(
       () =>
         entitlements.finishPaidPlan({
           reservationId: reservation.id,
-          planId: ownPlan.id,
+          planId: ownPlanId,
+          plan: samplePlan("本人行程"),
         } as never),
       /缺少用户身份/,
     );
@@ -269,7 +264,8 @@ test("finish paid plan rejects a mismatched owner and consumes the matching plan
         entitlements.finishPaidPlan({
           userId: otherUserId,
           reservationId: reservation.id,
-          planId: ownPlan.id,
+          planId: ownPlanId,
+          plan: samplePlan("本人行程"),
         }),
       /行程不存在或无权访问/,
     );
@@ -279,6 +275,7 @@ test("finish paid plan rejects a mismatched owner and consumes the matching plan
           userId: ownerUserId,
           reservationId: reservation.id,
           planId: otherPlan.id,
+          plan: samplePlan("冒用他人行程"),
         }),
       /行程不存在或无权访问/,
     );
@@ -290,7 +287,8 @@ test("finish paid plan rejects a mismatched owner and consumes the matching plan
     const entry = await entitlements.finishPaidPlan({
       userId: ownerUserId,
       reservationId: reservation.id,
-      planId: ownPlan.id,
+      planId: ownPlanId,
+      plan: samplePlan("本人行程"),
     });
     assert.equal(entry.reason, "generation");
     const summary = await credits.getWalletSummary(ownerUserId);
