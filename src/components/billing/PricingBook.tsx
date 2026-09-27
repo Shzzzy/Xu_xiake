@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   BookOpenText,
@@ -27,23 +27,28 @@ export type CheckoutAction =
 
 const packageOrder: PackageCode[] = ["single", "ten", "thirty"];
 
-const packageCopy: Record<PackageCode, { title: string; description: string; index: string }> = {
-  single: {
-    title: "单次购买",
-    description: "临时出行，不想囤点数",
-    index: "01",
-  },
-  ten: {
-    title: "十次点数",
-    description: "适合一年多次出发",
-    index: "10",
-  },
-  thirty: {
-    title: "三十次点数",
-    description: "适合高频旅行与家庭共享",
-    index: "30",
-  },
+const packageDescriptions: Record<PackageCode, string> = {
+  single: "临时出行，不想囤点数",
+  ten: "适合一年多次出发",
+  thirty: "适合高频旅行与家庭共享",
 };
+
+function toChinesePoints(points: number): string {
+  if (points < 10 || points >= 100) return String(points);
+  const digits = "零一二三四五六七八九";
+  const tens = Math.floor(points / 10);
+  const ones = points % 10;
+  return `${tens === 1 ? "" : digits[tens]}十${ones ? digits[ones] : ""}`;
+}
+
+function getPackageTitle(code: PackageCode): string {
+  const { points } = resolvePackage(code);
+  return points === 1 ? "单次购买" : `${toChinesePoints(points)}次点数`;
+}
+
+function getPackageIndex(code: PackageCode): string {
+  return String(resolvePackage(code).points).padStart(2, "0");
+}
 
 function formatPrice(amountCents: number): string {
   return (amountCents / 100).toFixed(2);
@@ -51,6 +56,39 @@ function formatPrice(amountCents: number): string {
 
 function formatPerUse(selection: PackageDefinition): string {
   return formatPrice(Math.round(selection.amountCents / selection.points));
+}
+
+export type PricingEntitlement = {
+  freeTrialClaimed: boolean;
+};
+
+export function getPricingStatusCopy(input: {
+  authenticated: boolean;
+  entitlement: PricingEntitlement | null | undefined;
+  selection: PackageDefinition;
+}): string {
+  if (!input.authenticated) return "登录后首次完整体验免费";
+  if (!input.entitlement) return "正在确认免费体验状态";
+  if (input.entitlement.freeTrialClaimed) {
+    return `本次购买将获得 ${input.selection.points} 点`;
+  }
+  return "新用户首次完整体验免费";
+}
+
+export async function loadPricingEntitlement(input: {
+  userId: string | undefined;
+  fetchWallet: () => Promise<{ wallet: { freeTrialClaimed: boolean } }>;
+  onEntitlement: (entitlement: PricingEntitlement | null) => void;
+}): Promise<PricingEntitlement | null> {
+  if (!input.userId) {
+    input.onEntitlement(null);
+    return null;
+  }
+
+  const result = await input.fetchWallet();
+  const entitlement = { freeTrialClaimed: result.wallet.freeTrialClaimed };
+  input.onEntitlement(entitlement);
+  return entitlement;
 }
 
 export function buildPricingAuthHref(returnTo?: string): string {
@@ -89,6 +127,7 @@ export function completeCheckout(input: {
 export type PricingBookProps = {
   authenticated: boolean;
   onCheckout: CheckoutCallback;
+  entitlement?: PricingEntitlement | null;
   returnTo?: string;
   initialPackage?: PackageCode;
 };
@@ -96,12 +135,14 @@ export type PricingBookProps = {
 export function PricingBook({
   authenticated,
   onCheckout,
+  entitlement,
   returnTo,
   initialPackage = "ten",
 }: PricingBookProps) {
   const [selectedCode, setSelectedCode] = useState<PackageCode>(initialPackage);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const selected = resolvePackage(selectedCode);
+  const statusCopy = getPricingStatusCopy({ authenticated, entitlement, selection: selected });
 
   function openCheckout() {
     const action = resolveCheckoutAction({
@@ -171,9 +212,12 @@ export function PricingBook({
                 <div className="text-[10px] font-extrabold tracking-[0.22em] text-[#dccc74]">
                   XUXIAKE'S LEDGER
                 </div>
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[10px] text-white/75">
+                <span
+                  data-pricing-status
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[10px] text-white/75"
+                >
                   <Gift size={13} />
-                  首次完整体验免费
+                  {statusCopy}
                 </span>
               </div>
 
@@ -240,7 +284,8 @@ export function PricingBook({
             <div className="mt-7 grid gap-3" role="radiogroup" aria-label="选择点数套餐">
               {packageOrder.map((code) => {
                 const item = PACKAGE_CATALOG[code];
-                const copy = packageCopy[code];
+                const title = getPackageTitle(code);
+                const description = packageDescriptions[code];
                 const isSelected = selectedCode === code;
                 return (
                   <button
@@ -262,11 +307,11 @@ export function PricingBook({
                         isSelected ? "bg-primary text-primary-fg" : "bg-surface text-muted"
                       }`}
                     >
-                      {copy.index}
+                      {getPackageIndex(code)}
                     </span>
                     <span className="min-w-0">
                       <span className="flex flex-wrap items-center gap-2">
-                        <strong className="font-serif text-lg font-semibold">{copy.title}</strong>
+                        <strong className="font-serif text-lg font-semibold">{title}</strong>
                         {isSelected ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-[9px] font-bold text-primary-fg">
                             <Check size={10} />
@@ -275,7 +320,7 @@ export function PricingBook({
                         ) : null}
                       </span>
                       <small className="mt-1 block text-[11px] text-muted">
-                        {copy.description} · 每次约 ¥{formatPerUse(item)}
+                        {description} · 每次约 ¥{formatPerUse(item)}
                       </small>
                     </span>
                     <span className="text-right">
@@ -344,7 +389,7 @@ export function PricingBook({
   );
 }
 
-function Benefit({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) {
+function Benefit({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
   return (
     <div className="rounded-2xl border border-white/12 bg-white/[.07] p-4">
       <span className="grid h-9 w-9 place-items-center rounded-xl bg-white/10 text-[#e7d78e]">
@@ -364,33 +409,102 @@ export type CheckoutSheetProps = {
 
 export function CheckoutSheet({ selection, onClose, onConfirm }: CheckoutSheetProps) {
   const [paymentMethod, setPaymentMethod] = useState<"wechat" | "alipay">("wechat");
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+
+    function getFocusableElements(): HTMLElement[] {
+      if (!dialog) return [];
+      return Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+      const focusable = getFocusableElements();
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) {
+        event.preventDefault();
+        dialog?.focus();
+        return;
+      }
+
+      const active = document.activeElement;
+      const activeInside = active instanceof Node && dialog?.contains(active);
+      if (event.shiftKey) {
+        if (!activeInside || active === first) {
+          event.preventDefault();
+          last.focus();
+        }
+        return;
+      }
+
+      if (!activeInside || active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    closeButtonRef.current?.focus();
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/45 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-label="确认购买点数"
-    >
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/45 backdrop-blur-sm">
       <button
         type="button"
-        aria-label="关闭支付面板"
+        aria-label="关闭支付面板背景"
+        tabIndex={-1}
         onClick={onClose}
         className="absolute inset-0 cursor-default"
       />
-      <section className="relative z-10 flex h-full w-full max-w-[520px] flex-col overflow-y-auto border-l border-white/10 bg-surface p-5 shadow-2xl sm:p-7">
+      <section
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="checkout-dialog-title"
+        tabIndex={-1}
+        className="relative z-10 flex h-full w-full max-w-[520px] flex-col overflow-y-auto border-l border-white/10 bg-surface p-5 shadow-2xl sm:p-7"
+      >
         <header className="flex items-start justify-between gap-4">
           <div>
             <div className="text-[10px] font-extrabold tracking-[0.22em] text-primary">
               PAYMENT CONFIRMATION
             </div>
-            <h3 className="mt-2 font-serif text-3xl font-semibold">确认购买点数</h3>
+            <h3 id="checkout-dialog-title" className="mt-2 font-serif text-3xl font-semibold">
+              确认购买点数
+            </h3>
             <p className="mt-2 text-xs leading-6 text-muted">
               本界面仅确认套餐与金额，不会在本任务中创建真实订单。
             </p>
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
+            aria-label="关闭支付面板"
             onClick={onClose}
             className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-border bg-bg/60 text-lg text-muted"
           >
@@ -403,7 +517,7 @@ export function CheckoutSheet({ selection, onClose, onConfirm }: CheckoutSheetPr
             ORDER / 本次订单
           </div>
           <h4 className="mt-2 font-serif text-xl font-semibold">
-            {packageCopy[selection.code].title}
+            {getPackageTitle(selection.code)}
           </h4>
           <div className="mt-4 grid gap-2 text-xs">
             <div className="flex items-center justify-between gap-4 border-b border-dashed border-border pb-2">
@@ -494,6 +608,7 @@ function PaymentOption({
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={`flex w-full items-center gap-3 rounded-2xl border p-4 text-left transition ${
         active
