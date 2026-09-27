@@ -189,3 +189,29 @@ test("shows a friendly message instead of an internal wallet error", () => {
   assert.match(html, /暂时无法加载账号信息，请稍后重试/);
   assert.doesNotMatch(html, /数据库连接失败/);
 });
+
+test("Unauthorized message also enters sign-in without invoking onError", async () => {
+  let summary: Awaited<ReturnType<typeof loadAccountSummary>> = null;
+  let authRequiredCount = 0;
+  let errorCount = 0;
+
+  await loadAccountSummary({
+    userId: "u2",
+    fetchWallet: async () => {
+      throw new Error("Unauthorized");
+    },
+    onSuccess: (nextSummary) => {
+      summary = nextSummary;
+    },
+    onAuthRequired: () => {
+      authRequiredCount += 1;
+    },
+    onError: () => {
+      errorCount += 1;
+    },
+  });
+
+  assert.equal(summary, null);
+  assert.equal(authRequiredCount, 1);
+  assert.equal(errorCount, 0);
+});
