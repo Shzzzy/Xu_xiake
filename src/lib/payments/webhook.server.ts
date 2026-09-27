@@ -187,20 +187,6 @@ export function createPaymentWebhookService(sql: PaymentWebhookSql): PaymentWebh
         return { processed: false, reason: "amount_or_currency_mismatch", rejected: true };
       }
 
-      // refunded 先到时，后续 paid 不得补发点数。
-      const refundRows = await tx.query<{ id: string }>(
-        `select id from payment_events
-         where order_id = $1 and status = 'unsupported_refunded'
-         order by created_at asc
-         limit 1
-         for update`,
-        [orderId],
-      );
-      if (refundRows[0]) {
-        await updateEventStatus(tx, eventRowId, "rejected_refunded_before_paid", orderId);
-        return { processed: false, reason: "refunded_before_paid", rejected: true };
-      }
-
       const orderStatus = String(order.status);
       if (orderStatus === "paid") {
         const sameTransaction =
@@ -230,6 +216,10 @@ export function createPaymentWebhookService(sql: PaymentWebhookSql): PaymentWebh
 
       const requiresRepair = order.credits_applied_at == null;
       const creditResult = await applyPaidOrderCredits(tx, order, event);
+      if (creditResult.blockedByRefund) {
+        await updateEventStatus(tx, eventRowId, "rejected_refunded_before_paid", orderId);
+        return { processed: false, reason: "refunded_before_paid", rejected: true };
+      }
       if (creditResult.applied || requiresRepair) {
         await updateEventStatus(tx, eventRowId, "processed", orderId);
         return { processed: creditResult.applied };

@@ -9,6 +9,7 @@ export type PaymentCreditSql = {
 
 export type ApplyPaidOrderCreditsResult = {
   applied: boolean;
+  blockedByRefund?: true;
   alreadyApplied: boolean;
 };
 
@@ -27,6 +28,19 @@ export async function applyPaidOrderCredits(
 
   if (!Number.isInteger(points) || points <= 0) {
     throw new Error("支付订单点数异常");
+  }
+
+  // 退款事件先到时，共享 guard 必须在任何订单或钱包写入前阻断入账。
+  const refundRows = await tx.query<{ id: string }>(
+    `select id from payment_events
+     where order_id = $1 and status in ('unsupported_refunded', 'refunded')
+     order by created_at asc, id asc
+     limit 1
+     for update`,
+    [orderId],
+  );
+  if (refundRows[0]) {
+    return { applied: false, alreadyApplied: false, blockedByRefund: true };
   }
 
   const purchaseRows = await tx.query<{ id: string }>(

@@ -389,7 +389,10 @@ export function createPaymentOrdersService(
         throw new PaymentProviderConflictError("支付流水号冲突");
       }
 
-      await applyPaidOrderCredits(tx, order, event);
+      const creditResult = await applyPaidOrderCredits(tx, order, event);
+      if (creditResult.blockedByRefund) {
+        throw new PaymentProviderConflictError("订单已退款，不能入账");
+      }
     });
   }
   return { createPaymentOrder, getPaymentOrder, markOrderPaid };

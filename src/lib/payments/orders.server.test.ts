@@ -418,3 +418,44 @@ test("provider registry fails closed unless NODE_ENV is test or development", ()
     /生产环境禁止使用 test/,
   );
 });
+
+test("markOrderPaid refuses orders with an earlier refund event", async () => {
+  const { pg, sql } = await createTestContext();
+  try {
+    const { id: userId } = await createUser(sql);
+    const orders = createPaymentOrdersService(sql, createTestPaymentProvider());
+    const order = await orders.createPaymentOrder(userId, "ten", "refund-before-paid");
+    await sql.query(
+      `insert into payment_events (id, provider, provider_event_id, order_id, payload, status)
+       values ($1, 'test', $2, $3, $4::jsonb, 'unsupported_refunded')`,
+      [randomUUID(), `refund-before-paid-${order.id}`, order.id, JSON.stringify({})],
+    );
+
+    const event: PaymentWebhookEvent = {
+      provider: "test",
+      providerEventId: `refund-before-paid-${order.id}`,
+      providerOrderId: order.providerOrderId!,
+      providerTransactionId: "refund-before-paid-transaction",
+      status: "paid",
+      amountCents: order.amountCents,
+      currency: "CNY",
+      raw: {},
+    };
+
+    await assert.rejects(() => orders.markOrderPaid(order.id, event), /订单已退款/);
+
+    const wallets = await sql.query<{ balance: number }>(
+      "select balance from credit_wallets where id = $1",
+      [order.walletId],
+    );
+    assert.equal(Number(wallets[0]?.balance), 0);
+    const ledger = await sql.query<{ count: number }>(
+      "select count(*)::int as count from credit_ledger where order_id = $1",
+      [order.id],
+    );
+    assert.equal(ledger[0]?.count, 0);
+    assert.equal((await orders.getPaymentOrder(userId, order.id)).status, "created");
+  } finally {
+    await pg.close();
+  }
+});
