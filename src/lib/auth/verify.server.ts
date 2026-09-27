@@ -1,6 +1,7 @@
 import { getRequest } from "@tanstack/react-start/server";
 import { gateIdentityEnabled } from "./gate-identity.server";
 import { auth, authConfigured } from "./server.ts";
+import { mapSessionUser, type MappedSessionUser } from "./session-user.ts";
 
 /**
  * Server-side session resolution (server-only).
@@ -42,13 +43,7 @@ export class UnauthorizedError extends Error {
   }
 }
 
-export type VerifiedUser = {
-  id: string;
-  email: string | null;
-  phone: string | null;
-  role: "user" | "admin";
-  status: "active" | "disabled";
-};
+export type VerifiedUser = MappedSessionUser;
 
 /**
  * Resolve the signed-in user from the current request, or `null` when auth isn't
@@ -73,18 +68,7 @@ export async function getSessionUser(
   }
   const session = await auth.api.getSession({ headers });
   if (!session?.user) return null;
-  const user = session.user as typeof session.user & {
-    phone?: unknown;
-    role?: unknown;
-    status?: unknown;
-  };
-  return {
-    id: user.id,
-    email: typeof user.email === "string" ? user.email : null,
-    phone: typeof user.phone === "string" ? user.phone : null,
-    role: user.role === "admin" ? "admin" : "user",
-    status: user.status === "disabled" ? "disabled" : "active",
-  };
+  return mapSessionUser(session.user);
 }
 
 /**

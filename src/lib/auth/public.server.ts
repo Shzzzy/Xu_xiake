@@ -18,7 +18,6 @@ type PublicAccountAuth = {
         password: string;
         name: string;
         username: string;
-        phone: string;
       };
     }): Promise<{ user: { id: string } }>;
   };
@@ -51,7 +50,6 @@ export async function createPublicAccountRecordWithAuth(
       password: input.password,
       name: phone,
       username: phone,
-      phone,
     },
   });
 

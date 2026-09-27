@@ -3,6 +3,8 @@ import { useServerFn } from "@tanstack/react-start";
 import { ArrowLeft, Check, LockKeyhole, ShieldCheck, Sparkles, WalletCards } from "lucide-react";
 import { authClient, authEnabled } from "@/lib/auth/client";
 import { isValidPhone, normalizePhone } from "@/lib/auth/phone";
+import { readableAuthError } from "@/lib/auth/auth-errors";
+import { normalizeReturnTo } from "@/lib/auth/return-to";
 import { registerWithPhone } from "@/lib/auth/public.functions";
 import "./AuthBookPage.css";
 
@@ -11,29 +13,6 @@ type AuthMode = "login" | "register";
 type AuthBookPageProps = {
   returnTo?: string;
 };
-
-export function safeReturnTo(value?: string): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
-  if (value === "/auth" || value.startsWith("/auth?")) return "/";
-  return value;
-}
-
-function readableAuthError(error: unknown, mode: AuthMode): string {
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === "object" && error && "message" in error
-        ? String((error as { message?: unknown }).message)
-        : "";
-  if (/already|已存在|unique|duplicate/i.test(message)) {
-    return "该手机号已经注册，请直接登录。";
-  }
-  if (/password|密码|credential|invalid/i.test(message)) {
-    return mode === "login" ? "手机号或密码不正确。" : "密码不符合要求。";
-  }
-  if (/手机号|phone|username|邮箱/.test(message)) return message;
-  return mode === "login" ? "登录失败，请稍后再试。" : "注册失败，请稍后再试。";
-}
 
 export function AuthBookPage({ returnTo }: AuthBookPageProps) {
   const register = useServerFn(registerWithPhone);
@@ -45,7 +24,14 @@ export function AuthBookPage({ returnTo }: AuthBookPageProps) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState<{ title: string; copy: string } | null>(null);
-  const destination = useMemo(() => safeReturnTo(returnTo), [returnTo]);
+  const destination = useMemo(
+    () =>
+      normalizeReturnTo(
+        returnTo,
+        typeof window === "undefined" ? undefined : window.location.origin,
+      ),
+    [returnTo],
+  );
 
   function switchMode(next: AuthMode) {
     setMode(next);

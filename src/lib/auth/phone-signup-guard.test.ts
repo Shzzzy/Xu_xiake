@@ -28,7 +28,7 @@ async function createTestAuth(pg: PGlite) {
     emailAndPassword: { enabled: true },
     user: {
       additionalFields: {
-        phone: { type: "string", required: false, input: true },
+        phone: { type: "string", required: false, input: false },
         role: { type: "string", required: false, defaultValue: "user", input: false },
         status: { type: "string", required: false, defaultValue: "active", input: false },
       },
@@ -97,7 +97,6 @@ test("phone signup guard rejects mismatched internal email", async () => {
             email: "13800138000@phone.invalid",
             password: "password123",
             username: "13900139000",
-            phone: "13900139000",
           },
         }),
       /邮箱必须与手机号一致/,
@@ -118,7 +117,6 @@ test("phone signup guard accepts a normalized phone account", async () => {
         email: `${phone}@phone.invalid`,
         password: "password123",
         username: phone,
-        phone,
       },
     });
 
@@ -134,4 +132,45 @@ test("phone signup guard accepts a normalized phone account", async () => {
   } finally {
     await pg.close();
   }
+});
+
+test("phone identity fields cannot be changed through public update-user", async () => {
+  const guard = createPhoneSignupGuard();
+  const before = guard.user?.update?.before;
+  assert.ok(before);
+
+  const context = {
+    path: "/update-user",
+    body: { name: "新名字", phone: "13900139000", username: "13900139000" },
+    context: { session: null },
+  } as never;
+
+  await assert.rejects(
+    () => before({ phone: "13900139000" } as never, context),
+    /不能通过公开更新接口修改/,
+  );
+  await assert.rejects(
+    () => before({ username: "13900139000" } as never, context),
+    /不能通过公开更新接口修改/,
+  );
+});
+
+test("phone guard does not block OAuth user creation paths", async () => {
+  const guard = createPhoneSignupGuard();
+  const before = guard.user?.create?.before;
+  assert.ok(before);
+  const result = await before(
+    {
+      id: "oauth-user",
+      name: "OAuth 用户",
+      email: "oauth@example.com",
+      emailVerified: true,
+    } as never,
+    {
+      path: "/sign-in/social",
+      body: { provider: "google" },
+      context: { session: null },
+    } as never,
+  );
+  assert.equal(result, undefined);
 });

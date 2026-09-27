@@ -1,9 +1,10 @@
 import { useState, useSyncExternalStore, type ReactNode } from "react";
-import { Navigate } from "@tanstack/react-router";
+import { Navigate, useLocation } from "@tanstack/react-router";
 import { GROK_PROVIDERS, authEnabled, signIn, signOut } from "./client";
 import { hasGateSessionMarker } from "./gate-session-marker";
 import { resolveSignInGateState } from "./sign-in-gate";
 import { useCurrentUser, useCurrentUserState } from "./use-current-user";
+import { buildSignInRedirect } from "./return-to.ts";
 
 const subscribeToNothing = () => () => {};
 const noGateSessionOnServer = () => false;
@@ -18,8 +19,8 @@ const noGateSessionOnServer = () => false;
  * render nothing so there's no signed-out flash on hard reload.
  */
 
-/** Where `RedirectToSignIn` sends signed-out visitors. Create this route. */
-export const SIGN_IN_PATH = "/login";
+/** 登录路由常量从纯函数模块导出，方便测试。 */
+export { SIGN_IN_PATH } from "./return-to.ts";
 
 /** Render children only when a user is present (real session, or the disabled-auth dev user). */
 export function SignedIn({ children }: { children: ReactNode }) {
@@ -39,14 +40,17 @@ export function SignedOut({ children }: { children: ReactNode }) {
 
 /**
  * Client-side redirect to the sign-in route (TanStack `<Navigate>` — NOT a full
- * `window.location` reload). A hard navigation re-bootstraps the SPA and re-runs
- * session loading, which feels like a second "Loading…" on /login.
+ * `window.location` reload)。同时附带当前页面的 returnTo，登录后可以回到触发页。
  *
  * Guard routes by waiting out `isPending` first (see `use-current-user`), then
  * render this.
  */
-export function RedirectToSignIn({ to = SIGN_IN_PATH }: { to?: string }) {
-  return <Navigate to={to} />;
+export function RedirectToSignIn() {
+  const location = useLocation();
+  const origin =
+    typeof window === "undefined" ? undefined : window.location.origin;
+  const { to, search } = buildSignInRedirect(location.href, origin);
+  return <Navigate to={to} search={search} replace />;
 }
 
 export function SignInGate({

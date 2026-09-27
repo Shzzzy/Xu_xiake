@@ -13,6 +13,13 @@ type SignupUser = {
 type SignupContext = {
   path?: string;
   body?: unknown;
+  context: {
+    session?: {
+      user?: {
+        email?: unknown;
+      };
+    } | null;
+  } | null;
 } | null;
 
 function bodyRecord(context: SignupContext): Record<string, unknown> {
@@ -28,8 +35,15 @@ function rejectSignup(message: string): never {
   });
 }
 
+function rejectIdentityUpdate(): never {
+  throw APIError.from("BAD_REQUEST", {
+    code: "IMMUTABLE_PHONE_IDENTITY",
+    message: "手机号、用户名和内部邮箱不能通过公开更新接口修改",
+  });
+}
+
 /**
- * 公开邮箱注册入口只允许手机号账号使用。
+ * 公开邮箱注册入口只允许手机号账号使用，并禁止公开更新接口修改账号身份字段。
  * OAuth 等其他用户创建路径不带 `/sign-up/email`，因此不会被拦截。
  */
 export function createPhoneSignupGuard(): NonNullable<BetterAuthOptions["databaseHooks"]> {
@@ -61,7 +75,7 @@ export function createPhoneSignupGuard(): NonNullable<BetterAuthOptions["databas
           }
 
           const submittedPhone = typeof user.phone === "string" ? normalizePhone(user.phone) : "";
-          if (submittedPhone !== phone) {
+          if (submittedPhone && submittedPhone !== phone) {
             rejectSignup("注册手机号与账号信息不一致");
           }
 
@@ -74,6 +88,29 @@ export function createPhoneSignupGuard(): NonNullable<BetterAuthOptions["databas
               phone,
             },
           };
+        },
+      },
+      update: {
+        before: async (user: SignupUser, context: SignupContext) => {
+          if (context?.path !== "/update-user") return;
+
+          const body = bodyRecord(context);
+          const protectedField = ["username", "displayUsername", "phone", "email"].find((field) =>
+            Object.prototype.hasOwnProperty.call(body, field),
+          );
+          if (protectedField || typeof user.username === "string" || typeof user.phone === "string") {
+            rejectIdentityUpdate();
+          }
+
+          const currentEmail = context.context?.session?.user?.email;
+          if (
+            typeof user.email === "string" &&
+            typeof currentEmail === "string" &&
+            user.email !== currentEmail &&
+            currentEmail.toLowerCase().endsWith("@phone.invalid")
+          ) {
+            rejectIdentityUpdate();
+          }
         },
       },
     },

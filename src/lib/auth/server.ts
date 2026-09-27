@@ -183,7 +183,7 @@ export const auth = betterAuth({
   // 公开账号额外字段：手机号参与登录，角色与状态由服务端维护，客户端不可注入。
   user: {
     additionalFields: {
-      phone: { type: "string", required: false, input: true },
+      phone: { type: "string", required: false, input: false },
       role: { type: "string", required: false, defaultValue: "user", input: false },
       status: { type: "string", required: false, defaultValue: "active", input: false },
     },
