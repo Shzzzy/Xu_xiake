@@ -8,6 +8,8 @@ import { useGuidebookExport } from "./use-guidebook-export";
 type ExportGuidebookButtonProps = {
   plan: TripPlan;
   planId: string;
+  entitlementToken?: string;
+  requestFingerprint?: string;
   /** 预览用的 iframe；打印导出直接复用其中已经渲染好的路书 HTML。 */
   previewFrameRef?: RefObject<HTMLIFrameElement | null>;
   /** 路书页面还没排完时禁用导出，避免拿到半成品。 */
@@ -24,6 +26,8 @@ type ExportGuidebookButtonProps = {
 export function ExportGuidebookButton({
   plan,
   planId,
+  entitlementToken,
+  requestFingerprint,
   previewFrameRef,
   disabled = false,
   disabledHint,
@@ -32,6 +36,8 @@ export function ExportGuidebookButton({
     plan,
     previewFrameRef,
     planId,
+    entitlementToken,
+    requestFingerprint,
   );
   const ready = isGuidebookReady(state) && Boolean(preparedPdf);
   const failed = state.stage === "failed";

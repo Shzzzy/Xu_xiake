@@ -17,6 +17,8 @@ const migrationNames = [
   "0007_payment_order_idempotency.sql",
   "0008_provider_creation_lease.sql",
   "0009_payment_credits_applied.sql",
+  "0010_generation_entitlements.sql",
+  "0011_travel_plan_hash.sql",
 ] as const;
 
 type TestSql = {

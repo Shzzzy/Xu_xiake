@@ -3,7 +3,10 @@ import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { claimCurrentPlan } from "@/lib/entitlements.functions";
-import { resolveGuidebookExportGate } from "@/lib/guidebook-access";
+import {
+  resetGuidebookExportAfterPendingAuth,
+  resolveGuidebookExportGate,
+} from "@/lib/guidebook-access";
 import type { TripPlan } from "@/lib/travel-plan";
 import { exportGuidebook } from "@/lib/travel-plan.functions";
 import {
@@ -17,13 +20,23 @@ const PENDING_PLAN_CLAIM_KEY = "xuxiake:pending-plan-claim:v1";
 
 export type PendingPlanClaim = {
   planId: string;
+  requestFingerprint: string;
+  entitlementToken: string;
   plan: TripPlan;
 };
 
 /** 未登录点击 PDF/分享时，把最终计划暂存在当前标签页，登录回跳后可以领取。 */
-export function storePendingPlanClaim(planId: string, plan: TripPlan): void {
+export function storePendingPlanClaim(
+  planId: string,
+  plan: TripPlan,
+  entitlementToken: string,
+  requestFingerprint = planId,
+): void {
   if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(PENDING_PLAN_CLAIM_KEY, JSON.stringify({ planId, plan }));
+  window.sessionStorage.setItem(
+    PENDING_PLAN_CLAIM_KEY,
+    JSON.stringify({ planId, requestFingerprint, entitlementToken, plan }),
+  );
 }
 
 /** 读取待领取计划；损坏数据直接忽略，不能让登录回跳流程崩溃。 */
@@ -33,7 +46,15 @@ export function readPendingPlanClaim(): PendingPlanClaim | null {
     const parsed = JSON.parse(
       window.sessionStorage.getItem(PENDING_PLAN_CLAIM_KEY) ?? "null",
     ) as PendingPlanClaim | null;
-    if (!parsed || typeof parsed.planId !== "string" || !parsed.plan) return null;
+    if (
+      !parsed ||
+      typeof parsed.planId !== "string" ||
+      typeof parsed.requestFingerprint !== "string" ||
+      typeof parsed.entitlementToken !== "string" ||
+      !parsed.plan
+    ) {
+      return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -129,6 +150,8 @@ export function useGuidebookExport(
   plan: TripPlan,
   previewFrameRef?: RefObject<HTMLIFrameElement | null>,
   planId = "",
+  entitlementToken = "",
+  requestFingerprint = planId,
 ): GuidebookExportController {
   const { user, isPending } = useCurrentUserState();
   const exportGuidebookFn = useServerFn(exportGuidebook);
@@ -159,19 +182,29 @@ export function useGuidebookExport(
 
     const accessGate = resolveGuidebookExportGate({ isPending, hasUser: Boolean(user) });
     if (accessGate === "wait") {
-      toast.info("正在确认账号状态，请稍候。");
+      setState(resetGuidebookExportAfterPendingAuth());
+      toast.info("账号状态仍在确认，已重置导出状态，请稍后重试。");
       return;
     }
     if (accessGate === "login") {
-      if (planId) storePendingPlanClaim(planId, plan);
+      if (planId && plan) {
+        storePendingPlanClaim(planId, plan, entitlementToken, requestFingerprint);
+      }
       redirectToAuth();
       return;
     }
 
     try {
-      if (!planId) throw new Error("缺少行程标识，无法保存路书");
+      if (!planId || !entitlementToken) throw new Error("缺少生成权益凭证，无法保存路书");
       // 已登录也必须经过服务端幂等 claim：免费首次领取、已保存计划直接通过，未用权益会提示购买。
-      await claimPlanFn({ data: { planId, plan } });
+      await claimPlanFn({
+        data: {
+          planId,
+          requestFingerprint,
+          entitlementToken,
+          plan,
+        },
+      });
     } catch (error) {
       if (error instanceof Error && error.message.includes("免费体验已使用")) {
         toast.info("本次生成尚未保存，请先购买点数后重新生成。");
@@ -213,7 +246,7 @@ export function useGuidebookExport(
     }, 12_000);
 
     try {
-      const result = await exportGuidebookFn({ data: { plan } });
+      const result = await exportGuidebookFn({ data: { planId } });
       if (runRef.current !== runId) return;
 
       if (result.status !== "ok") {
@@ -256,11 +289,13 @@ export function useGuidebookExport(
   }, [
     claimPlanFn,
     downloadBlob,
+    entitlementToken,
     exportGuidebookFn,
     isPending,
     plan,
     planId,
     previewFrameRef,
+    requestFingerprint,
     user,
   ]);
 

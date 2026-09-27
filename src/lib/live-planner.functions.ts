@@ -1,5 +1,6 @@
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { optionalAuthMiddleware } from "./auth/middleware.ts";
 import {
   buildPlannerMessages,
   mapDiscoveredStops,
@@ -50,6 +51,8 @@ const loadButler = createServerOnlyFn(async () => {
 const loadPlannerContext = createServerOnlyFn(async () => {
   return import("./planner-context.server.ts");
 });
+
+const loadEntitlementGuard = createServerOnlyFn(async () => import("./entitlements.server.ts"));
 
 const loadAmapE2eFixture = createServerOnlyFn(async () => {
   const { createAmapE2eFixtureClient } = await import("./amap-e2e-fixture.server.ts");
@@ -200,6 +203,9 @@ const liveItineraryInputSchema = z.object({
   }),
   transport: z.enum(transportModes).nullable(),
   style: z.enum(travelStyles).optional(),
+  // 服务端生成函数必经字段；保留 optional 让纯函数契约测试可直接调用 runLivePlannerWith。
+  entitlementToken: z.string().min(16).max(256).optional(),
+  requestFingerprint: z.string().min(1).max(256).optional(),
 });
 
 export type LiveItineraryInput = z.infer<typeof liveItineraryInputSchema>;
@@ -351,49 +357,77 @@ export const generateLongItinerary = createServerFn({ method: "POST" })
       interests: z.array(z.string()),
       seedPlaces: z.array(z.string()),
       route: routePlanSchema,
+      entitlementToken: z.string().min(16).max(256),
+      requestFingerprint: z.string().min(1).max(256),
     }),
   )
-  .handler(async ({ data }): Promise<LongPlanResult> => {
-    const deepseekKey = process.env.DEEPSEEK_API_KEY?.trim();
-    if (!deepseekKey) {
-      return { status: "needs_configuration", missing: ["DEEPSEEK_API_KEY"] };
-    }
-
-    const tavilyKey = process.env.TAVILY_API_KEY?.trim();
-    let discoveries: DiscoveryNotice[] = [];
-    let discoveredStops: DiscoveredStop[] = [];
-    try {
-      const { discoverRoutePlaces } = await loadPlaceDiscovery();
-      const discovery = await discoverRoutePlaces({
-        route: data.route,
-        deepseekKey,
-        tavilyKey: tavilyKey ?? "",
-        fetchImpl: fetch,
-      });
-      discoveries = discovery.notices;
-      discoveredStops = mapDiscoveredStops({
-        verifiedPlaces: discovery.verifiedPlaces,
-        candidatePlaces: [],
-      });
-    } catch {
-      discoveries = await failedDiscoveryNotices(data.route);
-    }
-
-    const plan = await planLongTripWithDeepSeek({
-      apiKey: deepseekKey,
-      baseUrl: process.env.DEEPSEEK_BASE_URL?.trim(),
-      destinationName: data.destination.name,
-      region: data.destination.region,
-      startDate: data.startDate,
-      days: data.days,
-      pace: data.pace,
-      interests: data.interests,
-      seedPlaces: data.seedPlaces,
-      discoveredStops,
-      route: data.route,
+  .middleware([optionalAuthMiddleware])
+  .handler(async ({ data, context }): Promise<LongPlanResult> => {
+    const entitlement = await loadEntitlementGuard();
+    const cookieEntitlementId = await entitlement.readGuestGenerationEntitlementId();
+    await entitlement.authorizeGenerationEntitlement({
+      entitlementToken: data.entitlementToken,
+      requestFingerprint: data.requestFingerprint,
+      userId: context.userId,
+      cookieEntitlementId,
     });
 
-    return { status: "ok", plan, discoveries };
+    try {
+      const deepseekKey = process.env.DEEPSEEK_API_KEY?.trim();
+      if (!deepseekKey) {
+        await entitlement.releaseGenerationEntitlement({
+          entitlementToken: data.entitlementToken,
+          requestFingerprint: data.requestFingerprint,
+          userId: context.userId,
+          cookieEntitlementId,
+        });
+        return { status: "needs_configuration", missing: ["DEEPSEEK_API_KEY"] };
+      }
+
+      const tavilyKey = process.env.TAVILY_API_KEY?.trim();
+      let discoveries: DiscoveryNotice[] = [];
+      let discoveredStops: DiscoveredStop[] = [];
+      try {
+        const { discoverRoutePlaces } = await loadPlaceDiscovery();
+        const discovery = await discoverRoutePlaces({
+          route: data.route,
+          deepseekKey,
+          tavilyKey: tavilyKey ?? "",
+          fetchImpl: fetch,
+        });
+        discoveries = discovery.notices;
+        discoveredStops = mapDiscoveredStops({
+          verifiedPlaces: discovery.verifiedPlaces,
+          candidatePlaces: [],
+        });
+      } catch {
+        discoveries = await failedDiscoveryNotices(data.route);
+      }
+
+      const plan = await planLongTripWithDeepSeek({
+        apiKey: deepseekKey,
+        baseUrl: process.env.DEEPSEEK_BASE_URL?.trim(),
+        destinationName: data.destination.name,
+        region: data.destination.region,
+        startDate: data.startDate,
+        days: data.days,
+        pace: data.pace,
+        interests: data.interests,
+        seedPlaces: data.seedPlaces,
+        discoveredStops,
+        route: data.route,
+      });
+
+      return { status: "ok", plan, discoveries };
+    } catch (error) {
+      await entitlement.releaseGenerationEntitlement({
+        entitlementToken: data.entitlementToken,
+        requestFingerprint: data.requestFingerprint,
+        userId: context.userId,
+        cookieEntitlementId,
+      });
+      throw error;
+    }
   });
 
 type SharedPlannerContext = {
@@ -651,10 +685,12 @@ export async function runLivePlannerWith(
     primary: destinationCandidates,
     fallback: waypointCandidateGroups.flat(),
   }) as PlannerDestinationCandidate[];
-  const candidates = plannerContext.mergePlannerCandidates({
-    primary: amapCandidates,
-    fallback: seedCandidates,
-  }).slice(0, 32) as PlannerDestinationCandidate[];
+  const candidates = plannerContext
+    .mergePlannerCandidates({
+      primary: amapCandidates,
+      fallback: seedCandidates,
+    })
+    .slice(0, 32) as PlannerDestinationCandidate[];
   const sources = selectPlannerSources({
     destinationSources: candidates.map((candidate) => ({
       title: candidate.name,
@@ -687,5 +723,39 @@ export async function runLivePlannerWith(
 }
 
 export const generateLiveItinerary = createServerFn({ method: "POST" })
+  .middleware([optionalAuthMiddleware])
   .validator(liveItineraryInputSchema)
-  .handler(async ({ data }): Promise<LivePlanResult> => runLivePlannerWith(data));
+  .handler(async ({ data, context }): Promise<LivePlanResult> => {
+    const entitlementToken = data.entitlementToken;
+    const requestFingerprint = data.requestFingerprint;
+    if (!entitlementToken || !requestFingerprint) throw new Error("缺少生成权益凭证");
+    const entitlement = await loadEntitlementGuard();
+    const cookieEntitlementId = await entitlement.readGuestGenerationEntitlementId();
+    await entitlement.authorizeGenerationEntitlement({
+      entitlementToken,
+      requestFingerprint,
+      userId: context.userId,
+      cookieEntitlementId,
+    });
+
+    try {
+      const result = await runLivePlannerWith(data);
+      if (result.status === "needs_configuration" || result.status === "needs_decision") {
+        await entitlement.releaseGenerationEntitlement({
+          entitlementToken,
+          requestFingerprint,
+          userId: context.userId,
+          cookieEntitlementId,
+        });
+      }
+      return result;
+    } catch (error) {
+      await entitlement.releaseGenerationEntitlement({
+        entitlementToken,
+        requestFingerprint,
+        userId: context.userId,
+        cookieEntitlementId,
+      });
+      throw error;
+    }
+  });

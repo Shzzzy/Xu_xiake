@@ -1,6 +1,20 @@
 import type { CreditLedgerEntry, CreditReservation } from "./credits/types.ts";
 import { createCreditsService, ensureWallet } from "./credits.server.ts";
 import {
+  createGenerationEntitlementsService,
+  hashGenerationToken,
+  type FinalizeFreeInput,
+  type FinalizePaidInput,
+  type GenerationAuthorization,
+  type GenerationCredentials,
+  type GenerationEntitlementsService,
+  type PreparedGenerationEntitlement,
+  type PreviewResolutionInput,
+} from "./generation-entitlements.server.ts";
+
+export { hashGenerationToken };
+export type { PreparedGenerationEntitlement };
+import {
   getTravelPlanWithSql,
   saveTravelPlanWithSql,
   type SaveTravelPlanInput,
@@ -19,12 +33,20 @@ export type GenerationDecision =
   | { kind: "needs_login" }
   | { kind: "needs_purchase" };
 
-export type GenerationPermission =
-  | { kind: "guest" }
-  | { kind: "free"; userId: string }
-  | { kind: "paid"; reservationId: string }
+export type GenerationPreparedKind = "guest" | "free" | "paid";
+export type GenerationPreparation =
+  | PreparedGenerationEntitlement
+  | {
+      kind: "needs_confirmation";
+      userId: string;
+      planId: string;
+      requestFingerprint: string;
+    }
   | { kind: "needs_login" }
   | { kind: "needs_purchase" };
+
+/** 兼容旧 UI 命名；实际 paid 入口使用 GenerationPreparation。 */
+export type GenerationPermission = GenerationPreparation;
 
 /** 根据钱包状态决定本次生成先走免费、确认扣点还是购买。 */
 export function decideGenerationPermission(input: {
@@ -49,16 +71,22 @@ export type ClaimFirstFreePlanInput = {
   userId: string;
   planId: string;
   plan: TripPlan;
+  entitlementToken?: string;
+  requestFingerprint?: string;
+  cookieEntitlementId?: string | null;
 };
 
 export type FinishPaidPlanInput = {
   userId: string;
-  reservationId: string;
+  reservationId?: string;
   planId: string;
   plan: TripPlan;
+  entitlementToken?: string;
+  requestFingerprint?: string;
+  cookieEntitlementId?: string | null;
 };
 
-export type EntitlementsService = {
+export type EntitlementsService = GenerationEntitlementsService & {
   saveTravelPlan(input: SaveTravelPlanInput): Promise<{ id: string }>;
   getTravelPlan(userId: string, planId: string): Promise<TripPlan | null>;
   claimFirstFreePlan(input: ClaimFirstFreePlanInput): Promise<{ planId: string }>;
@@ -86,6 +114,7 @@ async function reservationOwnerUserId(
  * 生产入口注入 getSql()，测试可注入真实 PGlite，保证保存、领取和消费走同一套事务逻辑。
  */
 export function createEntitlementsService(sql: EntitlementSql): EntitlementsService {
+  const generation = createGenerationEntitlementsService(sql);
   async function saveTravelPlan(input: SaveTravelPlanInput): Promise<{ id: string }> {
     return saveTravelPlanWithSql(sql, input);
   }
@@ -101,6 +130,17 @@ export function createEntitlementsService(sql: EntitlementSql): EntitlementsServ
   async function claimFirstFreePlan(input: ClaimFirstFreePlanInput): Promise<{ planId: string }> {
     if (!input?.userId || !input.planId || !input.plan) {
       throw new Error("缺少用户身份或行程标识");
+    }
+
+    if (input.entitlementToken && input.requestFingerprint) {
+      return generation.claimFreeWithEntitlement({
+        userId: input.userId,
+        planId: input.planId,
+        plan: input.plan,
+        entitlementToken: input.entitlementToken,
+        requestFingerprint: input.requestFingerprint,
+        cookieEntitlementId: input.cookieEntitlementId ?? null,
+      });
     }
 
     return sql.transaction(async (tx) => {
@@ -170,12 +210,26 @@ export function createEntitlementsService(sql: EntitlementSql): EntitlementsServ
    */
   async function finishPaidPlan(input: FinishPaidPlanInput): Promise<CreditLedgerEntry> {
     if (!input?.userId) throw new Error("缺少用户身份");
-    if (!input.reservationId || !input.planId || !input.plan) {
-      throw new Error("缺少预留、行程标识或最终计划");
+    if (!input.planId || !input.plan) {
+      throw new Error("缺少行程标识或最终计划");
     }
 
+    if (input.entitlementToken && input.requestFingerprint) {
+      return generation.finishPaidWithEntitlement({
+        userId: input.userId,
+        planId: input.planId,
+        plan: input.plan,
+        entitlementToken: input.entitlementToken,
+        requestFingerprint: input.requestFingerprint,
+        cookieEntitlementId: input.cookieEntitlementId ?? null,
+      });
+    }
+
+    const reservationId = input.reservationId;
+    if (!reservationId) throw new Error("缺少预留标识");
+
     return sql.transaction(async (tx) => {
-      const ownerUserId = await reservationOwnerUserId(tx, input.reservationId);
+      const ownerUserId = await reservationOwnerUserId(tx, reservationId);
       if (!ownerUserId) throw new Error("点数预留不存在、已消费或已过期");
       if (ownerUserId !== input.userId) throw new Error("行程不存在或无权访问");
 
@@ -185,12 +239,13 @@ export function createEntitlementsService(sql: EntitlementSql): EntitlementsServ
         plan: input.plan,
       });
       const txCredits = createCreditsService(tx);
-      await txCredits.associateReservationPlan(input.userId, input.reservationId, input.planId);
-      return txCredits.consumeReservation(input.reservationId, input.planId);
+      await txCredits.associateReservationPlan(input.userId, reservationId, input.planId);
+      return txCredits.consumeReservation(reservationId, input.planId);
     });
   }
 
   return {
+    ...generation,
     saveTravelPlan,
     getTravelPlan,
     claimFirstFreePlan,
@@ -243,38 +298,72 @@ export function finishPaidPlan(input: FinishPaidPlanInput): Promise<CreditLedger
   return getDefaultService().then((service) => service.finishPaidPlan(input));
 }
 
-const GUEST_GENERATION_COOKIE = "guest_generation_used";
+const GUEST_GENERATION_COOKIE = "guest_generation_entitlement";
+const GUEST_GENERATION_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** 访客首次生成时写入 HttpOnly Cookie；第二次生成要求登录。 */
-export async function claimGuestGenerationAttempt(): Promise<GenerationDecision> {
-  const { getCookie, setCookie } = await import("@tanstack/react-start/server");
-  const decision = resolveGuestGenerationDecision(Boolean(getCookie(GUEST_GENERATION_COOKIE)));
-  if (decision.kind !== "guest") return decision;
-  setCookie(GUEST_GENERATION_COOKIE, "1", {
+/** 读取当前请求绑定的访客凭证 id；没有 Cookie 时返回 null。 */
+export async function readGuestGenerationEntitlementId(): Promise<string | null> {
+  const { getCookie } = await import("@tanstack/react-start/server");
+  return getCookie(GUEST_GENERATION_COOKIE) ?? null;
+}
+
+/** 只在服务端设置访客凭证 Cookie，客户端 JavaScript 无法读取。 */
+async function setGuestGenerationEntitlementCookie(entitlementId: string): Promise<void> {
+  const { setCookie } = await import("@tanstack/react-start/server");
+  setCookie(GUEST_GENERATION_COOKIE, entitlementId, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
-    maxAge: 60 * 60 * 24,
+    maxAge: GUEST_GENERATION_TTL_MS / 1000,
     path: "/",
   });
-  return decision;
 }
 
-/** 访客生成失败时回滚 Cookie，避免一次失败就锁死免费体验。 */
-export async function releaseGuestGenerationAttempt(): Promise<void> {
-  const { deleteCookie } = await import("@tanstack/react-start/server");
+/** 只清理与本次 attempt 相同的 Cookie，避免失败请求清掉新请求。 */
+export async function clearGuestGenerationEntitlementCookie(
+  entitlementId?: string | null,
+): Promise<void> {
+  const { deleteCookie, getCookie } = await import("@tanstack/react-start/server");
+  const current = getCookie(GUEST_GENERATION_COOKIE);
+  if (!current) return;
+  if (entitlementId && current !== entitlementId) return;
   deleteCookie(GUEST_GENERATION_COOKIE, { path: "/" });
 }
 
-/** 生成前只做权益判断；付费用户必须先经过前端确认再单独预留。 */
+/** IP + UA + 24 小时窗口组成 guest bucket，防止清 Cookie 后无限试用。 */
+export async function createGuestRequestBucket(): Promise<string> {
+  const { getRequest } = await import("@tanstack/react-start/server");
+  const request = getRequest();
+  const forwarded = request?.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  const ip = forwarded || request?.headers.get("x-real-ip") || "unknown-ip";
+  const userAgent = request?.headers.get("user-agent") || "unknown-ua";
+  const dayBucket = Math.floor(Date.now() / GUEST_GENERATION_TTL_MS);
+  return hashGenerationToken(`${ip}|${userAgent}|${dayBucket}`);
+}
+
+/** 生成前只做权益判断并签发一次性凭证。 */
 export async function preparePlanGeneration(
   userId: string | null,
   planId: string,
-): Promise<GenerationDecision> {
-  if (!planId) throw new Error("缺少生成标识");
-  if (!userId) return claimGuestGenerationAttempt();
+  requestFingerprint = planId,
+  guestBucket?: string,
+): Promise<GenerationPreparation> {
+  if (!planId || !requestFingerprint) throw new Error("缺少生成标识或请求指纹");
+  const service = await getDefaultService();
+  if (!userId) {
+    const bucket = guestBucket ?? (await createGuestRequestBucket());
+    const guest = await service.prepareGuestGeneration({
+      planId,
+      requestFingerprint,
+      guestBucket: bucket,
+    });
+    if (guest.kind === "needs_login") return guest;
+    await setGuestGenerationEntitlementCookie(guest.entitlementId);
+    return guest;
+  }
+
   const wallet = await ensureWallet(userId);
-  return decideGenerationPermission({
+  const decision = decideGenerationPermission({
     userId,
     wallet: {
       balance: wallet.balance,
@@ -282,13 +371,78 @@ export async function preparePlanGeneration(
       freeTrialClaimed: wallet.freeTrialClaimed,
     },
   });
+  if (decision.kind === "free") {
+    return service.prepareFreeGeneration({ userId, planId, requestFingerprint });
+  }
+  if (decision.kind === "needs_confirmation") {
+    return { ...decision, planId, requestFingerprint };
+  }
+  return { kind: "needs_purchase" };
 }
 
-/** 已确认扣点后执行预留。 */
+/** 用户确认后预留点数并签发 paid 凭证。 */
 export async function reservePaidGeneration(
   userId: string,
   planId: string,
-): Promise<GenerationPermission> {
+  requestFingerprint = planId,
+): Promise<PreparedGenerationEntitlement> {
   const reservation = await reservePaidPlan(userId, planId);
-  return { kind: "paid", reservationId: reservation.id };
+  try {
+    return await (
+      await getDefaultService()
+    ).preparePaidGeneration({
+      userId,
+      planId,
+      requestFingerprint,
+      reservationId: reservation.id,
+    });
+  } catch (error) {
+    await releasePaidPlan(userId, reservation.id).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** 生成接口在执行前必须调用；token 会原子标记 used，重复调用会失败。 */
+export async function authorizeGenerationEntitlement(
+  input: GenerationCredentials,
+): Promise<GenerationAuthorization> {
+  return (await getDefaultService()).authorizeGeneration(input);
+}
+
+/** 生成失败或取消时按 token + fingerprint 释放，不能用 reservationId 代替凭证。 */
+export async function releaseGenerationEntitlement(
+  input: GenerationCredentials,
+): Promise<{ released: boolean; kind: GenerationPreparedKind }> {
+  // 保留 Cookie，允许同一 token 在同一失败 attempt 上重试；重新申请时会覆盖为新的 entitlement id。
+  return (await getDefaultService()).releaseGeneration(input);
+}
+
+/** 访客生成成功后把最终 plan 绑定到凭证，等待登录后 claim。 */
+export async function finalizeGuestGeneration(input: {
+  token: string;
+  requestFingerprint: string;
+  planId: string;
+  plan: TripPlan;
+  cookieEntitlementId: string;
+}): Promise<void> {
+  await (await getDefaultService()).finalizeGuestGeneration(input);
+}
+
+/** 预览接口的统一入口：登录读取已保存 plan，访客验证一次性凭证与 plan hash。 */
+export async function resolvePreviewPlan(input: PreviewResolutionInput): Promise<TripPlan> {
+  return (await getDefaultService()).resolvePreviewPlan(input);
+}
+
+/** 访客首次生成时写入旧版本兼容 Cookie；新链路使用 preparePlanGeneration。 */
+export async function claimGuestGenerationAttempt(): Promise<GenerationDecision> {
+  const { getCookie } = await import("@tanstack/react-start/server");
+  const decision = resolveGuestGenerationDecision(Boolean(getCookie(GUEST_GENERATION_COOKIE)));
+  if (decision.kind !== "guest") return decision;
+  await clearGuestGenerationEntitlementCookie();
+  return decision;
+}
+
+/** 兼容旧调用；新链路使用 releaseGenerationEntitlement。 */
+export async function releaseGuestGenerationAttempt(): Promise<void> {
+  await clearGuestGenerationEntitlementCookie();
 }

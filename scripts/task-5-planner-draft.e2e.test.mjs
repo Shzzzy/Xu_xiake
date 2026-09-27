@@ -62,7 +62,12 @@ async function waitForServer(url, child, output) {
 async function startDevServer(port) {
   const child = spawn(npmCommand(), ["run", "dev", "--", "--port", String(port), "--strictPort"], {
     cwd: ROOT,
-    env: { ...process.env, BROWSER_SMOKE_TIMEOUT_MS: String(START_TIMEOUT_MS) },
+    env: {
+      ...process.env,
+      BROWSER_SMOKE_TIMEOUT_MS: String(START_TIMEOUT_MS),
+      // E2E 使用独立 PGlite，避免远程 Supabase 延迟和测试数据污染。
+      DATABASE_URL: "",
+    },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     shell: process.platform === "win32",
@@ -114,6 +119,8 @@ test(
         args: ["--no-sandbox", "--disable-dev-shm-usage", "--no-proxy-server"],
       });
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      // 每个 E2E 使用独立来源 IP，避免 24 小时 guest bucket 把另一支测试当成重复试用。
+      await page.setExtraHTTPHeaders({ "x-forwarded-for": "198.51.100.10" });
 
       await page.goto(server.url, { waitUntil: "domcontentloaded", timeout: 120_000 });
       await page.waitForTimeout(1000);

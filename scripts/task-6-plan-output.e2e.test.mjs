@@ -74,6 +74,8 @@ async function startDevServer(port) {
     env: {
       ...process.env,
       BROWSER_SMOKE_TIMEOUT_MS: String(START_TIMEOUT_MS),
+      // E2E 使用独立 PGlite，避免远程 Supabase 延迟和测试数据污染。
+      DATABASE_URL: "",
       // 强制走真实管家排程链路，而不是依赖外部碰巧设置的环境变量。
       BUTLER_PLANNER: "1",
       AMAP_E2E_FIXTURE: "1",
@@ -126,6 +128,8 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
       args: ["--no-sandbox", "--disable-dev-shm-usage", "--no-proxy-server"],
     });
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    // 每个 E2E 使用独立来源 IP，避免 24 小时 guest bucket 把另一支测试当成重复试用。
+    await page.setExtraHTTPHeaders({ "x-forwarded-for": "198.51.100.11" });
     mkdirSync("screenshots", { recursive: true });
     const consoleErrors = [];
     page.on("console", (message) => {
@@ -174,9 +178,7 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
       }
       throw error;
     }
-    await page
-      .getByText(/路书已就绪 · 共 \d+ 页/)
-      .waitFor({ state: "visible", timeout: 180_000 });
+    await page.getByText(/路书已就绪 · 共 \d+ 页/).waitFor({ state: "visible", timeout: 180_000 });
 
     const guidebookFrame = page
       .frames()
@@ -185,9 +187,15 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
     const guidebookPageCount = await guidebookFrame.locator("section.page").count();
     assert.ok(guidebookPageCount >= 9, `路书页数应不少于 9 页，实际 ${guidebookPageCount} 页`);
     await guidebookFrame.getByText("换乘").first().waitFor({ state: "visible", timeout: 30_000 });
-    await guidebookFrame.getByText("全团总预算").first().waitFor({ state: "visible", timeout: 30_000 });
+    await guidebookFrame
+      .getByText("全团总预算")
+      .first()
+      .waitFor({ state: "visible", timeout: 30_000 });
     // 结尾走并行生成的 AI 回望（服务端拼路线总结/评价/寄语），不再是旧的兜底文案。
-    await guidebookFrame.getByText(/路线总结/).first().waitFor({ state: "visible", timeout: 60_000 });
+    await guidebookFrame
+      .getByText(/路线总结/)
+      .first()
+      .waitFor({ state: "visible", timeout: 60_000 });
 
     // 摘要与逐日页必须同源：从路书总览页「核心亮点」读取景点名，
     // 摘要至少包含其中一个，且每个亮点都出现在每日导航/时间轴页里。
@@ -205,10 +213,7 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
 
     // 摘要与排程双向跨源校验：总览核心亮点必须全部出现在摘要里。
     for (const name of highlightNames) {
-      assert.ok(
-        summary.includes(name),
-        `摘要必须包含核心亮点「${name}」，摘要：${summary}`,
-      );
+      assert.ok(summary.includes(name), `摘要必须包含核心亮点「${name}」，摘要：${summary}`);
     }
 
     const dayPages = guidebookFrame.locator(

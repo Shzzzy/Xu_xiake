@@ -68,10 +68,14 @@ export function shouldAcceptPage(input: {
 export function GuidebookPreview({
   plan,
   planId,
+  entitlementToken = "",
+  requestFingerprint = planId,
   runId,
 }: {
   plan: TripPlan;
   planId: string;
+  entitlementToken?: string;
+  requestFingerprint?: string;
   runId?: string;
 }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -210,7 +214,7 @@ export function GuidebookPreview({
             "content-type": "application/json",
             "x-guidebook-run-id": requestRunId,
           },
-          body: JSON.stringify(plan),
+          body: JSON.stringify({ planId, entitlementToken, requestFingerprint, plan }),
           signal: controller.signal,
         });
         if (!response.ok || !response.body) {
@@ -289,6 +293,8 @@ export function GuidebookPreview({
         <ExportGuidebookButton
           plan={plan}
           planId={planId}
+          entitlementToken={entitlementToken}
+          requestFingerprint={requestFingerprint}
           previewFrameRef={frameRef}
           disabled={!ready}
           disabledHint={error ? "路书生成失败，请先处理上方问题" : "路书全部页面生成完成后即可导出"}

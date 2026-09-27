@@ -12,3 +12,25 @@ export function resolveGuidebookExportGate(input: {
   if (!input.hasUser) return "login";
   return "ensure_entitlement";
 }
+
+/** 账号 session 仍在解析时，导出状态必须回到 idle，不能卡在 preparing。 */
+export function resetGuidebookExportAfterPendingAuth(): {
+  stage: "idle";
+  progress: number;
+} {
+  return { stage: "idle", progress: 0 };
+}
+
+/** 输入变化或卸载时，只释放当前尝试且尚未 finalize 的凭证。 */
+export function shouldReleaseGenerationOnCleanup(input: {
+  attemptPlanId: string | null;
+  currentPlanId: string;
+  finalizedPlanId: string | null;
+  hasToken: boolean;
+}): boolean {
+  return (
+    input.attemptPlanId === input.currentPlanId &&
+    input.finalizedPlanId !== input.currentPlanId &&
+    input.hasToken
+  );
+}

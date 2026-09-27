@@ -2,15 +2,19 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { shouldReleaseGenerationOnCleanup } from "@/lib/guidebook-access";
 import {
   claimCurrentPlan,
+  finalizeGuestGeneration,
   finishPaidGeneration,
   preparePlanGeneration,
-  releaseGuestGeneration,
   releasePlanGeneration,
   reservePlanGeneration,
 } from "@/lib/entitlements.functions";
-import type { GenerationDecision, GenerationPermission } from "@/lib/entitlements.server";
+import type {
+  GenerationPreparation,
+  PreparedGenerationEntitlement,
+} from "@/lib/entitlements.server";
 import {
   ArrowLeft,
   ArrowRight,
@@ -1966,7 +1970,7 @@ function ItineraryScreen({
   const prepareGenerationFn = useServerFn(preparePlanGeneration);
   const reserveGenerationFn = useServerFn(reservePlanGeneration);
   const releaseGenerationFn = useServerFn(releasePlanGeneration);
-  const releaseGuestFn = useServerFn(releaseGuestGeneration);
+  const finalizeGuestGenerationFn = useServerFn(finalizeGuestGeneration);
   const finishPaidGenerationFn = useServerFn(finishPaidGeneration);
   const claimCurrentPlanFn = useServerFn(claimCurrentPlan);
   const [weather, setWeather] = useState<WeatherDay[]>([]);
@@ -1992,7 +1996,11 @@ function ItineraryScreen({
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
   const generationGateRef = useRef<{
     planId: string;
-    permission: GenerationDecision | GenerationPermission;
+    permission: GenerationPreparation | PreparedGenerationEntitlement;
+  } | null>(null);
+  const generationCleanupRef = useRef<{
+    planId: string;
+    permission: GenerationPreparation | PreparedGenerationEntitlement;
   } | null>(null);
   const finalizedPlanRef = useRef<string | null>(null);
   const [liveSourceCount, setLiveSourceCount] = useState<number | null>(null);
@@ -2106,6 +2114,7 @@ function ItineraryScreen({
       `generation-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     [generationInputsKey],
   );
+  const requestFingerprint = planId;
 
   useEffect(() => {
     let cancelled = false;
@@ -2169,23 +2178,32 @@ function ItineraryScreen({
     // 天气是增强信息，不是规划前置条件；省级/宽泛目的地地理编码失败时仍要继续生成路书。
     if (detailedTrip && weatherState === "loading") return;
 
+    const releaseCurrentGeneration = async () => {
+      const permission = generationGateRef.current?.permission;
+      if (
+        !permission ||
+        permission.kind === "needs_login" ||
+        permission.kind === "needs_purchase"
+      ) {
+        return;
+      }
+      if (permission.kind !== "needs_confirmation") {
+        try {
+          await releaseGenerationFn({
+            data: {
+              entitlementToken: permission.token,
+              requestFingerprint: permission.requestFingerprint,
+            },
+          });
+        } catch (releaseError) {
+          console.error("释放生成凭证失败", releaseError);
+        }
+      }
+    };
+
     const handleGenerationFailure = async (message: string) => {
       if (cancelled) return;
-      const permission = generationGateRef.current?.permission;
-      if (permission?.kind === "paid") {
-        try {
-          await releaseGenerationFn({ data: { reservationId: permission.reservationId } });
-        } catch (releaseError) {
-          console.error("释放点数预留失败", releaseError);
-        }
-      }
-      if (permission?.kind === "guest") {
-        try {
-          await releaseGuestFn();
-        } catch (releaseError) {
-          console.error("清理访客生成标记失败", releaseError);
-        }
-      }
+      await releaseCurrentGeneration();
       generationGateRef.current = null;
       setPlannerState("fallback");
       setPlannerMessage(message);
@@ -2194,11 +2212,13 @@ function ItineraryScreen({
     const startGeneration = async () => {
       let gate = generationGateRef.current?.planId === planId ? generationGateRef.current : null;
       if (!gate) {
-        const decision = await prepareGenerationFn({ data: { planId } });
+        const decision = await prepareGenerationFn({ data: { planId, requestFingerprint } });
         if (cancelled) return;
         gate = { planId, permission: decision };
         generationGateRef.current = gate;
+        generationCleanupRef.current = gate;
       }
+      generationCleanupRef.current = gate;
 
       const permission = gate.permission;
       if (permission.kind === "needs_confirmation") {
@@ -2240,6 +2260,8 @@ function ItineraryScreen({
             travelers: { adults: brief.adults, children: brief.children },
             transport: routePlan.legs[0]?.transport ?? null,
             style: routePlan.legs[0]?.style,
+            entitlementToken: permission.token,
+            requestFingerprint,
           },
         })
           .then(async (result) => {
@@ -2250,11 +2272,7 @@ function ItineraryScreen({
               setFeasibilityDecision(result.decision);
               setPlannerState("needs_decision");
               setPlannerMessage(result.decision.reason);
-              if (permission.kind === "paid") {
-                await releaseGenerationFn({ data: { reservationId: permission.reservationId } });
-              } else if (permission.kind === "guest") {
-                await releaseGuestFn();
-              }
+              await releaseCurrentGeneration();
               generationGateRef.current = null;
               return;
             }
@@ -2303,6 +2321,8 @@ function ItineraryScreen({
             interests: brief.interests,
             seedPlaces: destination.places.map((place) => place.name),
             route: routePlan,
+            entitlementToken: permission.token,
+            requestFingerprint,
           },
         })
           .then(async (result) => {
@@ -2333,6 +2353,26 @@ function ItineraryScreen({
 
     return () => {
       cancelled = true;
+      const attempt = generationCleanupRef.current;
+      const permission = attempt?.permission;
+      if (
+        permission &&
+        "token" in permission &&
+        shouldReleaseGenerationOnCleanup({
+          attemptPlanId: attempt?.planId ?? null,
+          currentPlanId: planId,
+          finalizedPlanId: finalizedPlanRef.current,
+          hasToken: true,
+        })
+      ) {
+        void releaseGenerationFn({
+          data: {
+            entitlementToken: permission.token,
+            requestFingerprint: permission.requestFingerprint,
+          },
+        });
+      }
+      generationCleanupRef.current = null;
     };
   }, [
     brief.adults,
@@ -2358,7 +2398,6 @@ function ItineraryScreen({
     prepareGenerationFn,
     refreshInspirationCatalog,
     releaseGenerationFn,
-    releaseGuestFn,
     routePlan,
     weatherState,
   ]);
@@ -2463,12 +2502,29 @@ function ItineraryScreen({
     let cancelled = false;
     const finalize = async () => {
       try {
-        if (gate.permission.kind === "free") {
-          await claimCurrentPlanFn({ data: { planId, plan: executionPlan } });
+        if (gate.permission.kind === "guest") {
+          await finalizeGuestGenerationFn({
+            data: {
+              entitlementToken: gate.permission.token,
+              requestFingerprint: gate.permission.requestFingerprint,
+              planId,
+              plan: executionPlan,
+            },
+          });
+        } else if (gate.permission.kind === "free") {
+          await claimCurrentPlanFn({
+            data: {
+              planId,
+              requestFingerprint: gate.permission.requestFingerprint,
+              entitlementToken: gate.permission.token,
+              plan: executionPlan,
+            },
+          });
         } else if (gate.permission.kind === "paid") {
           await finishPaidGenerationFn({
             data: {
-              reservationId: gate.permission.reservationId,
+              entitlementToken: gate.permission.token,
+              requestFingerprint: gate.permission.requestFingerprint,
               planId,
               plan: executionPlan,
             },
@@ -2493,6 +2549,7 @@ function ItineraryScreen({
   }, [
     claimCurrentPlanFn,
     executionPlan,
+    finalizeGuestGenerationFn,
     finalizeRevision,
     finishPaidGenerationFn,
     planId,
@@ -2505,7 +2562,7 @@ function ItineraryScreen({
     setPlannerState("loading");
     setPlannerMessage("正在预留 1 点并开始规划…");
     try {
-      const paid = await reserveGenerationFn({ data: { planId } });
+      const paid = await reserveGenerationFn({ data: { planId, requestFingerprint } });
       generationGateRef.current = { planId, permission: paid };
       setGenerationGateRevision((value) => value + 1);
     } catch (error) {
@@ -2526,6 +2583,12 @@ function ItineraryScreen({
       `guidebook-preview-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     [executionPlan],
   );
+  const activeGenerationPermission =
+    generationGateRef.current?.planId === planId ? generationGateRef.current.permission : null;
+  const activeEntitlementToken =
+    activeGenerationPermission && "token" in activeGenerationPermission
+      ? activeGenerationPermission.token
+      : "";
   const rainDays = weather.filter((day) => {
     const tone = classifyWeather(day.code).tone;
     return tone === "rain" || tone === "storm";
@@ -2745,7 +2808,13 @@ function ItineraryScreen({
                     </div>
                   }
                 >
-                  <GuidebookPreview plan={executionPlan} planId={planId} runId={previewRunId} />
+                  <GuidebookPreview
+                    plan={executionPlan}
+                    planId={planId}
+                    entitlementToken={activeEntitlementToken}
+                    requestFingerprint={requestFingerprint}
+                    runId={previewRunId}
+                  />
                 </Suspense>
               </GuidebookStage>
               {finalizeError ? (

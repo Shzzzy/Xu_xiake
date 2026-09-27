@@ -14,6 +14,8 @@ const migrationNames = [
   "0007_payment_order_idempotency.sql",
   "0008_provider_creation_lease.sql",
   "0009_payment_credits_applied.sql",
+  "0010_generation_entitlements.sql",
+  "0011_travel_plan_hash.sql",
 ] as const;
 
 const commercialTables = [
@@ -25,6 +27,7 @@ const commercialTables = [
   "travel_plans",
   "plan_shares",
   "admin_audit_logs",
+  "generation_entitlements",
 ] as const;
 
 const requiredConstraints = [
@@ -53,6 +56,11 @@ const requiredIndexes = [
   "user_username_unique_idx",
   "credit_reservations_wallet_plan_unique_idx",
   "payment_orders_user_client_request_unique_idx",
+  "generation_entitlements_guest_bucket_active_idx",
+  "generation_entitlements_guest_fingerprint_active_idx",
+  "generation_entitlements_free_user_active_idx",
+  "generation_entitlements_paid_reservation_active_idx",
+  "travel_plans_plan_hash_idx",
 ] as const;
 
 async function createMigratedDatabase() {
