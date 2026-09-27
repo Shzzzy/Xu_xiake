@@ -9,6 +9,7 @@ import {
 } from "@/lib/guidebook-access";
 import type { TripPlan } from "@/lib/travel-plan";
 import { exportGuidebook } from "@/lib/travel-plan.functions";
+import type { PendingPlanAction, PendingPlanClaim } from "@/lib/pending-plan-restore";
 import {
   advanceGuidebookProgress,
   type GuidebookGenerationState,
@@ -18,20 +19,18 @@ import {
 const DOWNLOAD_URL_RELEASE_MS = 60_000;
 const PENDING_PLAN_CLAIM_KEY = "xuxiake:pending-plan-claim:v1";
 
-export type PendingPlanAction = "export" | "share" | "preview";
+export type { PendingPlanAction, PendingPlanClaim } from "@/lib/pending-plan-restore";
 
-export type PendingPlanClaim = {
-  planId: string;
-  requestFingerprint: string;
-  entitlementToken: string;
-  plan: TripPlan;
-  action: PendingPlanAction;
+type StoredPendingPlanClaim = Omit<PendingPlanClaim, "executionPlan"> & {
+  executionPlan?: TripPlan;
+  /** 兼容第二轮已写入 sessionStorage 的旧字段。 */
+  plan?: TripPlan;
 };
 
 /** 未登录点击 PDF/分享时，把最终计划暂存在当前标签页，登录回跳后可以领取。 */
 export function storePendingPlanClaim(
   planId: string,
-  plan: TripPlan,
+  executionPlan: TripPlan,
   entitlementToken: string,
   requestFingerprint = planId,
   action: PendingPlanAction = "export",
@@ -39,7 +38,7 @@ export function storePendingPlanClaim(
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(
     PENDING_PLAN_CLAIM_KEY,
-    JSON.stringify({ planId, requestFingerprint, entitlementToken, plan, action }),
+    JSON.stringify({ planId, requestFingerprint, entitlementToken, executionPlan, action }),
   );
 }
 
@@ -49,18 +48,25 @@ export function readPendingPlanClaim(): PendingPlanClaim | null {
   try {
     const parsed = JSON.parse(
       window.sessionStorage.getItem(PENDING_PLAN_CLAIM_KEY) ?? "null",
-    ) as PendingPlanClaim | null;
+    ) as StoredPendingPlanClaim | null;
+    const executionPlan = parsed?.executionPlan ?? parsed?.plan;
     if (
       !parsed ||
       typeof parsed.planId !== "string" ||
       typeof parsed.requestFingerprint !== "string" ||
       typeof parsed.entitlementToken !== "string" ||
-      !parsed.plan ||
+      !executionPlan ||
       (parsed.action !== "export" && parsed.action !== "share" && parsed.action !== "preview")
     ) {
       return null;
     }
-    return parsed;
+    return {
+      planId: parsed.planId,
+      requestFingerprint: parsed.requestFingerprint,
+      entitlementToken: parsed.entitlementToken,
+      executionPlan,
+      action: parsed.action,
+    };
   } catch {
     return null;
   }
@@ -110,7 +116,9 @@ function base64ToPdfBlob(base64: string): Blob {
  * 路书 HTML 自带 \`@page{size:A4}\` 与逐页 \`break-after\`，浏览器打印的分页和字体质量
  * 都优于服务端截图方案；同时不依赖任何无头浏览器，serverless 部署也能用。
  */
-function printPreviewDocument(frame: HTMLIFrameElement | null): "printed" | "blocked" | "empty" {
+type PreviewPrintResult = "printed" | "blocked" | "empty";
+
+function printPreviewDocument(frame: HTMLIFrameElement | null): PreviewPrintResult {
   const doc = frame?.contentDocument;
   if (!doc?.documentElement) return "empty";
   const html = "<!doctype html>" + doc.documentElement.outerHTML;
@@ -142,6 +150,173 @@ function printPreviewDocument(frame: HTMLIFrameElement | null): "printed" | "blo
 function fallbackPdfFilename(plan: TripPlan): string {
   const rawName = plan.meta.title.trim() || plan.meta.destination.trim() || "旅行路书";
   return `${rawName}_guidebook.pdf`;
+}
+
+type GuidebookPdfResult =
+  | { status: "ok"; pdfBase64: string; filename?: string }
+  | { status: "html"; html: string; message?: string }
+  | { status: "failed"; message?: string };
+
+export type GuidebookExportAttemptDeps = {
+  isPending: boolean;
+  hasUser: boolean;
+  plan: TripPlan;
+  planId: string;
+  entitlementToken: string;
+  requestFingerprint: string;
+  previewFrame?: HTMLIFrameElement | null;
+  ensureExport: (input: {
+    data: {
+      planId: string;
+      requestFingerprint: string;
+      entitlementToken: string;
+      plan: TripPlan;
+    };
+  }) => Promise<unknown>;
+  exportPdf: (input: { data: { planId: string } }) => Promise<GuidebookPdfResult>;
+  printDocument?: (frame: HTMLIFrameElement | null) => PreviewPrintResult;
+  createPdfBlob?: (base64: string) => Blob;
+  storePending?: typeof storePendingPlanClaim;
+  redirectAuth?: () => void;
+  redirectPricing?: () => void;
+  now?: () => number;
+};
+
+export type GuidebookExportAttemptResult = {
+  state: GuidebookGenerationState;
+  preparedPdf: PreparedPdf | null;
+  redirect: "auth" | "pricing" | null;
+  notice?: { type: "info" | "success" | "error"; message: string };
+};
+
+/** 导出控制器：从登录闸门、权益幂等到打印或 PDF 下载共用同一条可测试路径。 */
+export async function runGuidebookExportAttempt(
+  deps: GuidebookExportAttemptDeps,
+): Promise<GuidebookExportAttemptResult> {
+  let state = advanceGuidebookProgress({ stage: "idle", progress: 0 }, "preparing");
+  if (deps.isPending) {
+    return {
+      state: resetGuidebookExportAfterPendingAuth(),
+      preparedPdf: null,
+      redirect: null,
+      notice: { type: "info", message: "账号状态仍在确认，已重置导出状态，请稍后重试。" },
+    };
+  }
+
+  if (!deps.hasUser) {
+    if (deps.planId && deps.plan) {
+      (deps.storePending ?? storePendingPlanClaim)(
+        deps.planId,
+        deps.plan,
+        deps.entitlementToken,
+        deps.requestFingerprint,
+        "export",
+      );
+    }
+    (deps.redirectAuth ?? redirectToAuth)();
+    return {
+      state: resetGuidebookExportAfterPendingAuth(),
+      preparedPdf: null,
+      redirect: "auth",
+      notice: { type: "info", message: "路书已暂存，登录后可继续导出。" },
+    };
+  }
+
+  if (!deps.planId || !deps.entitlementToken) {
+    return {
+      state: advanceGuidebookProgress(state, "failed", "缺少生成权益凭证，无法保存路书"),
+      preparedPdf: null,
+      redirect: null,
+      notice: { type: "error", message: "缺少生成权益凭证，无法保存路书" },
+    };
+  }
+
+  try {
+    await deps.ensureExport({
+      data: {
+        planId: deps.planId,
+        requestFingerprint: deps.requestFingerprint,
+        entitlementToken: deps.entitlementToken,
+        plan: deps.plan,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("免费体验已使用")) {
+      (deps.redirectPricing ?? redirectToPricing)();
+      return {
+        state: resetGuidebookExportAfterPendingAuth(),
+        preparedPdf: null,
+        redirect: "pricing",
+        notice: { type: "info", message: "本次生成尚未保存，请先购买点数后重新生成。" },
+      };
+    }
+    const message = error instanceof Error ? error.message : "保存路书失败，请重试。";
+    return {
+      state: advanceGuidebookProgress(state, "failed", message),
+      preparedPdf: null,
+      redirect: null,
+      notice: { type: "error", message },
+    };
+  }
+
+  const printResult = (deps.printDocument ?? printPreviewDocument)(deps.previewFrame ?? null);
+  if (printResult === "printed") {
+    return {
+      state: advanceGuidebookProgress(state, "ready", "已打开打印窗口，选择「另存为 PDF」即可保存"),
+      preparedPdf: null,
+      redirect: null,
+      notice: { type: "success", message: "已打开打印窗口，目标选择「另存为 PDF」" },
+    };
+  }
+  if (printResult === "blocked") {
+    const message = "浏览器拦截了打印窗口，请允许弹窗后重试";
+    return {
+      state: advanceGuidebookProgress(state, "failed", message),
+      preparedPdf: null,
+      redirect: null,
+      notice: { type: "error", message },
+    };
+  }
+
+  try {
+    const result = await deps.exportPdf({ data: { planId: deps.planId } });
+    if (result.status !== "ok") {
+      const message = result.message || "PDF 生成失败，请重试。";
+      return {
+        state: advanceGuidebookProgress(state, "failed", message),
+        preparedPdf: null,
+        redirect: null,
+        notice: { type: "error", message },
+      };
+    }
+    const blob = (deps.createPdfBlob ?? base64ToPdfBlob)(result.pdfBase64);
+    if (blob.size <= 0) {
+      const message = "生成的 PDF 为空，请重试。";
+      return {
+        state: advanceGuidebookProgress(state, "failed", message),
+        preparedPdf: null,
+        redirect: null,
+        notice: { type: "error", message },
+      };
+    }
+    return {
+      state: advanceGuidebookProgress(state, "ready"),
+      preparedPdf: {
+        filename: result.filename || fallbackPdfFilename(deps.plan),
+        blob,
+        readyAt: (deps.now ?? Date.now)(),
+      },
+      redirect: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "路书生成失败，请重试。";
+    return {
+      state: advanceGuidebookProgress(state, "failed", message),
+      preparedPdf: null,
+      redirect: null,
+      notice: { type: "error", message },
+    };
+  }
 }
 
 /**
@@ -185,112 +360,27 @@ export function useGuidebookExport(
     setPreparedPdf(null);
     setState((current) => advanceGuidebookProgress(current, "preparing"));
 
-    const accessGate = resolveGuidebookExportGate({ isPending, hasUser: Boolean(user) });
-    if (accessGate === "wait") {
-      setState(resetGuidebookExportAfterPendingAuth());
-      toast.info("账号状态仍在确认，已重置导出状态，请稍后重试。");
-      return;
-    }
-    if (accessGate === "login") {
-      if (planId && plan) {
-        storePendingPlanClaim(planId, plan, entitlementToken, requestFingerprint, "export");
-      }
-      redirectToAuth();
-      return;
-    }
+    const result = await runGuidebookExportAttempt({
+      isPending,
+      hasUser: Boolean(user),
+      plan,
+      planId,
+      entitlementToken,
+      requestFingerprint,
+      previewFrame: previewFrameRef?.current ?? null,
+      ensureExport: ensureExportFn,
+      exportPdf: exportGuidebookFn,
+    });
+    if (runRef.current !== runId) return;
 
-    try {
-      if (!planId || !entitlementToken) throw new Error("缺少生成权益凭证，无法保存路书");
-      // 已登录也必须经过服务端幂等 claim：免费首次领取、已保存计划直接通过，未用权益会提示购买。
-      await ensureExportFn({
-        data: {
-          planId,
-          requestFingerprint,
-          entitlementToken,
-          plan,
-        },
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("免费体验已使用")) {
-        toast.info("本次生成尚未保存，请先购买点数后重新生成。");
-        redirectToPricing();
-        return;
-      }
-      setState((current) =>
-        advanceGuidebookProgress(
-          current,
-          "failed",
-          error instanceof Error ? error.message : "保存路书失败，请重试。",
-        ),
-      );
-      return;
+    setState(result.state);
+    setPreparedPdf(result.preparedPdf);
+    if (result.notice) {
+      if (result.notice.type === "success") toast.success(result.notice.message);
+      else if (result.notice.type === "error") toast.error(result.notice.message);
+      else toast.info(result.notice.message);
     }
-
-    // 部署到 serverless（如 Netlify）时没有可用的无头浏览器，
-    // 直接把预览内容交给用户浏览器的打印功能，质量更好也不需要额外依赖。
-    const printResult = printPreviewDocument(previewFrameRef?.current ?? null);
-    if (printResult === "printed") {
-      setState((current) =>
-        advanceGuidebookProgress(current, "ready", "已打开打印窗口，选择「另存为 PDF」即可保存"),
-      );
-      toast.info("已打开打印窗口，目标选择「另存为 PDF」");
-      return;
-    }
-    if (printResult === "blocked") {
-      setState((current) =>
-        advanceGuidebookProgress(current, "failed", "浏览器拦截了打印窗口，请允许弹窗后重试"),
-      );
-      toast.error("请允许本站弹出窗口后重试");
-      return;
-    }
-    // 服务端单次渲染十几秒，中途没有更细的信号，这里给出可见的阶段推进。
-    const finalizeTimer = window.setTimeout(() => {
-      if (runRef.current === runId) {
-        setState((current) => advanceGuidebookProgress(current, "finalizing"));
-      }
-    }, 12_000);
-
-    try {
-      const result = await exportGuidebookFn({ data: { planId } });
-      if (runRef.current !== runId) return;
-
-      if (result.status !== "ok") {
-        setState((current) =>
-          advanceGuidebookProgress(current, "failed", result.message || "PDF 生成失败，请重试。"),
-        );
-        return;
-      }
-
-      setState((current) => advanceGuidebookProgress(current, "rendering"));
-      const blob = base64ToPdfBlob(result.pdfBase64);
-      if (blob.size <= 0) {
-        setState((current) =>
-          advanceGuidebookProgress(current, "failed", "生成的 PDF 为空，请重试。"),
-        );
-        return;
-      }
-
-      const file: PreparedPdf = {
-        filename: result.filename || fallbackPdfFilename(plan),
-        blob,
-        readyAt: Date.now(),
-      };
-      setPreparedPdf(file);
-      setState((current) => advanceGuidebookProgress(current, "ready"));
-      downloadBlob(file);
-      toast.success("路书 PDF 已开始下载");
-    } catch (error) {
-      if (runRef.current !== runId) return;
-      setState((current) =>
-        advanceGuidebookProgress(
-          current,
-          "failed",
-          error instanceof Error ? error.message : "路书生成失败，请重试。",
-        ),
-      );
-    } finally {
-      window.clearTimeout(finalizeTimer);
-    }
+    if (result.preparedPdf) downloadBlob(result.preparedPdf);
   }, [
     downloadBlob,
     ensureExportFn,

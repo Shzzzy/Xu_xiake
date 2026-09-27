@@ -119,6 +119,11 @@ import {
   readPendingPlanClaim,
   type PendingPlanClaim,
 } from "./plan-output/use-guidebook-export";
+import {
+  applyPendingPlanRestore,
+  pendingPlanActionLabel,
+  type RestoredPlanResult,
+} from "@/lib/pending-plan-restore";
 
 /**
  * 路书预览只在结果页用到，懒加载避免首页提前下载预览与导出代码。
@@ -464,10 +469,26 @@ function PlannerPrototypeContent() {
     createUnknownPlanDraft(dateInputValue(new Date())),
   );
   const [savedIds, setSavedIds] = useState<string[]>([]);
+  const [restoredResult, setRestoredResult] = useState<RestoredPlanResult | null>(null);
 
   useEffect(() => {
     setSavedIds(readSaved());
   }, []);
+
+  const downloadExportedPdf = async (claim: PendingPlanClaim) => {
+    const result = await exportPendingPlanFn({ data: { planId: claim.planId } });
+    if (result.status !== "ok") throw new Error(result.message || "PDF 生成失败");
+    const binary = window.atob(result.pdfBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = result.filename || "旅行路书.pdf";
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
 
   // 未登录点击 PDF/分享后会把待领取计划放入 sessionStorage，登录回跳时在这里幂等 claim。
   useEffect(() => {
@@ -475,38 +496,23 @@ function PlannerPrototypeContent() {
     const pending = readPendingPlanClaim();
     if (!pending) return;
     let cancelled = false;
-    const continueExport = async (claim: PendingPlanClaim) => {
-      const result = await exportPendingPlanFn({ data: { planId: claim.planId } });
-      if (result.status !== "ok") throw new Error(result.message || "PDF 生成失败");
-      const binary = window.atob(result.pdfBase64);
-      const bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1)
-        bytes[index] = binary.charCodeAt(index);
-      const blob = new Blob([bytes], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = result.filename || "旅行路书.pdf";
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      clearPendingPlanClaim();
-    };
-    void claimPendingPlanFn({ data: pending })
+    void claimPendingPlanFn({
+      data: {
+        planId: pending.planId,
+        requestFingerprint: pending.requestFingerprint,
+        entitlementToken: pending.entitlementToken,
+        plan: pending.executionPlan,
+      },
+    })
       .then(() => {
         if (cancelled) return;
-        if (pending.action === "export") {
-          toast.success("登录成功，本次路书已保存到账号。", {
-            action: {
-              label: "继续导出",
-              onClick: () =>
-                void continueExport(pending).catch((error: unknown) =>
-                  toast.error(error instanceof Error ? error.message : "继续导出失败"),
-                ),
-            },
-          });
-          return;
-        }
-        toast.success("登录成功，已恢复本次路书，请回到原入口继续操作。");
+        const restored = applyPendingPlanRestore(pending);
+        setBrief(restored.brief);
+        setResultOrigin("known");
+        setRestoredResult(restored);
+        setScreen("result");
+        clearPendingPlanClaim();
+        toast.success(`登录成功，已恢复本次路书，可以${pendingPlanActionLabel(pending.action)}。`);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -516,6 +522,44 @@ function PlannerPrototypeContent() {
       cancelled = true;
     };
   }, [claimPendingPlanFn, isPending, user]);
+
+  const continueRestoredAction = async () => {
+    if (!restoredResult) return;
+    if (restoredResult.action === "preview") {
+      document.getElementById("guidebook-result-anchor")?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+    const pending = readPendingPlanClaim();
+    if (restoredResult.action === "export") {
+      try {
+        if (pending) await downloadExportedPdf(pending);
+        else
+          await downloadExportedPdf({
+            planId: restoredResult.planId,
+            requestFingerprint: restoredResult.planId,
+            entitlementToken: "",
+            executionPlan: restoredResult.executionPlan,
+            action: "export",
+          });
+        toast.success("路书 PDF 已开始下载");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "继续导出失败");
+      }
+      return;
+    }
+    const title = restoredResult.executionPlan.meta.title || "旅行路书";
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, text: `${title}，登录后已恢复。` });
+      } else {
+        await navigator.clipboard?.writeText(window.location.href);
+        toast.success("路书链接已复制");
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      toast.error(error instanceof Error ? error.message : "继续分享失败");
+    }
+  };
 
   const currentVariant = designVariants[0];
   const saveId = `${brief.destinationId}-${brief.startDate}-${brief.days}`;
@@ -553,6 +597,7 @@ function PlannerPrototypeContent() {
           onBrief={setBrief}
           onBack={() => setScreen("landing")}
           onSubmit={() => {
+            setRestoredResult(null);
             setResultOrigin("known");
             setScreen("result");
           }}
@@ -567,16 +612,29 @@ function PlannerPrototypeContent() {
           onBack={() => setScreen("landing")}
           onComplete={(nextBrief) => {
             setBrief(nextBrief);
+            setRestoredResult(null);
             setResultOrigin("unknown");
             setScreen("result");
           }}
         />
       ) : null}
 
+      {screen === "result" && restoredResult ? (
+        <section className="mx-auto mb-4 flex w-full max-w-5xl flex-wrap items-center justify-between gap-3 rounded-[var(--v-card-radius)] border border-[var(--v-accent)]/35 bg-[var(--v-surface)] px-4 py-3 text-sm">
+          <span className="text-[var(--v-muted)]">
+            登录成功，已恢复“{restoredResult.executionPlan.meta.title}”的结果页。
+          </span>
+          <Button type="button" size="sm" onClick={() => void continueRestoredAction()}>
+            {pendingPlanActionLabel(restoredResult.action)}
+          </Button>
+        </section>
+      ) : null}
+
       {screen === "result" ? (
         <ItineraryScreen
           variant={variant}
           brief={brief}
+          restoredResult={restoredResult}
           saved={saved}
           onBack={() => setScreen(resultOrigin)}
           onEdit={() => setScreen(resultOrigin)}
@@ -1947,6 +2005,7 @@ function UnknownPlanScreen({
 function ItineraryScreen({
   variant,
   brief: baseBrief,
+  restoredResult,
   saved,
   onBack,
   onEdit,
@@ -1954,12 +2013,14 @@ function ItineraryScreen({
 }: {
   variant: DesignVariant;
   brief: TripBrief;
+  restoredResult?: RestoredPlanResult | null;
   saved: boolean;
   onBack: () => void;
   onEdit: () => void;
   onSave: () => void;
 }) {
   const inspirationCatalog = useInspirationCatalog();
+  const restoredPlan = restoredResult?.executionPlan ?? null;
   const refreshInspirationCatalog = useInspirationCatalogRefresh();
   const [planningOverride, setPlanningOverride] = useState<{
     days?: number;
@@ -2022,7 +2083,7 @@ function ItineraryScreen({
     | "needs_confirmation"
     | "needs_login"
     | "needs_purchase"
-  >("idle");
+  >(restoredPlan ? "ready" : "idle");
   const [plannerMessage, setPlannerMessage] = useState("");
   const [generationGateRevision, setGenerationGateRevision] = useState(0);
   const [finalizeRevision, setFinalizeRevision] = useState(0);
@@ -2143,13 +2204,19 @@ function ItineraryScreen({
   );
   const planId = useMemo(
     () =>
-      globalThis.crypto?.randomUUID?.() ||
+      restoredResult?.planId ??
+      globalThis.crypto?.randomUUID?.() ??
       `generation-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    [generationInputsKey],
+    [generationInputsKey, restoredResult?.planId],
   );
   const requestFingerprint = planId;
 
   useEffect(() => {
+    if (restoredPlan) {
+      setWeatherState("ready");
+      setWeatherError(null);
+      return;
+    }
     let cancelled = false;
     setWeatherState("loading");
     setWeather([]);
@@ -2188,6 +2255,7 @@ function ItineraryScreen({
     forecastWindow,
     weatherLatitude,
     weatherLongitude,
+    restoredPlan,
   ]);
 
   useEffect(() => {
@@ -2200,6 +2268,13 @@ function ItineraryScreen({
     setLongPlan(null);
     setButlerResult(null);
     setPlannedRoute(null);
+    if (restoredPlan) {
+      setPlannerState("ready");
+      setPlannerMessage("");
+      setFinalizeError(null);
+      return;
+    }
+
     setLiveSourceCount(null);
 
     if (!routePlan) {
@@ -2431,6 +2506,7 @@ function ItineraryScreen({
     prepareGenerationFn,
     refreshInspirationCatalog,
     releaseGenerationFn,
+    restoredPlan,
     routePlan,
     weatherState,
   ]);
@@ -2467,6 +2543,7 @@ function ItineraryScreen({
   ]);
 
   const executionPlan = useMemo(() => {
+    if (restoredPlan) return restoredPlan;
     if (butlerResult && resolvedRoutePlan) {
       return buildTripPlanFromSkeleton({
         skeleton: butlerResult.skeleton,
@@ -2518,6 +2595,7 @@ function ItineraryScreen({
     livePlan?.title,
     plannedDays,
     resolvedRoutePlan,
+    restoredPlan,
     weather,
   ]);
   useEffect(() => {
@@ -2757,7 +2835,7 @@ function ItineraryScreen({
       ) : null}
 
       {detailedTrip ? (
-        <div className="space-y-4">
+        <div id="guidebook-result-anchor" className="space-y-4">
           {feasibilityDecision ? (
             <TripFeasibilityCards
               decision={feasibilityDecision}

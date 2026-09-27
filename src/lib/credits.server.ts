@@ -18,6 +18,7 @@ export type CreditsService = {
     userId: string,
     planId: string,
     ttlMinutes?: number,
+    attempt?: number,
   ): Promise<CreditReservation>;
   associateReservationPlan(
     userId: string,
@@ -108,9 +109,10 @@ async function reservationWalletId(sql: CreditSql, reservationId: string): Promi
   return rows[0]?.wallet_id ?? null;
 }
 
-/** 生成流程的预留 ID 由 userId + planId 稳定派生，保证网络重试不会重复预留。 */
-function generationReservationId(userId: string, planId: string): string {
-  const digest = createHash("sha256").update(`${userId}:${planId}`).digest("hex").slice(0, 32);
+/** 生成流程每个重试轮次使用稳定且不同的预留 ID，兼顾重试幂等和失败轮次不复用。 */
+function generationReservationId(userId: string, planId: string, attempt: number): string {
+  const key = attempt > 0 ? `${userId}:${planId}:retry:${attempt}` : `${userId}:${planId}`;
+  const digest = createHash("sha256").update(key).digest("hex").slice(0, 32);
   return `reservation_${digest}`;
 }
 
@@ -267,15 +269,19 @@ export function createCreditsService(sql: CreditSql): CreditsService {
     userId: string,
     planId: string,
     ttlMinutes = 15,
+    attempt = 0,
   ): Promise<CreditReservation> {
     if (!Number.isFinite(ttlMinutes) || ttlMinutes <= 0) {
       throw new Error("预留有效期必须大于 0");
+    }
+    if (!Number.isInteger(attempt) || attempt < 0 || attempt > 2) {
+      throw new Error("生成重试轮次无效");
     }
 
     return sql.transaction(async (tx) => {
       const wallet = await lockWalletByUserId(tx, userId);
       const walletId = String(wallet.id);
-      const reservationId = generationReservationId(userId, planId);
+      const reservationId = generationReservationId(userId, planId, attempt);
       const existingRows = await tx.query<Row>(
         "select * from credit_reservations where id = $1 for update",
         [reservationId],

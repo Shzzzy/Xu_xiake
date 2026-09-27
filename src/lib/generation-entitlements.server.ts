@@ -13,7 +13,7 @@ type Row = Record<string, unknown>;
 
 export type GenerationEntitlementKind = "guest" | "free" | "paid";
 export type GenerationEntitlementStatus =
-  "available" | "used" | "claimed" | "consumed" | "released" | "expired";
+  "available" | "used" | "claimed" | "consumed" | "released" | "expired" | "failed";
 
 export type PreparedGenerationEntitlement = {
   kind: GenerationEntitlementKind;
@@ -87,6 +87,11 @@ export type GenerationEntitlementsService = {
     requestFingerprint: string;
     reservationId: string;
   }): Promise<PreparedGenerationEntitlement>;
+  resolvePaidRetryAttempt(input: {
+    userId: string;
+    planId: string;
+    requestFingerprint: string;
+  }): Promise<number>;
   authorizeGeneration(input: GenerationCredentials): Promise<GenerationAuthorization>;
   releaseGeneration(
     input: GenerationCredentials,
@@ -174,7 +179,7 @@ function assertCredentials(row: Row, input: GenerationCredentials): void {
 
 /**
  * 优先使用平台可信来源 IP，不能把可伪造的 UA 当成唯一限流维度。
- * Netlify 头优先于 Cloudflare/代理头，最后才回落 X-Forwarded-For。
+ * 当前只信任平台明确写入的头部，不回退到可由客户端伪造的通用转发头。
  */
 export function trustedClientIp(headers: Headers): string {
   const candidates = [
@@ -197,7 +202,7 @@ async function lockEntitlementByToken(sql: EntitlementSql, token: string): Promi
 
 async function updateEntitlementToUsed(sql: EntitlementSql, id: string): Promise<Row> {
   const rows = await sql.query<Row>(
-    "update generation_entitlements set status = 'used', used_at = coalesce(used_at, now()) where id = $1 and status in ('available', 'released') returning *",
+    "update generation_entitlements set status = 'used', used_at = coalesce(used_at, now()) where id = $1 and status = 'available' returning *",
     [id],
   );
   const row = rows[0];
@@ -248,6 +253,55 @@ function entitlementExpiry(hours: number): string {
   return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 }
 
+const MAX_GENERATION_RETRIES = 2;
+const MAX_FAILURE_REASON_LENGTH = 500;
+
+function normalizeFailureReason(reason: string): string {
+  const trimmed = reason.trim();
+  if (!trimmed) throw new Error("缺少失败释放原因");
+  return Array.from(trimmed).slice(0, MAX_FAILURE_REASON_LENGTH).join("");
+}
+
+/** 同一次逻辑生成失败后最多再签发两次新 token。 */
+async function nextGenerationRetryCount(
+  sql: EntitlementSql,
+  input: {
+    kind: GenerationEntitlementKind;
+    userId: string | null;
+    guestBucket: string | null;
+    requestFingerprint: string;
+    planId: string;
+  },
+): Promise<number> {
+  const rows =
+    input.kind === "guest"
+      ? await sql.query<{ retry_count: number | null }>(
+          `select max(retry_count)::int as retry_count
+             from generation_entitlements
+            where kind = 'guest'
+              and guest_bucket = $1
+              and request_fingerprint = $2
+              and plan_id = $3
+              and status = 'failed'`,
+          [input.guestBucket, input.requestFingerprint, input.planId],
+        )
+      : await sql.query<{ retry_count: number | null }>(
+          `select max(retry_count)::int as retry_count
+             from generation_entitlements
+            where kind = $1
+              and user_id = $2
+              and request_fingerprint = $3
+              and plan_id = $4
+              and status = 'failed'`,
+          [input.kind, input.userId, input.requestFingerprint, input.planId],
+        );
+  const current = rows[0]?.retry_count == null ? -1 : Number(rows[0].retry_count);
+  if (current >= MAX_GENERATION_RETRIES) {
+    throw new Error("生成失败重试次数已达上限，请调整条件后重新发起规划");
+  }
+  return current + 1;
+}
+
 /** 使用注入的 SQL 构造一次性生成权益服务。 */
 export function createGenerationEntitlementsService(
   sql: EntitlementSql,
@@ -270,14 +324,29 @@ export function createGenerationEntitlementsService(
       const rollingWindowMs = (input.ttlHours ?? 24) * 60 * 60 * 1000;
       if (existing) {
         const createdAt = new Date(String(existing.created_at)).getTime();
-        if (Date.now() - createdAt < rollingWindowMs) return { kind: "needs_login" };
+        if (Date.now() - createdAt < rollingWindowMs) {
+          // 已签发但未使用的 token 不能再次轮换，否则并发请求会拿到两把有效钥匙。
+          return { kind: "needs_login" };
+        }
         await tx.query("update generation_entitlements set status = 'expired' where id = $1", [
           existing.id,
         ]);
       }
 
+      const retryCount = await nextGenerationRetryCount(tx, {
+        kind: "guest",
+        userId: null,
+        guestBucket: input.guestBucket,
+        requestFingerprint: input.requestFingerprint,
+        planId: input.planId,
+      });
       const rows = await tx.query<Row>(
-        "insert into generation_entitlements (id, token_hash, user_id, request_fingerprint, kind, guest_bucket, plan_id, status, expires_at) values ($1,$2,null,$3,'guest',$4,$5,'available',$6) on conflict (guest_bucket) where kind = 'guest' and status in ('available', 'used', 'claimed') do nothing returning *",
+        `insert into generation_entitlements (
+           id, token_hash, user_id, request_fingerprint, kind, guest_bucket,
+           plan_id, status, expires_at, retry_count
+         ) values ($1,$2,null,$3,'guest',$4,$5,'available',$6,$7)
+         on conflict (guest_bucket) where kind = 'guest' and status in ('available', 'used', 'claimed')
+         do nothing returning *`,
         [
           id,
           hashGenerationToken(token),
@@ -285,19 +354,29 @@ export function createGenerationEntitlementsService(
           input.guestBucket,
           input.planId,
           expiresAt,
+          retryCount,
         ],
       );
-      if (!rows[0]) return { kind: "needs_login" };
-      return prepared(
-        "guest",
-        token,
-        id,
-        input.planId,
-        input.requestFingerprint,
-        null,
-        null,
-        expiresAt,
+      if (rows[0]) {
+        return prepared(
+          "guest",
+          token,
+          id,
+          input.planId,
+          input.requestFingerprint,
+          null,
+          null,
+          expiresAt,
+        );
+      }
+
+      const activeRows = await tx.query<Row>(
+        "select * from generation_entitlements where guest_bucket = $1 and kind = 'guest' and status in ('available', 'used', 'claimed') for update",
+        [input.guestBucket],
       );
+      const active = activeRows[0];
+      if (active) return { kind: "needs_login" };
+      throw new Error("访客生成凭证创建冲突，请稍后重试");
     });
   }
 
@@ -315,22 +394,46 @@ export function createGenerationEntitlementsService(
       const token = newToken();
       const expiresAt = entitlementExpiry(24);
       if (existing) {
-        if (String(existing.status) !== "available") throw new Error("免费生成凭证已使用");
-        const rows = await tx.query<Row>(
-          "update generation_entitlements set token_hash = $2, request_fingerprint = $3, plan_id = $4, expires_at = $5 where id = $1 and status = 'available' returning *",
-          [
-            existing.id,
-            hashGenerationToken(token),
-            input.requestFingerprint,
-            input.planId,
-            expiresAt,
-          ],
-        );
-        if (!rows[0]) throw new Error("免费生成凭证已使用");
+        if (
+          String(existing.request_fingerprint) !== input.requestFingerprint ||
+          String(existing.plan_id) !== input.planId ||
+          String(existing.status) !== "available"
+        ) {
+          throw new Error("免费生成凭证已使用");
+        }
+        throw new Error("免费生成凭证已签发，请勿重复请求");
+      }
+
+      const retryCount = await nextGenerationRetryCount(tx, {
+        kind: "free",
+        userId: input.userId,
+        guestBucket: null,
+        requestFingerprint: input.requestFingerprint,
+        planId: input.planId,
+      });
+      const id = randomUUID();
+      const rows = await tx.query<Row>(
+        `insert into generation_entitlements (
+           id, token_hash, user_id, request_fingerprint, kind, plan_id,
+           status, expires_at, retry_count
+         ) values ($1,$2,$3,$4,'free',$5,'available',$6,$7)
+         on conflict (user_id) where kind = 'free' and status in ('available', 'used', 'claimed')
+         do nothing returning *`,
+        [
+          id,
+          hashGenerationToken(token),
+          input.userId,
+          input.requestFingerprint,
+          input.planId,
+          expiresAt,
+          retryCount,
+        ],
+      );
+      if (rows[0]) {
         return prepared(
           "free",
           token,
-          String(rows[0].id),
+          id,
           input.planId,
           input.requestFingerprint,
           input.userId,
@@ -339,29 +442,13 @@ export function createGenerationEntitlementsService(
         );
       }
 
-      const id = randomUUID();
-      const rows = await tx.query<Row>(
-        "insert into generation_entitlements (id, token_hash, user_id, request_fingerprint, kind, plan_id, status, expires_at) values ($1,$2,$3,$4,'free',$5,'available',$6) returning *",
-        [
-          id,
-          hashGenerationToken(token),
-          input.userId,
-          input.requestFingerprint,
-          input.planId,
-          expiresAt,
-        ],
+      const activeRows = await tx.query<Row>(
+        "select * from generation_entitlements where user_id = $1 and kind = 'free' and status in ('available', 'used', 'claimed') for update",
+        [input.userId],
       );
-      if (!rows[0]) throw new Error("免费生成凭证创建失败");
-      return prepared(
-        "free",
-        token,
-        id,
-        input.planId,
-        input.requestFingerprint,
-        input.userId,
-        null,
-        expiresAt,
-      );
+      const active = activeRows[0];
+      if (active) throw new Error("免费生成凭证已签发，请勿重复请求");
+      throw new Error("免费生成凭证正在创建，请稍后重试");
     });
   }
 
@@ -380,33 +467,31 @@ export function createGenerationEntitlementsService(
       const token = newToken();
       const expiresAt = entitlementExpiry(1);
       if (existing) {
-        if (String(existing.status) !== "available") throw new Error("付费生成凭证已使用");
-        const rows = await tx.query<Row>(
-          "update generation_entitlements set token_hash = $2, request_fingerprint = $3, plan_id = $4, expires_at = $5 where id = $1 and status = 'available' returning *",
-          [
-            existing.id,
-            hashGenerationToken(token),
-            input.requestFingerprint,
-            input.planId,
-            expiresAt,
-          ],
-        );
-        if (!rows[0]) throw new Error("付费生成凭证已使用");
-        return prepared(
-          "paid",
-          token,
-          String(rows[0].id),
-          input.planId,
-          input.requestFingerprint,
-          input.userId,
-          input.reservationId,
-          expiresAt,
-        );
+        if (
+          String(existing.request_fingerprint) !== input.requestFingerprint ||
+          String(existing.plan_id) !== input.planId ||
+          String(existing.status) !== "available"
+        ) {
+          throw new Error("付费生成凭证已使用");
+        }
+        throw new Error("付费生成凭证已签发，请勿重复请求");
       }
 
+      const retryCount = await nextGenerationRetryCount(tx, {
+        kind: "paid",
+        userId: input.userId,
+        guestBucket: null,
+        requestFingerprint: input.requestFingerprint,
+        planId: input.planId,
+      });
       const id = randomUUID();
       const rows = await tx.query<Row>(
-        "insert into generation_entitlements (id, token_hash, user_id, request_fingerprint, kind, plan_id, reservation_id, status, expires_at) values ($1,$2,$3,$4,'paid',$5,$6,'available',$7) returning *",
+        `insert into generation_entitlements (
+           id, token_hash, user_id, request_fingerprint, kind, plan_id,
+           reservation_id, status, expires_at, retry_count
+         ) values ($1,$2,$3,$4,'paid',$5,$6,'available',$7,$8)
+         on conflict (reservation_id) where kind = 'paid' and status in ('available', 'used', 'claimed')
+         do nothing returning *`,
         [
           id,
           hashGenerationToken(token),
@@ -415,19 +500,65 @@ export function createGenerationEntitlementsService(
           input.planId,
           input.reservationId,
           expiresAt,
+          retryCount,
         ],
       );
-      if (!rows[0]) throw new Error("付费生成凭证创建失败");
-      return prepared(
-        "paid",
-        token,
-        id,
-        input.planId,
-        input.requestFingerprint,
-        input.userId,
-        input.reservationId,
-        expiresAt,
+      if (rows[0]) {
+        return prepared(
+          "paid",
+          token,
+          id,
+          input.planId,
+          input.requestFingerprint,
+          input.userId,
+          input.reservationId,
+          expiresAt,
+        );
+      }
+
+      const activeRows = await tx.query<Row>(
+        "select * from generation_entitlements where reservation_id = $1 and kind = 'paid' and status = 'available' for update",
+        [input.reservationId],
       );
+      const active = activeRows[0];
+      if (active) throw new Error("付费生成凭证已签发，请勿重复请求");
+      throw new Error("付费生成凭证正在创建，请稍后重试");
+    });
+  }
+
+  async function resolvePaidRetryAttempt(input: {
+    userId: string;
+    planId: string;
+    requestFingerprint: string;
+  }): Promise<number> {
+    return sql.transaction(async (tx) => {
+      const existingRows = await tx.query<Row>(
+        `select *
+           from generation_entitlements
+          where user_id = $1
+            and kind = 'paid'
+            and request_fingerprint = $2
+            and plan_id = $3
+            and status in ('available', 'used', 'claimed', 'consumed')
+          order by created_at desc
+          limit 1
+          for update`,
+        [input.userId, input.requestFingerprint, input.planId],
+      );
+      const existing = existingRows[0];
+      if (existing) {
+        if (String(existing.status) === "consumed") {
+          throw new Error("本次生成已完成，不能重复预留点数");
+        }
+        throw new Error("付费生成凭证已签发，请勿重复确认点数");
+      }
+      return nextGenerationRetryCount(tx, {
+        kind: "paid",
+        userId: input.userId,
+        guestBucket: null,
+        requestFingerprint: input.requestFingerprint,
+        planId: input.planId,
+      });
     });
   }
 
@@ -437,11 +568,8 @@ export function createGenerationEntitlementsService(
     return sql.transaction(async (tx) => {
       const row = await lockEntitlementByToken(tx, input.entitlementToken);
       assertCredentials(row, input);
-      if (String(row.kind) === "paid" && String(row.status) === "released") {
-        throw new Error("付费生成凭证已释放，请重新确认点数");
-      }
-      if (String(row.status) !== "available" && String(row.status) !== "released") {
-        throw new Error("生成凭证已使用，不能重放");
+      if (String(row.status) !== "available") {
+        throw new Error("生成凭证已失效，不能重放");
       }
       const used = await updateEntitlementToUsed(tx, String(row.id));
       return mapAuthorization(used);
@@ -467,28 +595,30 @@ export function createGenerationEntitlementsService(
     });
   }
 
-  /** 仅供服务端生成异常调用，允许释放已经标记 used 的本次 attempt。 */
+  /** 仅供服务端生成异常调用；失败是终态，旧 token 永久不能被重放。 */
   async function releaseGenerationAfterFailure(
     input: GenerationCredentials & { reason: string },
   ): Promise<{ released: boolean; kind: GenerationEntitlementKind }> {
-    if (!input.reason.trim()) throw new Error("缺少失败释放原因");
+    const failureReason = normalizeFailureReason(input.reason);
     return sql.transaction(async (tx) => {
       const row = await lockEntitlementByToken(tx, input.entitlementToken);
       assertCredentials(row, input);
       const kind = row.kind as GenerationEntitlementKind;
       const status = String(row.status);
-      if (status === "released") return { released: false, kind };
       if (status !== "available" && status !== "used") return { released: false, kind };
 
       if (kind === "paid") {
         const reservationId = nullableString(row.reservation_id);
         if (reservationId) await createCreditsService(tx).releaseReservation(reservationId);
       }
-      await tx.query(
-        "update generation_entitlements set status = 'released', failure_reason = $2 where id = $1 and status in ('available', 'used')",
-        [row.id, input.reason],
+      const updated = await tx.query<Row>(
+        `update generation_entitlements
+            set status = 'failed', failure_reason = $2
+          where id = $1 and status in ('available', 'used')
+          returning id`,
+        [row.id, failureReason],
       );
-      return { released: true, kind };
+      return { released: updated.length === 1, kind };
     });
   }
 
@@ -682,6 +812,7 @@ export function createGenerationEntitlementsService(
     prepareGuestGeneration,
     prepareFreeGeneration,
     preparePaidGeneration,
+    resolvePaidRetryAttempt,
     authorizeGeneration,
     releaseGeneration,
     releaseGenerationAfterFailure,

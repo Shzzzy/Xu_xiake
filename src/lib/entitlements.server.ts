@@ -91,7 +91,7 @@ export type EntitlementsService = GenerationEntitlementsService & {
   saveTravelPlan(input: SaveTravelPlanInput): Promise<{ id: string }>;
   getTravelPlan(userId: string, planId: string): Promise<TripPlan | null>;
   claimFirstFreePlan(input: ClaimFirstFreePlanInput): Promise<{ planId: string }>;
-  reservePaidPlan(userId: string, planId: string): Promise<CreditReservation>;
+  reservePaidPlan(userId: string, planId: string, attempt?: number): Promise<CreditReservation>;
   releasePaidPlan(userId: string, reservationId: string): Promise<void>;
   finishPaidPlan(input: FinishPaidPlanInput): Promise<CreditLedgerEntry>;
 };
@@ -186,11 +186,15 @@ export function createEntitlementsService(sql: EntitlementSql): EntitlementsServ
    * 付费生成在 plan 尚未存在时先预占点数。
    * 预留的 plan_id 先为空，finish 成功保存 plan 后再关联，避免创建半成品行程。
    */
-  async function reservePaidPlan(userId: string, planId: string): Promise<CreditReservation> {
+  async function reservePaidPlan(
+    userId: string,
+    planId: string,
+    attempt = 0,
+  ): Promise<CreditReservation> {
     return sql.transaction(async (tx) => {
       const txCredits = createCreditsService(tx);
       await txCredits.ensureWallet(userId);
-      return txCredits.reserveCreditForGeneration(userId, planId);
+      return txCredits.reserveCreditForGeneration(userId, planId, 15, attempt);
     });
   }
 
@@ -285,8 +289,12 @@ export function claimFirstFreePlan(input: ClaimFirstFreePlanInput): Promise<{ pl
 }
 
 /** 为当前用户的待保存行程预留一点。 */
-export function reservePaidPlan(userId: string, planId: string): Promise<CreditReservation> {
-  return getDefaultService().then((service) => service.reservePaidPlan(userId, planId));
+export function reservePaidPlan(
+  userId: string,
+  planId: string,
+  attempt = 0,
+): Promise<CreditReservation> {
+  return getDefaultService().then((service) => service.reservePaidPlan(userId, planId, attempt));
 }
 
 /** 生成失败时释放当前用户拥有的预留。 */
@@ -385,18 +393,26 @@ export async function reservePaidGeneration(
   planId: string,
   requestFingerprint = planId,
 ): Promise<PreparedGenerationEntitlement> {
-  const reservation = await reservePaidPlan(userId, planId);
+  const service = await getDefaultService();
+  const attempt = await service.resolvePaidRetryAttempt({
+    userId,
+    planId,
+    requestFingerprint,
+  });
+  const reservation = await service.reservePaidPlan(userId, planId, attempt);
   try {
-    return await (
-      await getDefaultService()
-    ).preparePaidGeneration({
+    return await service.preparePaidGeneration({
       userId,
       planId,
       requestFingerprint,
       reservationId: reservation.id,
     });
   } catch (error) {
-    await releasePaidPlan(userId, reservation.id).catch(() => undefined);
+    // 并发请求复用同一预留时，只有一个请求能拿到凭证；
+    // 后续请求不能释放已经被前一个请求使用的预留。
+    if (!(error instanceof Error && error.message.includes("已签发"))) {
+      await releasePaidPlan(userId, reservation.id).catch(() => undefined);
+    }
     throw error;
   }
 }

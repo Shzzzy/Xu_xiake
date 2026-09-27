@@ -17,6 +17,7 @@ const migrationNames = [
   "0010_generation_entitlements.sql",
   "0011_travel_plan_hash.sql",
   "0012_generation_entitlement_failure_reason.sql",
+  "0013_generation_entitlement_retry.sql",
 ] as const;
 
 const commercialTables = [
@@ -400,6 +401,60 @@ test("purchase ledger is unique per payment order", async () => {
          'ledger-purchase-unique-2', 'wallet-a', 1, 12, 'purchase', 'order-purchase-unique'
        )`,
       /credit_ledger_purchase_order_unique_idx|duplicate key|unique constraint/i,
+    );
+  } finally {
+    await pg.close();
+  }
+});
+
+test("generation entitlement retry migration adds terminal failed state and limits", async () => {
+  const pg = await createMigratedDatabase();
+  try {
+    const columns = await pg.query<{ column_name: string }>(
+      `select column_name
+         from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'generation_entitlements'
+          and column_name in ('failure_reason', 'retry_count')
+        order by column_name`,
+    );
+    assert.deepEqual(
+      columns.rows.map((row) => row.column_name),
+      ["failure_reason", "retry_count"],
+    );
+
+    await pg.exec(`
+      insert into generation_entitlements (
+        id, token_hash, request_fingerprint, kind, status, expires_at,
+        retry_count, failure_reason
+      ) values (
+        'entitlement-failed-ok', 'hash-failed-ok', 'fingerprint-ok',
+        'guest', 'failed', now() + interval '1 hour', 2, '可重试上限前的失败'
+      );
+    `);
+
+    await expectFailure(
+      pg,
+      `insert into generation_entitlements (
+         id, token_hash, request_fingerprint, kind, status, expires_at,
+         retry_count
+       ) values (
+         'entitlement-retry-bad', 'hash-retry-bad', 'fingerprint-retry-bad',
+         'guest', 'available', now() + interval '1 hour', 3
+       )`,
+      /generation_entitlements_retry_count_check|check constraint/i,
+    );
+
+    await expectFailure(
+      pg,
+      `insert into generation_entitlements (
+         id, token_hash, request_fingerprint, kind, status, expires_at,
+         failure_reason
+       ) values (
+         'entitlement-reason-bad', 'hash-reason-bad', 'fingerprint-reason-bad',
+         'guest', 'failed', now() + interval '1 hour', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+       )`,
+      /generation_entitlements_failure_reason_length_check|check constraint/i,
     );
   } finally {
     await pg.close();
