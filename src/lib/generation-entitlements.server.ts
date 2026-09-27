@@ -91,6 +91,9 @@ export type GenerationEntitlementsService = {
   releaseGeneration(
     input: GenerationCredentials,
   ): Promise<{ released: boolean; kind: GenerationEntitlementKind }>;
+  releaseGenerationAfterFailure(
+    input: GenerationCredentials & { reason: string },
+  ): Promise<{ released: boolean; kind: GenerationEntitlementKind }>;
   finalizeGuestGeneration(input: {
     token: string;
     requestFingerprint: string;
@@ -101,6 +104,14 @@ export type GenerationEntitlementsService = {
   claimFreeWithEntitlement(input: FinalizeFreeInput): Promise<{ planId: string }>;
   finishPaidWithEntitlement(input: FinalizePaidInput): Promise<CreditLedgerEntry>;
   resolvePreviewPlan(input: PreviewResolutionInput): Promise<TripPlan>;
+  ensurePlanExportable(input: {
+    userId: string;
+    planId: string;
+    plan?: TripPlan;
+    entitlementToken?: string | null;
+    requestFingerprint?: string | null;
+    cookieEntitlementId?: string | null;
+  }): Promise<TripPlan>;
 };
 
 function nullableString(value: unknown): string | null {
@@ -137,12 +148,15 @@ function assertNotExpired(row: Row): void {
   }
 }
 
-function assertCredentials(row: Row, input: GenerationCredentials): void {
+function assertFingerprint(row: Row, input: GenerationCredentials): void {
   assertNotExpired(row);
   if (String(row.request_fingerprint) !== input.requestFingerprint) {
     throw new Error("生成凭证与请求指纹不匹配");
   }
+}
 
+function assertCredentials(row: Row, input: GenerationCredentials): void {
+  assertFingerprint(row, input);
   const kind = row.kind as GenerationEntitlementKind;
   const rowUserId = nullableString(row.user_id);
   if (kind === "guest") {
@@ -156,6 +170,19 @@ function assertCredentials(row: Row, input: GenerationCredentials): void {
   if (!input.userId || rowUserId !== input.userId) {
     throw new Error("用户无权使用该生成凭证");
   }
+}
+
+/**
+ * 优先使用平台可信来源 IP，不能把可伪造的 UA 当成唯一限流维度。
+ * Netlify 头优先于 Cloudflare/代理头，最后才回落 X-Forwarded-For。
+ */
+export function trustedClientIp(headers: Headers): string {
+  const candidates = [
+    headers.get("x-nf-client-connection-ip"),
+    headers.get("cf-connecting-ip"),
+    headers.get("x-real-ip"),
+  ];
+  return candidates.map((value) => value?.trim()).find(Boolean) || "unknown-ip";
 }
 
 async function lockEntitlementByToken(sql: EntitlementSql, token: string): Promise<Row> {
@@ -234,28 +261,44 @@ export function createGenerationEntitlementsService(
     const token = newToken();
     const id = randomUUID();
     const expiresAt = entitlementExpiry(input.ttlHours ?? 24);
-    const rows = await sql.query<Row>(
-      "insert into generation_entitlements (id, token_hash, user_id, request_fingerprint, kind, guest_bucket, plan_id, status, expires_at) values ($1,$2,null,$3,'guest',$4,$5,'available',$6) on conflict (guest_bucket) where kind = 'guest' and status in ('available', 'used', 'claimed') do nothing returning *",
-      [
+    return sql.transaction(async (tx) => {
+      const existingRows = await tx.query<Row>(
+        "select * from generation_entitlements where guest_bucket = $1 and kind = 'guest' and status in ('available', 'used', 'claimed') for update",
+        [input.guestBucket],
+      );
+      const existing = existingRows[0];
+      const rollingWindowMs = (input.ttlHours ?? 24) * 60 * 60 * 1000;
+      if (existing) {
+        const createdAt = new Date(String(existing.created_at)).getTime();
+        if (Date.now() - createdAt < rollingWindowMs) return { kind: "needs_login" };
+        await tx.query("update generation_entitlements set status = 'expired' where id = $1", [
+          existing.id,
+        ]);
+      }
+
+      const rows = await tx.query<Row>(
+        "insert into generation_entitlements (id, token_hash, user_id, request_fingerprint, kind, guest_bucket, plan_id, status, expires_at) values ($1,$2,null,$3,'guest',$4,$5,'available',$6) on conflict (guest_bucket) where kind = 'guest' and status in ('available', 'used', 'claimed') do nothing returning *",
+        [
+          id,
+          hashGenerationToken(token),
+          input.requestFingerprint,
+          input.guestBucket,
+          input.planId,
+          expiresAt,
+        ],
+      );
+      if (!rows[0]) return { kind: "needs_login" };
+      return prepared(
+        "guest",
+        token,
         id,
-        hashGenerationToken(token),
-        input.requestFingerprint,
-        input.guestBucket,
         input.planId,
+        input.requestFingerprint,
+        null,
+        null,
         expiresAt,
-      ],
-    );
-    if (!rows[0]) return { kind: "needs_login" };
-    return prepared(
-      "guest",
-      token,
-      id,
-      input.planId,
-      input.requestFingerprint,
-      null,
-      null,
-      expiresAt,
-    );
+      );
+    });
   }
 
   async function prepareFreeGeneration(input: {
@@ -413,6 +456,27 @@ export function createGenerationEntitlementsService(
       assertCredentials(row, input);
       const kind = row.kind as GenerationEntitlementKind;
       const status = String(row.status);
+      if (status !== "available") {
+        throw new Error("只有尚未开始使用的生成凭证可以由客户端释放");
+      }
+      await tx.query(
+        "update generation_entitlements set status = 'released', failure_reason = 'client_cancelled' where id = $1 and status = 'available'",
+        [row.id],
+      );
+      return { released: true, kind };
+    });
+  }
+
+  /** 仅供服务端生成异常调用，允许释放已经标记 used 的本次 attempt。 */
+  async function releaseGenerationAfterFailure(
+    input: GenerationCredentials & { reason: string },
+  ): Promise<{ released: boolean; kind: GenerationEntitlementKind }> {
+    if (!input.reason.trim()) throw new Error("缺少失败释放原因");
+    return sql.transaction(async (tx) => {
+      const row = await lockEntitlementByToken(tx, input.entitlementToken);
+      assertCredentials(row, input);
+      const kind = row.kind as GenerationEntitlementKind;
+      const status = String(row.status);
       if (status === "released") return { released: false, kind };
       if (status !== "available" && status !== "used") return { released: false, kind };
 
@@ -421,8 +485,8 @@ export function createGenerationEntitlementsService(
         if (reservationId) await createCreditsService(tx).releaseReservation(reservationId);
       }
       await tx.query(
-        "update generation_entitlements set status = 'released' where id = $1 and status in ('available', 'used')",
-        [row.id],
+        "update generation_entitlements set status = 'released', failure_reason = $2 where id = $1 and status in ('available', 'used')",
+        [row.id, input.reason],
       );
       return { released: true, kind };
     });
@@ -457,7 +521,7 @@ export function createGenerationEntitlementsService(
   async function claimFreeWithEntitlement(input: FinalizeFreeInput): Promise<{ planId: string }> {
     return sql.transaction(async (tx) => {
       const row = await lockEntitlementByToken(tx, input.entitlementToken);
-      assertCredentials(row, {
+      assertFingerprint(row, {
         entitlementToken: input.entitlementToken,
         requestFingerprint: input.requestFingerprint,
         userId: input.userId,
@@ -467,6 +531,14 @@ export function createGenerationEntitlementsService(
       const rowUserId = nullableString(row.user_id);
       if (kind !== "free" && kind !== "guest") throw new Error("生成凭证类型不匹配");
       if (kind === "free" && rowUserId !== input.userId) throw new Error("用户无权使用该生成凭证");
+      if (kind === "guest") {
+        if (rowUserId && rowUserId !== input.userId) {
+          throw new Error("访客生成凭证已绑定其他用户");
+        }
+        if (input.cookieEntitlementId !== String(row.id)) {
+          throw new Error("访客 Cookie 与生成凭证不匹配");
+        }
+      }
       validatePlanAssignment(row, input.planId, hashTripPlan(input.plan));
 
       const status = String(row.status);
@@ -558,9 +630,51 @@ export function createGenerationEntitlementsService(
       cookieEntitlementId: input.cookieEntitlementId ?? null,
     });
     if (String(row.kind) !== "guest") throw new Error("生成凭证类型不匹配");
+    if (!nullableString(row.plan_hash)) throw new Error("访客生成的 plan hash 尚未绑定");
     validatePlanAssignment(row, input.planId, hashTripPlan(input.plan));
     const status = String(row.status);
     if (status !== "claimed" && status !== "used") throw new Error("生成凭证尚未完成预览授权");
+    return input.plan;
+  }
+
+  async function ensurePlanExportable(input: {
+    userId: string;
+    planId: string;
+    plan?: TripPlan;
+    entitlementToken?: string | null;
+    requestFingerprint?: string | null;
+    cookieEntitlementId?: string | null;
+  }): Promise<TripPlan> {
+    const existing = await getTravelPlanWithSql(sql, input.userId, input.planId);
+    if (existing) return existing;
+
+    if (!input.entitlementToken || !input.requestFingerprint || !input.plan) {
+      throw new Error("路书尚未保存或生成凭证不完整");
+    }
+
+    const row = await sql.transaction(async (tx) =>
+      lockEntitlementByToken(tx, input.entitlementToken!),
+    );
+    const kind = String(row.kind);
+    if (kind === "guest" || kind === "free") {
+      await claimFreeWithEntitlement({
+        userId: input.userId,
+        planId: input.planId,
+        plan: input.plan,
+        entitlementToken: input.entitlementToken,
+        requestFingerprint: input.requestFingerprint,
+        cookieEntitlementId: input.cookieEntitlementId ?? null,
+      });
+      return input.plan;
+    }
+    await finishPaidWithEntitlement({
+      userId: input.userId,
+      planId: input.planId,
+      plan: input.plan,
+      entitlementToken: input.entitlementToken,
+      requestFingerprint: input.requestFingerprint,
+      cookieEntitlementId: input.cookieEntitlementId ?? null,
+    });
     return input.plan;
   }
 
@@ -570,9 +684,11 @@ export function createGenerationEntitlementsService(
     preparePaidGeneration,
     authorizeGeneration,
     releaseGeneration,
+    releaseGenerationAfterFailure,
     finalizeGuestGeneration,
     claimFreeWithEntitlement,
     finishPaidWithEntitlement,
     resolvePreviewPlan,
+    ensurePlanExportable,
   };
 }

@@ -129,7 +129,7 @@ test("真实向导输出逐页路书预览且移动端无溢出", { timeout: 300
     });
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     // 每个 E2E 使用独立来源 IP，避免 24 小时 guest bucket 把另一支测试当成重复试用。
-    await page.setExtraHTTPHeaders({ "x-forwarded-for": "198.51.100.11" });
+    await page.setExtraHTTPHeaders({ "x-real-ip": "198.51.100.11" });
     mkdirSync("screenshots", { recursive: true });
     const consoleErrors = [];
     page.on("console", (message) => {

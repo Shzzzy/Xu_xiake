@@ -10,6 +10,7 @@ import {
   hashGenerationToken,
   type EntitlementsService,
 } from "./entitlements.server.ts";
+import { trustedClientIp } from "./generation-entitlements.server.ts";
 import { hashTripPlan } from "./plans.repository.ts";
 import {
   resetGuidebookExportAfterPendingAuth,
@@ -30,6 +31,7 @@ const migrationNames = [
   "0009_payment_credits_applied.sql",
   "0010_generation_entitlements.sql",
   "0011_travel_plan_hash.sql",
+  "0012_generation_entitlement_failure_reason.sql",
 ] as const;
 
 type TestSql = {
@@ -228,6 +230,17 @@ test("guest preparation stores only a token hash and atomically limits the bucke
       guestBucket: "guest-bucket-a",
     });
     assert.deepEqual(second, { kind: "needs_login" });
+
+    await sql.query(
+      "update generation_entitlements set created_at = now() - interval '25 hours' where id = $1",
+      [first.entitlementId],
+    );
+    const afterWindow = await entitlements.prepareGuestGeneration({
+      planId: randomUUID(),
+      requestFingerprint: randomUUID(),
+      guestBucket: "guest-bucket-a",
+    });
+    assert.equal(afterWindow.kind, "guest");
   } finally {
     await pg.close();
   }
@@ -297,12 +310,6 @@ test("guest release requires the same token and fingerprint and cannot clear ano
       guestBucket: "guest-bucket-c",
     });
     if (first.kind !== "guest") throw new Error("未创建访客凭证");
-    await entitlements.authorizeGeneration({
-      entitlementToken: first.token,
-      requestFingerprint: firstPlanId,
-      userId: null,
-      cookieEntitlementId: first.entitlementId,
-    });
 
     await assert.rejects(
       () =>
@@ -338,11 +345,12 @@ test("guest release requires the same token and fingerprint and cannot clear ano
       cookieEntitlementId: first.entitlementId,
     });
     assert.equal(retried.kind, "guest");
-    await entitlements.releaseGeneration({
+    await entitlements.releaseGenerationAfterFailure({
       entitlementToken: first.token,
       requestFingerprint: firstPlanId,
       userId: null,
       cookieEntitlementId: first.entitlementId,
+      reason: "interrupted_after_retry",
     });
 
     const replacement = await entitlements.prepareGuestGeneration({
@@ -351,6 +359,172 @@ test("guest release requires the same token and fingerprint and cannot clear ano
       guestBucket: "guest-bucket-c",
     });
     assert.equal(replacement.kind, "guest");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("trusted guest IP ignores spoofable UA and prefers platform headers", () => {
+  const headers = new Headers({
+    "x-nf-client-connection-ip": "203.0.113.9",
+    "cf-connecting-ip": "203.0.113.8",
+    "x-real-ip": "203.0.113.7",
+    "x-forwarded-for": "203.0.113.6",
+    "user-agent": "spoofed-agent",
+  });
+  assert.equal(trustedClientIp(headers), "203.0.113.9");
+
+  const changedUa = new Headers({
+    "x-nf-client-connection-ip": "203.0.113.9",
+    "user-agent": "another-spoofed-agent",
+  });
+  assert.equal(trustedClientIp(changedUa), trustedClientIp(headers));
+});
+
+test("guest entitlement binds to the logged-in user and rejects another user", async () => {
+  const { pg, sql, entitlements } = await createTestContext();
+  try {
+    const firstUser = await createUser(sql);
+    const otherUser = await createUser(sql);
+    const planId = randomUUID();
+    const plan = samplePlan("登录后领取");
+    const guest = await entitlements.prepareGuestGeneration({
+      planId,
+      requestFingerprint: planId,
+      guestBucket: "guest-bucket-bind",
+    });
+    if (guest.kind !== "guest") throw new Error("未创建访客凭证");
+    await entitlements.authorizeGeneration({
+      entitlementToken: guest.token,
+      requestFingerprint: planId,
+      userId: null,
+      cookieEntitlementId: guest.entitlementId,
+    });
+    await entitlements.finalizeGuestGeneration({
+      token: guest.token,
+      requestFingerprint: planId,
+      planId,
+      plan,
+      cookieEntitlementId: guest.entitlementId,
+    });
+
+    await entitlements.claimFirstFreePlan({
+      userId: firstUser,
+      planId,
+      plan,
+      entitlementToken: guest.token,
+      requestFingerprint: planId,
+      cookieEntitlementId: guest.entitlementId,
+    });
+    const bound = await sql.query<{ user_id: string; status: string }>(
+      "select user_id, status from generation_entitlements where id = $1",
+      [guest.entitlementId],
+    );
+    assert.equal(bound[0]?.user_id, firstUser);
+    assert.equal(bound[0]?.status, "claimed");
+
+    await assert.rejects(
+      () =>
+        entitlements.claimFirstFreePlan({
+          userId: otherUser,
+          planId,
+          plan,
+          entitlementToken: guest.token,
+          requestFingerprint: planId,
+          cookieEntitlementId: guest.entitlementId,
+        }),
+      /绑定其他用户|无权/,
+    );
+  } finally {
+    await pg.close();
+  }
+});
+
+test("used token cannot be released by the public path and can be released once on server failure", async () => {
+  const { pg, entitlements } = await createTestContext();
+  try {
+    const planId = randomUUID();
+    const guest = await entitlements.prepareGuestGeneration({
+      planId,
+      requestFingerprint: planId,
+      guestBucket: "guest-bucket-release",
+    });
+    if (guest.kind !== "guest") throw new Error("未创建访客凭证");
+    const credentials = {
+      entitlementToken: guest.token,
+      requestFingerprint: planId,
+      userId: null,
+      cookieEntitlementId: guest.entitlementId,
+    };
+    await entitlements.authorizeGeneration(credentials);
+    await assert.rejects(() => entitlements.releaseGeneration(credentials), /尚未开始/);
+
+    const released = await entitlements.releaseGenerationAfterFailure({
+      ...credentials,
+      reason: "generation_aborted",
+    });
+    assert.equal(released.released, true);
+    const retried = await entitlements.authorizeGeneration(credentials);
+    assert.equal(retried.kind, "guest");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("ensurePlanExportable covers free, paid and guest plans", async () => {
+  const { pg, sql, credits, entitlements } = await createTestContext();
+  try {
+    const freeUser = await createUser(sql);
+    const freePlanId = randomUUID();
+    const freePlan = samplePlan("免费导出");
+    const free = await entitlements.prepareFreeGeneration({
+      userId: freeUser,
+      planId: freePlanId,
+      requestFingerprint: freePlanId,
+    });
+    await entitlements.authorizeGeneration({
+      entitlementToken: free.token,
+      requestFingerprint: freePlanId,
+      userId: freeUser,
+      cookieEntitlementId: null,
+    });
+    await entitlements.ensurePlanExportable({
+      userId: freeUser,
+      planId: freePlanId,
+      plan: freePlan,
+      entitlementToken: free.token,
+      requestFingerprint: freePlanId,
+    });
+
+    const paidUser = await createUser(sql);
+    await credits.ensureWallet(paidUser);
+    await fundWallet(sql, paidUser, 1);
+    const paidPlanId = randomUUID();
+    const paidPlan = samplePlan("付费导出");
+    const reservation = await entitlements.reservePaidPlan(paidUser, paidPlanId);
+    const paid = await entitlements.preparePaidGeneration({
+      userId: paidUser,
+      planId: paidPlanId,
+      requestFingerprint: paidPlanId,
+      reservationId: reservation.id,
+    });
+    await entitlements.authorizeGeneration({
+      entitlementToken: paid.token,
+      requestFingerprint: paidPlanId,
+      userId: paidUser,
+      cookieEntitlementId: null,
+    });
+    const exported = await entitlements.ensurePlanExportable({
+      userId: paidUser,
+      planId: paidPlanId,
+      plan: paidPlan,
+      entitlementToken: paid.token,
+      requestFingerprint: paidPlanId,
+    });
+    assert.equal(exported.meta.title, "付费导出");
+    const paidSummary = await credits.getWalletSummary(paidUser);
+    assert.equal(paidSummary.wallet.balance, 0);
+    assert.equal(paidSummary.wallet.reserved, 0);
   } finally {
     await pg.close();
   }
@@ -527,6 +701,18 @@ test("preview access uses saved user plan or a claimed guest entitlement", async
       userId: null,
       cookieEntitlementId: guest.entitlementId,
     });
+    await assert.rejects(
+      () =>
+        entitlements.resolvePreviewPlan({
+          userId: null,
+          planId: guestPlanId,
+          plan: guestPlan,
+          entitlementToken: guest.token,
+          requestFingerprint: guestPlanId,
+          cookieEntitlementId: guest.entitlementId,
+        }),
+      /hash|绑定/,
+    );
     await entitlements.finalizeGuestGeneration({
       token: guest.token,
       requestFingerprint: guestPlanId,

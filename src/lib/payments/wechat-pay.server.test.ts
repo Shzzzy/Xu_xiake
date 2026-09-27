@@ -97,6 +97,7 @@ const migrationNames = [
   "0009_payment_credits_applied.sql",
   "0010_generation_entitlements.sql",
   "0011_travel_plan_hash.sql",
+  "0012_generation_entitlement_failure_reason.sql",
 ] as const;
 
 async function createTestContext() {

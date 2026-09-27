@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authMiddleware, optionalAuthMiddleware } from "./auth/middleware.ts";
 import {
   claimFirstFreePlan,
+  ensurePlanExportable,
   finalizeGuestGeneration as finalizeGuestGenerationServer,
   finishPaidPlan,
   preparePlanGeneration as preparePlanGenerationServer,
@@ -113,3 +114,25 @@ export const finishPaidGeneration = createServerFn({ method: "POST" })
       requestFingerprint: data.requestFingerprint,
     }),
   );
+
+/** 统一导出前置入口：已保存 plan 直接通过，否则按凭证类型 guest/free/paid 完成保存和扣点。 */
+export const ensurePlanExportableFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    planIdInput.extend({
+      plan: tripPlanSchema,
+      entitlementToken: z.string().min(16).max(256),
+    }),
+  )
+  .handler(async ({ context, data }) => {
+    const cookieEntitlementId = await readGuestGenerationEntitlementId();
+    await ensurePlanExportable({
+      userId: context.userId,
+      planId: data.planId,
+      plan: data.plan,
+      entitlementToken: data.entitlementToken,
+      requestFingerprint: data.requestFingerprint,
+      cookieEntitlementId,
+    });
+    return { planId: data.planId };
+  });

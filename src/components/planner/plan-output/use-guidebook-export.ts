@@ -2,7 +2,7 @@ import { useCallback, useRef, useState, type RefObject } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { claimCurrentPlan } from "@/lib/entitlements.functions";
+import { ensurePlanExportableFn } from "@/lib/entitlements.functions";
 import {
   resetGuidebookExportAfterPendingAuth,
   resolveGuidebookExportGate,
@@ -18,11 +18,14 @@ import {
 const DOWNLOAD_URL_RELEASE_MS = 60_000;
 const PENDING_PLAN_CLAIM_KEY = "xuxiake:pending-plan-claim:v1";
 
+export type PendingPlanAction = "export" | "share" | "preview";
+
 export type PendingPlanClaim = {
   planId: string;
   requestFingerprint: string;
   entitlementToken: string;
   plan: TripPlan;
+  action: PendingPlanAction;
 };
 
 /** 未登录点击 PDF/分享时，把最终计划暂存在当前标签页，登录回跳后可以领取。 */
@@ -31,11 +34,12 @@ export function storePendingPlanClaim(
   plan: TripPlan,
   entitlementToken: string,
   requestFingerprint = planId,
+  action: PendingPlanAction = "export",
 ): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(
     PENDING_PLAN_CLAIM_KEY,
-    JSON.stringify({ planId, requestFingerprint, entitlementToken, plan }),
+    JSON.stringify({ planId, requestFingerprint, entitlementToken, plan, action }),
   );
 }
 
@@ -51,7 +55,8 @@ export function readPendingPlanClaim(): PendingPlanClaim | null {
       typeof parsed.planId !== "string" ||
       typeof parsed.requestFingerprint !== "string" ||
       typeof parsed.entitlementToken !== "string" ||
-      !parsed.plan
+      !parsed.plan ||
+      (parsed.action !== "export" && parsed.action !== "share" && parsed.action !== "preview")
     ) {
       return null;
     }
@@ -155,7 +160,7 @@ export function useGuidebookExport(
 ): GuidebookExportController {
   const { user, isPending } = useCurrentUserState();
   const exportGuidebookFn = useServerFn(exportGuidebook);
-  const claimPlanFn = useServerFn(claimCurrentPlan);
+  const ensureExportFn = useServerFn(ensurePlanExportableFn);
   const [state, setState] = useState<GuidebookGenerationState>({
     stage: "idle",
     progress: 0,
@@ -188,7 +193,7 @@ export function useGuidebookExport(
     }
     if (accessGate === "login") {
       if (planId && plan) {
-        storePendingPlanClaim(planId, plan, entitlementToken, requestFingerprint);
+        storePendingPlanClaim(planId, plan, entitlementToken, requestFingerprint, "export");
       }
       redirectToAuth();
       return;
@@ -197,7 +202,7 @@ export function useGuidebookExport(
     try {
       if (!planId || !entitlementToken) throw new Error("缺少生成权益凭证，无法保存路书");
       // 已登录也必须经过服务端幂等 claim：免费首次领取、已保存计划直接通过，未用权益会提示购买。
-      await claimPlanFn({
+      await ensureExportFn({
         data: {
           planId,
           requestFingerprint,
@@ -287,8 +292,8 @@ export function useGuidebookExport(
       window.clearTimeout(finalizeTimer);
     }
   }, [
-    claimPlanFn,
     downloadBlob,
+    ensureExportFn,
     entitlementToken,
     exportGuidebookFn,
     isPending,

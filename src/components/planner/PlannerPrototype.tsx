@@ -69,6 +69,7 @@ import {
   type TravelStyle,
 } from "@/lib/route-planner";
 import { getOpenMeteoForecast } from "@/lib/planner.functions";
+import { exportGuidebook } from "@/lib/travel-plan.functions";
 import {
   applyTripFeasibilityChoice,
   type TripFeasibilityChoice,
@@ -113,7 +114,11 @@ import { TravelerBudgetFields } from "./plan-output/TravelerBudgetFields";
 import { requestAndApplyBudget } from "./plan-output/budget-advice-apply";
 import { recommendDestination as recommendDestinationFromCatalog } from "@/lib/destination-recommendation";
 import { WeatherStrip } from "./WeatherStrip";
-import { clearPendingPlanClaim, readPendingPlanClaim } from "./plan-output/use-guidebook-export";
+import {
+  clearPendingPlanClaim,
+  readPendingPlanClaim,
+  type PendingPlanClaim,
+} from "./plan-output/use-guidebook-export";
 
 /**
  * 路书预览只在结果页用到，懒加载避免首页提前下载预览与导出代码。
@@ -451,6 +456,7 @@ function PlannerPrototypeContent() {
   const variant: DesignVariant = "scroll";
   const { user, isPending } = useCurrentUserState();
   const claimPendingPlanFn = useServerFn(claimCurrentPlan);
+  const exportPendingPlanFn = useServerFn(exportGuidebook);
   const [screen, setScreen] = useState<Screen>("landing");
   const [resultOrigin, setResultOrigin] = useState<"known" | "unknown">("known");
   const [brief, setBrief] = useState<TripBrief>(createDefaultBrief);
@@ -469,11 +475,38 @@ function PlannerPrototypeContent() {
     const pending = readPendingPlanClaim();
     if (!pending) return;
     let cancelled = false;
+    const continueExport = async (claim: PendingPlanClaim) => {
+      const result = await exportPendingPlanFn({ data: { planId: claim.planId } });
+      if (result.status !== "ok") throw new Error(result.message || "PDF 生成失败");
+      const binary = window.atob(result.pdfBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1)
+        bytes[index] = binary.charCodeAt(index);
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.filename || "旅行路书.pdf";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      clearPendingPlanClaim();
+    };
     void claimPendingPlanFn({ data: pending })
       .then(() => {
         if (cancelled) return;
-        clearPendingPlanClaim();
-        toast.success("登录成功，本次路书已保存到账号。");
+        if (pending.action === "export") {
+          toast.success("登录成功，本次路书已保存到账号。", {
+            action: {
+              label: "继续导出",
+              onClick: () =>
+                void continueExport(pending).catch((error: unknown) =>
+                  toast.error(error instanceof Error ? error.message : "继续导出失败"),
+                ),
+            },
+          });
+          return;
+        }
+        toast.success("登录成功，已恢复本次路书，请回到原入口继续操作。");
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -2370,7 +2403,7 @@ function ItineraryScreen({
             entitlementToken: permission.token,
             requestFingerprint: permission.requestFingerprint,
           },
-        });
+        }).catch(() => undefined);
       }
       generationCleanupRef.current = null;
     };

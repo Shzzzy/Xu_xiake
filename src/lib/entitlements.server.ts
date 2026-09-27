@@ -3,6 +3,7 @@ import { createCreditsService, ensureWallet } from "./credits.server.ts";
 import {
   createGenerationEntitlementsService,
   hashGenerationToken,
+  trustedClientIp,
   type FinalizeFreeInput,
   type FinalizePaidInput,
   type GenerationAuthorization,
@@ -334,11 +335,9 @@ export async function clearGuestGenerationEntitlementCookie(
 export async function createGuestRequestBucket(): Promise<string> {
   const { getRequest } = await import("@tanstack/react-start/server");
   const request = getRequest();
-  const forwarded = request?.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  const ip = forwarded || request?.headers.get("x-real-ip") || "unknown-ip";
-  const userAgent = request?.headers.get("user-agent") || "unknown-ua";
-  const dayBucket = Math.floor(Date.now() / GUEST_GENERATION_TTL_MS);
-  return hashGenerationToken(`${ip}|${userAgent}|${dayBucket}`);
+  const ip = request ? trustedClientIp(request.headers) : "unknown-ip";
+  // 滚动 24 小时由 entitlement.created_at 判断，bucket 本身只绑定可信 IP，UA 变化不能绕开。
+  return hashGenerationToken(ip);
 }
 
 /** 生成前只做权益判断并签发一次性凭证。 */
@@ -409,12 +408,18 @@ export async function authorizeGenerationEntitlement(
   return (await getDefaultService()).authorizeGeneration(input);
 }
 
-/** 生成失败或取消时按 token + fingerprint 释放，不能用 reservationId 代替凭证。 */
+/** 公开释放只允许 available 凭证，used 必须由服务端失败路径释放。 */
 export async function releaseGenerationEntitlement(
   input: GenerationCredentials,
 ): Promise<{ released: boolean; kind: GenerationPreparedKind }> {
-  // 保留 Cookie，允许同一 token 在同一失败 attempt 上重试；重新申请时会覆盖为新的 entitlement id。
   return (await getDefaultService()).releaseGeneration(input);
+}
+
+/** 服务端生成异常内部调用，允许释放 used 并记录原因。 */
+export async function releaseGenerationAfterFailure(
+  input: GenerationCredentials & { reason: string },
+): Promise<{ released: boolean; kind: GenerationPreparedKind }> {
+  return (await getDefaultService()).releaseGenerationAfterFailure(input);
 }
 
 /** 访客生成成功后把最终 plan 绑定到凭证，等待登录后 claim。 */
@@ -431,6 +436,18 @@ export async function finalizeGuestGeneration(input: {
 /** 预览接口的统一入口：登录读取已保存 plan，访客验证一次性凭证与 plan hash。 */
 export async function resolvePreviewPlan(input: PreviewResolutionInput): Promise<TripPlan> {
   return (await getDefaultService()).resolvePreviewPlan(input);
+}
+
+/** 导出前的统一服务端入口：已保存直接通过，否则按 entitlement kind 绑定/claim/consume。 */
+export async function ensurePlanExportable(input: {
+  userId: string;
+  planId: string;
+  plan?: TripPlan;
+  entitlementToken?: string | null;
+  requestFingerprint?: string | null;
+  cookieEntitlementId?: string | null;
+}): Promise<TripPlan> {
+  return (await getDefaultService()).ensurePlanExportable(input);
 }
 
 /** 访客首次生成时写入旧版本兼容 Cookie；新链路使用 preparePlanGeneration。 */

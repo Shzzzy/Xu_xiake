@@ -120,7 +120,7 @@ test(
       });
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
       // 每个 E2E 使用独立来源 IP，避免 24 小时 guest bucket 把另一支测试当成重复试用。
-      await page.setExtraHTTPHeaders({ "x-forwarded-for": "198.51.100.10" });
+      await page.setExtraHTTPHeaders({ "x-real-ip": "198.51.100.10" });
 
       await page.goto(server.url, { waitUntil: "domcontentloaded", timeout: 120_000 });
       await page.waitForTimeout(1000);

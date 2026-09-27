@@ -375,11 +375,12 @@ export const generateLongItinerary = createServerFn({ method: "POST" })
     try {
       const deepseekKey = process.env.DEEPSEEK_API_KEY?.trim();
       if (!deepseekKey) {
-        await entitlement.releaseGenerationEntitlement({
+        await entitlement.releaseGenerationAfterFailure({
           entitlementToken: data.entitlementToken,
           requestFingerprint: data.requestFingerprint,
           userId: context.userId,
           cookieEntitlementId,
+          reason: "missing_deepseek_configuration",
         });
         return { status: "needs_configuration", missing: ["DEEPSEEK_API_KEY"] };
       }
@@ -420,11 +421,12 @@ export const generateLongItinerary = createServerFn({ method: "POST" })
 
       return { status: "ok", plan, discoveries };
     } catch (error) {
-      await entitlement.releaseGenerationEntitlement({
+      await entitlement.releaseGenerationAfterFailure({
         entitlementToken: data.entitlementToken,
         requestFingerprint: data.requestFingerprint,
         userId: context.userId,
         cookieEntitlementId,
+        reason: "long_generation_failed",
       });
       throw error;
     }
@@ -741,20 +743,22 @@ export const generateLiveItinerary = createServerFn({ method: "POST" })
     try {
       const result = await runLivePlannerWith(data);
       if (result.status === "needs_configuration" || result.status === "needs_decision") {
-        await entitlement.releaseGenerationEntitlement({
+        await entitlement.releaseGenerationAfterFailure({
           entitlementToken,
           requestFingerprint,
           userId: context.userId,
           cookieEntitlementId,
+          reason: result.status,
         });
       }
       return result;
     } catch (error) {
-      await entitlement.releaseGenerationEntitlement({
+      await entitlement.releaseGenerationAfterFailure({
         entitlementToken,
         requestFingerprint,
         userId: context.userId,
         cookieEntitlementId,
+        reason: error instanceof Error ? error.message : "generation_failed",
       });
       throw error;
     }
