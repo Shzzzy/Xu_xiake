@@ -54,4 +54,7 @@ export type PaymentOrder = {
   expiresAt: string;
   createdAt: string;
   updatedAt: string;
+  clientRequestId: string | null;
+  redirectUrl: string | null;
+  paymentPayload: Record<string, unknown>;
 };

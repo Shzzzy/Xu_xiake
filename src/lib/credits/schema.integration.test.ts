@@ -11,6 +11,7 @@ const migrationNames = [
   "0004_commercial_accounts.sql",
   "0005_username_auth.sql",
   "0006_credit_reservation_idempotency.sql",
+  "0007_payment_order_idempotency.sql",
 ] as const;
 
 const commercialTables = [
@@ -48,6 +49,7 @@ const requiredIndexes = [
   "payment_orders_provider_transaction_id_unique_idx",
   "user_username_unique_idx",
   "credit_reservations_wallet_plan_unique_idx",
+  "payment_orders_user_client_request_unique_idx",
 ] as const;
 
 async function createMigratedDatabase() {
@@ -266,6 +268,28 @@ test("payment orders bind wallet ownership and provider identifiers", async () =
         'provider-order-1', 'transaction-3', 'created', now() + interval '1 day'
       );
     `);
+
+    await pg.exec(`
+      insert into payment_orders (
+        id, user_id, wallet_id, package_code, points, amount_cents, provider,
+        status, expires_at, client_request_id
+      ) values (
+        'order-client-request-1', 'user-a', 'wallet-a', 'single', 1, 99, 'wechat',
+        'created', now() + interval '1 day', 'checkout-request-1'
+      );
+    `);
+
+    await expectFailure(
+      pg,
+      `insert into payment_orders (
+         id, user_id, wallet_id, package_code, points, amount_cents, provider,
+         status, expires_at, client_request_id
+       ) values (
+         'order-client-request-2', 'user-a', 'wallet-a', 'single', 1, 99, 'wechat',
+         'created', now() + interval '1 day', 'checkout-request-1'
+       )`,
+      /payment_orders_user_client_request_unique_idx|duplicate key|unique constraint/i,
+    );
 
     await pg.exec(`
       insert into payment_events (id, provider, provider_event_id, order_id, payload, status)
