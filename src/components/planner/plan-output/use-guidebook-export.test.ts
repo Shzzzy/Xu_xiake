@@ -44,3 +44,59 @@ test("登录回跳后的 paid 计划直接通过权益校验并进入导出", as
   assert.equal(result.state.stage, "ready");
   assert.equal(result.redirect, null);
 });
+
+test("权益接口返回 Unauthorized 时暂存路书并跳转登录", async () => {
+  let stored = 0;
+  let authRedirects = 0;
+  const unauthorized = Object.assign(new Error("Unauthorized"), { status: 401 });
+  const result = await runGuidebookExportAttempt({
+    isPending: false,
+    hasUser: true,
+    plan: plan(),
+    planId: "plan-expired",
+    entitlementToken: "token",
+    requestFingerprint: "plan-expired",
+    ensureExport: async () => {
+      throw unauthorized;
+    },
+    exportPdf: async () => ({ status: "failed", message: "不应调用导出" }),
+    storePending: () => {
+      stored += 1;
+    },
+    redirectAuth: () => {
+      authRedirects += 1;
+    },
+  });
+
+  assert.equal(stored, 1);
+  assert.equal(authRedirects, 1);
+  assert.equal(result.redirect, "auth");
+  assert.equal(result.state.stage, "idle");
+});
+
+test("PDF 服务返回 Unauthorized 时暂存路书并跳转登录", async () => {
+  let stored = 0;
+  let authRedirects = 0;
+  const result = await runGuidebookExportAttempt({
+    isPending: false,
+    hasUser: true,
+    plan: plan(),
+    planId: "plan-expired-pdf",
+    entitlementToken: "token",
+    requestFingerprint: "plan-expired-pdf",
+    ensureExport: async () => undefined,
+    printDocument: () => "empty",
+    exportPdf: async () => ({ status: "failed", message: "Unauthorized" }),
+    storePending: () => {
+      stored += 1;
+    },
+    redirectAuth: () => {
+      authRedirects += 1;
+    },
+  });
+
+  assert.equal(stored, 1);
+  assert.equal(authRedirects, 1);
+  assert.equal(result.redirect, "auth");
+  assert.equal(result.state.stage, "idle");
+});

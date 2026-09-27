@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
-import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
+import { maskPhone } from "@/lib/auth/phone";
 import { shouldReleaseGenerationOnCleanup } from "@/lib/guidebook-access";
 import {
   claimCurrentPlan,
@@ -20,6 +21,7 @@ import {
   ArrowRight,
   CalendarDays,
   Check,
+  CircleUserRound,
   Clock3,
   ChevronRight,
   CloudSun,
@@ -577,6 +579,8 @@ function PlannerPrototypeContent() {
         meta={currentVariant}
         saved={saved}
         showSaved={screen === "result"}
+        user={user}
+        isPending={isPending}
         onHome={() => setScreen("landing")}
         onSaved={toggleSave}
       />
@@ -657,15 +661,25 @@ function PlannerHeader({
   meta,
   saved,
   showSaved,
+  user,
+  isPending,
   onHome,
   onSaved,
 }: {
   meta: DesignVariantMeta;
   saved: boolean;
   showSaved: boolean;
+  user: AppUser | null;
+  isPending: boolean;
   onHome: () => void;
   onSaved: () => void;
 }) {
+  const openAuth = () => {
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    window.location.assign(`/auth?returnTo=${encodeURIComponent(returnTo)}`);
+  };
+  const openAccount = () => window.location.assign("/account");
+
   return (
     <header className="planner-header">
       <div className="planner-header-inner">
@@ -681,12 +695,27 @@ function PlannerHeader({
           </span>
         </button>
 
-        {showSaved ? (
-          <Button variant={saved ? "seal" : "outline"} size="sm" onClick={onSaved}>
-            {saved ? <Check className="size-4" /> : <Save className="size-4" />}
-            <span className="hidden sm:inline">{saved ? "已保存" : "保存"}</span>
-          </Button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {showSaved ? (
+            <Button variant={saved ? "seal" : "outline"} size="sm" onClick={onSaved}>
+              {saved ? <Check className="size-4" /> : <Save className="size-4" />}
+              <span className="hidden sm:inline">{saved ? "已保存" : "保存"}</span>
+            </Button>
+          ) : null}
+          {isPending ? (
+            <span className="px-2 text-xs text-[var(--v-muted)]">账号确认中…</span>
+          ) : user ? (
+            <Button variant="outline" size="sm" onClick={openAccount}>
+              <CircleUserRound className="size-4" />
+              <span>{user.phone ? maskPhone(user.phone) : (user.displayName ?? "我的账号")}</span>
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" onClick={openAuth}>
+              <CircleUserRound className="size-4" />
+              登录 / 注册
+            </Button>
+          )}
+        </div>
       </div>
     </header>
   );

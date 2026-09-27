@@ -77,6 +77,15 @@ export function clearPendingPlanClaim(): void {
   window.sessionStorage.removeItem(PENDING_PLAN_CLAIM_KEY);
 }
 
+function isUnauthorizedExportError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { status?: unknown; message?: unknown };
+  return (
+    candidate.status === 401 ||
+    (typeof candidate.message === "string" && /unauthorized/i.test(candidate.message))
+  );
+}
+
 function redirectToAuth(): void {
   const returnTo = `${window.location.pathname}${window.location.search}`;
   window.location.assign(`/auth?returnTo=${encodeURIComponent(returnTo)}`);
@@ -241,6 +250,24 @@ export async function runGuidebookExportAttempt(
       },
     });
   } catch (error) {
+    if (isUnauthorizedExportError(error)) {
+      if (deps.planId && deps.plan) {
+        (deps.storePending ?? storePendingPlanClaim)(
+          deps.planId,
+          deps.plan,
+          deps.entitlementToken,
+          deps.requestFingerprint,
+          "export",
+        );
+      }
+      (deps.redirectAuth ?? redirectToAuth)();
+      return {
+        state: resetGuidebookExportAfterPendingAuth(),
+        preparedPdf: null,
+        redirect: "auth",
+        notice: { type: "info", message: "登录状态已失效，路书已暂存，请重新登录后继续导出。" },
+      };
+    }
     if (error instanceof Error && error.message.includes("免费体验已使用")) {
       (deps.redirectPricing ?? redirectToPricing)();
       return {
@@ -282,6 +309,24 @@ export async function runGuidebookExportAttempt(
     const result = await deps.exportPdf({ data: { planId: deps.planId } });
     if (result.status !== "ok") {
       const message = result.message || "PDF 生成失败，请重试。";
+      if (/unauthorized/i.test(message)) {
+        if (deps.planId && deps.plan) {
+          (deps.storePending ?? storePendingPlanClaim)(
+            deps.planId,
+            deps.plan,
+            deps.entitlementToken,
+            deps.requestFingerprint,
+            "export",
+          );
+        }
+        (deps.redirectAuth ?? redirectToAuth)();
+        return {
+          state: resetGuidebookExportAfterPendingAuth(),
+          preparedPdf: null,
+          redirect: "auth",
+          notice: { type: "info", message: "登录状态已失效，路书已暂存，请重新登录后继续导出。" },
+        };
+      }
       return {
         state: advanceGuidebookProgress(state, "failed", message),
         preparedPdf: null,
@@ -309,6 +354,24 @@ export async function runGuidebookExportAttempt(
       redirect: null,
     };
   } catch (error) {
+    if (isUnauthorizedExportError(error)) {
+      if (deps.planId && deps.plan) {
+        (deps.storePending ?? storePendingPlanClaim)(
+          deps.planId,
+          deps.plan,
+          deps.entitlementToken,
+          deps.requestFingerprint,
+          "export",
+        );
+      }
+      (deps.redirectAuth ?? redirectToAuth)();
+      return {
+        state: resetGuidebookExportAfterPendingAuth(),
+        preparedPdf: null,
+        redirect: "auth",
+        notice: { type: "info", message: "登录状态已失效，路书已暂存，请重新登录后继续导出。" },
+      };
+    }
     const message = error instanceof Error ? error.message : "路书生成失败，请重试。";
     return {
       state: advanceGuidebookProgress(state, "failed", message),
