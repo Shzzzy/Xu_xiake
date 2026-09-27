@@ -104,11 +104,25 @@ const LOCAL_DEV_ORIGINS: string[] = [
   "http://localhost:8080",
   "http://127.0.0.1:8080",
   "http://[::1]:8080",
+  "http://localhost:8083",
+  "http://127.0.0.1:8083",
+  "http://[::1]:8083",
+];
+
+// 生产站点与 Netlify 预览域名必须进入动态 baseURL 和可信来源，
+// 否则浏览器提交登录时会因 Origin 校验失败返回 Invalid origin。
+const PUBLIC_DEPLOY_HOSTS: string[] = [
+  "chipper-blini-e3c045.netlify.app",
+  "*.chipper-blini-e3c045.netlify.app",
+];
+const PUBLIC_DEPLOY_ORIGINS: string[] = [
+  "https://chipper-blini-e3c045.netlify.app",
+  "https://*.chipper-blini-e3c045.netlify.app",
 ];
 const baseURL = explicitBaseURL ?? {
   // Include loopback hosts so dynamic baseURL resolves for local email/password
   // (not only the preview wildcard).
-  allowedHosts: [...previewAllowedHosts, "localhost", "127.0.0.1", "[::1]"],
+  allowedHosts: [...previewAllowedHosts, ...PUBLIC_DEPLOY_HOSTS, "localhost", "127.0.0.1", "[::1]"],
   // `auto` → trust both http:// and https:// expansions of allowedHosts
   // (preview is https; local dev is http).
   protocol: "auto" as const,
@@ -118,12 +132,14 @@ const baseURL = explicitBaseURL ?? {
 // Origins Better Auth accepts on credentialed POSTs (sign-up/sign-in, etc.).
 // Missing entries here surface as FORBIDDEN "Invalid origin".
 const trustedOrigins: string[] = explicitBaseURL
-  ? [explicitBaseURL, ...LOCAL_DEV_ORIGINS]
+  ? [explicitBaseURL, ...PUBLIC_DEPLOY_ORIGINS, ...LOCAL_DEV_ORIGINS]
   : [
       // Host wildcards (matched against Origin's host)
       ...previewAllowedHosts,
+      ...PUBLIC_DEPLOY_HOSTS,
       // Full-origin wildcards (matched against Origin)
       ...previewAllowedHosts.flatMap((host) => [`https://${host}`, `http://${host}`]),
+      ...PUBLIC_DEPLOY_ORIGINS,
       ...LOCAL_DEV_ORIGINS,
     ];
 
