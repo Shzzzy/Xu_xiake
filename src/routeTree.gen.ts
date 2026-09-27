@@ -17,6 +17,7 @@ import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as ApiGuidebookPreviewRouteImport } from './routes/api/guidebook-preview'
 import { Route as ApiGuidebookProbeRouteImport } from './routes/api/guidebook-probe'
 import { Route as AuthApiSplatRouteImport } from './routes/auth-api.$'
+import { Route as AuthGatewaySplatRouteImport } from './routes/auth-gateway.$'
 import { Route as ShareTokenRouteImport } from './routes/share/$token'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth.$'
 import { Route as ApiPaymentsWebhookRouteImport } from './routes/api/payments/webhook'
@@ -61,6 +62,11 @@ const AuthApiSplatRoute = AuthApiSplatRouteImport.update({
   path: '/auth-api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthGatewaySplatRoute = AuthGatewaySplatRouteImport.update({
+  id: '/auth-gateway/$',
+  path: '/auth-gateway/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ShareTokenRoute = ShareTokenRouteImport.update({
   id: '/share/$token',
   path: '/share/$token',
@@ -86,6 +92,7 @@ export interface FileRoutesByFullPath {
   '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
   '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
   '/auth-api/$': typeof AuthApiSplatRoute
+  '/auth-gateway/$': typeof AuthGatewaySplatRoute
   '/share/$token': typeof ShareTokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
@@ -99,6 +106,7 @@ export interface FileRoutesByTo {
   '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
   '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
   '/auth-api/$': typeof AuthApiSplatRoute
+  '/auth-gateway/$': typeof AuthGatewaySplatRoute
   '/share/$token': typeof ShareTokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
@@ -113,6 +121,7 @@ export interface FileRoutesById {
   '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
   '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
   '/auth-api/$': typeof AuthApiSplatRoute
+  '/auth-gateway/$': typeof AuthGatewaySplatRoute
   '/share/$token': typeof ShareTokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
@@ -128,6 +137,7 @@ export interface FileRouteTypes {
     | '/api/guidebook-preview'
     | '/api/guidebook-probe'
     | '/auth-api/$'
+    | '/auth-gateway/$'
     | '/share/$token'
     | '/api/auth/$'
     | '/api/payments/webhook'
@@ -141,6 +151,7 @@ export interface FileRouteTypes {
     | '/api/guidebook-preview'
     | '/api/guidebook-probe'
     | '/auth-api/$'
+    | '/auth-gateway/$'
     | '/share/$token'
     | '/api/auth/$'
     | '/api/payments/webhook'
@@ -154,6 +165,7 @@ export interface FileRouteTypes {
     | '/api/guidebook-preview'
     | '/api/guidebook-probe'
     | '/auth-api/$'
+    | '/auth-gateway/$'
     | '/share/$token'
     | '/api/auth/$'
     | '/api/payments/webhook'
@@ -168,6 +180,7 @@ export interface RootRouteChildren {
   ApiGuidebookPreviewRoute: typeof ApiGuidebookPreviewRoute
   ApiGuidebookProbeRoute: typeof ApiGuidebookProbeRoute
   AuthApiSplatRoute: typeof AuthApiSplatRoute
+  AuthGatewaySplatRoute: typeof AuthGatewaySplatRoute
   ShareTokenRoute: typeof ShareTokenRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiPaymentsWebhookRoute: typeof ApiPaymentsWebhookRoute
@@ -231,6 +244,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth-gateway/$': {
+      id: '/auth-gateway/$'
+      path: '/auth-gateway/$'
+      fullPath: '/auth-gateway/$'
+      preLoaderRoute: typeof AuthGatewaySplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/share/$token': {
       id: '/share/$token'
       path: '/share/$token'
@@ -264,6 +284,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGuidebookPreviewRoute: ApiGuidebookPreviewRoute,
   ApiGuidebookProbeRoute: ApiGuidebookProbeRoute,
   AuthApiSplatRoute: AuthApiSplatRoute,
+  AuthGatewaySplatRoute: AuthGatewaySplatRoute,
   ShareTokenRoute: ShareTokenRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiPaymentsWebhookRoute: ApiPaymentsWebhookRoute,
