@@ -5,6 +5,7 @@ import { claimFirstFreePlan } from "./entitlements.server.ts";
 import { tripPlanSchema } from "./trip-plan-schema.ts";
 
 const claimPlanInput = z.object({
+  planId: z.string().min(1).max(128),
   plan: tripPlanSchema,
 });
 
@@ -12,4 +13,10 @@ const claimPlanInput = z.object({
 export const claimCurrentPlan = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(claimPlanInput)
-  .handler(async ({ context, data }) => claimFirstFreePlan(context.userId, data.plan));
+  .handler(async ({ context, data }) =>
+    claimFirstFreePlan({
+      userId: context.userId,
+      planId: data.planId,
+      plan: data.plan,
+    }),
+  );

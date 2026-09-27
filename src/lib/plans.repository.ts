@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
 import type { TripPlan } from "./travel-plan.ts";
 
 export type SaveTravelPlanInput = {
   userId: string;
+  planId: string;
   plan: TripPlan;
 };
 
@@ -24,13 +24,14 @@ export async function saveTravelPlanWithSql(
   sql: PlanSql,
   input: SaveTravelPlanInput,
 ): Promise<{ id: string }> {
-  const id = randomUUID();
-  await sql.query(
+  const inserted = await sql.query<{ id: string; user_id: string }>(
     `insert into travel_plans (
        id, user_id, title, origin, destination, days, status, plan_data
-     ) values ($1,$2,$3,$4,$5,$6,'saved',$7::jsonb)`,
+     ) values ($1,$2,$3,$4,$5,$6,'saved',$7::jsonb)
+     on conflict (id) do nothing
+     returning id, user_id`,
     [
-      id,
+      input.planId,
       input.userId,
       input.plan.meta.title,
       input.plan.meta.origin,
@@ -39,7 +40,19 @@ export async function saveTravelPlanWithSql(
       JSON.stringify(input.plan),
     ],
   );
-  return { id };
+  if (inserted[0]) {
+    if (inserted[0].user_id !== input.userId) throw new Error("行程不存在或无权访问");
+    return { id: input.planId };
+  }
+
+  const existing = await sql.query<{ id: string; user_id: string }>(
+    "select id, user_id from travel_plans where id = $1 for update",
+    [input.planId],
+  );
+  const row = existing[0];
+  if (!row) throw new Error("行程写入失败");
+  if (row.user_id !== input.userId) throw new Error("行程不存在或无权访问");
+  return { id: input.planId };
 }
 
 /** 保存一份归属于指定用户的旅行方案。 */

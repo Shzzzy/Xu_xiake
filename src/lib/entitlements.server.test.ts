@@ -131,7 +131,11 @@ test("saved plans can only be read by their owner", async () => {
     const otherUserId = await createUser(sql);
     const plan = samplePlan("所有者行程");
 
-    const saved = await entitlements.saveTravelPlan({ userId: ownerUserId, plan });
+    const saved = await entitlements.saveTravelPlan({
+      userId: ownerUserId,
+      planId: randomUUID(),
+      plan,
+    });
     const ownerPlan = await entitlements.getTravelPlan(ownerUserId, saved.id);
     const otherPlan = await entitlements.getTravelPlan(otherUserId, saved.id);
 
@@ -146,7 +150,12 @@ test("first free claim saves one plan and consumes free trial", async () => {
   const { pg, sql, credits, entitlements } = await createTestContext();
   try {
     const userId = await createUser(sql);
-    const result = await entitlements.claimFirstFreePlan(userId, samplePlan("北京之旅"));
+    const planId = randomUUID();
+    const result = await entitlements.claimFirstFreePlan({
+      userId,
+      planId,
+      plan: samplePlan("北京之旅"),
+    });
 
     const saved = await entitlements.getTravelPlan(userId, result.planId);
     assert.equal(saved?.meta.title, "北京之旅");
@@ -175,8 +184,14 @@ test("claim failure rolls back the saved plan", async () => {
       [userId],
     );
 
+    const planId = randomUUID();
     await assert.rejects(
-      () => entitlements.claimFirstFreePlan(userId, samplePlan("不应留下的行程")),
+      () =>
+        entitlements.claimFirstFreePlan({
+          userId,
+          planId,
+          plan: samplePlan("不应留下的行程"),
+        }),
       /免费体验/,
     );
 
@@ -198,6 +213,7 @@ test("reserve paid plan rejects a plan owned by another user", async () => {
     const otherUserId = await createUser(sql);
     const saved = await entitlements.saveTravelPlan({
       userId: ownerUserId,
+      planId: randomUUID(),
       plan: samplePlan("他人行程"),
     });
     await credits.ensureWallet(otherUserId);
@@ -228,10 +244,12 @@ test("finish paid plan rejects a mismatched owner and consumes the matching plan
     const otherUserId = await createUser(sql);
     const ownPlan = await entitlements.saveTravelPlan({
       userId: ownerUserId,
+      planId: randomUUID(),
       plan: samplePlan("本人行程"),
     });
     const otherPlan = await entitlements.saveTravelPlan({
       userId: otherUserId,
+      planId: randomUUID(),
       plan: samplePlan("他人行程"),
     });
     await credits.ensureWallet(ownerUserId);
@@ -239,11 +257,29 @@ test("finish paid plan rejects a mismatched owner and consumes the matching plan
     const reservation = await entitlements.reservePaidPlan(ownerUserId, ownPlan.id);
 
     await assert.rejects(
-      () => entitlements.finishPaidPlan(reservation.id, ownPlan.id, otherUserId),
+      () =>
+        entitlements.finishPaidPlan({
+          reservationId: reservation.id,
+          planId: ownPlan.id,
+        } as never),
+      /缺少用户身份/,
+    );
+    await assert.rejects(
+      () =>
+        entitlements.finishPaidPlan({
+          userId: otherUserId,
+          reservationId: reservation.id,
+          planId: ownPlan.id,
+        }),
       /行程不存在或无权访问/,
     );
     await assert.rejects(
-      () => entitlements.finishPaidPlan(reservation.id, otherPlan.id),
+      () =>
+        entitlements.finishPaidPlan({
+          userId: ownerUserId,
+          reservationId: reservation.id,
+          planId: otherPlan.id,
+        }),
       /行程不存在或无权访问/,
     );
 
@@ -251,11 +287,141 @@ test("finish paid plan rejects a mismatched owner and consumes the matching plan
     assert.equal(afterRejected.wallet.balance, 1);
     assert.equal(afterRejected.wallet.reserved, 1);
 
-    const entry = await entitlements.finishPaidPlan(reservation.id, ownPlan.id);
+    const entry = await entitlements.finishPaidPlan({
+      userId: ownerUserId,
+      reservationId: reservation.id,
+      planId: ownPlan.id,
+    });
     assert.equal(entry.reason, "generation");
     const summary = await credits.getWalletSummary(ownerUserId);
     assert.equal(summary.wallet.balance, 0);
     assert.equal(summary.wallet.reserved, 0);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("repeated first free claim with the same planId is idempotent", async () => {
+  const { pg, sql, credits, entitlements } = await createTestContext();
+  try {
+    const userId = await createUser(sql);
+    const planId = randomUUID();
+    const plan = samplePlan("幂等行程");
+
+    const first = await entitlements.claimFirstFreePlan({ userId, planId, plan });
+    const second = await entitlements.claimFirstFreePlan({ userId, planId, plan });
+
+    assert.equal(first.planId, planId);
+    assert.equal(second.planId, planId);
+
+    const plans = await sql.query<{ count: number }>(
+      "select count(*)::int as count from travel_plans where id = $1",
+      [planId],
+    );
+    const summary = await credits.getWalletSummary(userId);
+    assert.equal(plans[0]?.count, 1);
+    assert.equal(summary.ledger.filter((item) => item.reason === "free_trial").length, 1);
+    assert.equal(summary.ledger.find((item) => item.reason === "free_trial")?.planId, planId);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("concurrent claims with the same planId create one plan and one free trial ledger", async () => {
+  const { pg, sql, credits, entitlements } = await createTestContext();
+  try {
+    const userId = await createUser(sql);
+    const planId = randomUUID();
+    const plan = samplePlan("并发幂等行程");
+
+    const [first, second] = await Promise.all([
+      entitlements.claimFirstFreePlan({ userId, planId, plan }),
+      entitlements.claimFirstFreePlan({ userId, planId, plan }),
+    ]);
+
+    assert.equal(first.planId, planId);
+    assert.equal(second.planId, planId);
+
+    const plans = await sql.query<{ count: number }>(
+      "select count(*)::int as count from travel_plans where id = $1",
+      [planId],
+    );
+    const summary = await credits.getWalletSummary(userId);
+    assert.equal(plans[0]?.count, 1);
+    assert.equal(summary.ledger.filter((item) => item.reason === "free_trial").length, 1);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("another user's planId cannot be claimed", async () => {
+  const { pg, sql, credits, entitlements } = await createTestContext();
+  try {
+    const ownerUserId = await createUser(sql);
+    const otherUserId = await createUser(sql);
+    const planId = randomUUID();
+
+    await entitlements.saveTravelPlan({
+      userId: ownerUserId,
+      planId,
+      plan: samplePlan("原所有权行程"),
+    });
+
+    await assert.rejects(
+      () =>
+        entitlements.claimFirstFreePlan({
+          userId: otherUserId,
+          planId,
+          plan: samplePlan("冒充行程"),
+        }),
+      /行程不存在或无权访问/,
+    );
+
+    const rows = await sql.query<{ user_id: string }>(
+      "select user_id from travel_plans where id = $1",
+      [planId],
+    );
+    assert.equal(rows[0]?.user_id, ownerUserId);
+    const summary = await credits.getWalletSummary(otherUserId);
+    assert.equal(summary.wallet.freeTrialClaimed, false);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("nested plan data survives a jsonb round trip", async () => {
+  const { pg, sql, entitlements } = await createTestContext();
+  try {
+    const userId = await createUser(sql);
+    const planId = randomUUID();
+    const plan = {
+      meta: {
+        title: "嵌套内容行程",
+        origin: "上海",
+        waypoints: ["杭州"],
+        destination: "北京",
+        startDate: "2026-10-01",
+        days: 3,
+        travelers: { adults: 2, children: 1 },
+        perPersonBudget: 3000,
+        transportPreference: "balanced",
+        pace: "balanced",
+        interests: ["历史", "美食"],
+      },
+      extension: {
+        nested: {
+          tags: ["a", "b"],
+          stops: [
+            { name: "外滩", location: { longitude: 121.49, latitude: 31.24 } },
+            { name: "故宫", location: { longitude: 116.397, latitude: 39.918 } },
+          ],
+        },
+      },
+    } as unknown as TripPlan;
+
+    await entitlements.saveTravelPlan({ userId, planId, plan });
+    const loaded = await entitlements.getTravelPlan(userId, planId);
+    assert.deepEqual(loaded, plan);
   } finally {
     await pg.close();
   }
