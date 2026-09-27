@@ -4,10 +4,13 @@ import { buildSignInRedirect, normalizeReturnTo } from "./return-to.ts";
 
 const origin = "https://travel.example";
 
-test("returnTo rejects backslash, encoded backslash, protocol-relative and external URLs", () => {
+test("returnTo rejects normalized protocol-relative and backslash payloads", () => {
+  assert.equal(normalizeReturnTo("/%2e%2e//evil.com", origin), "/");
+  assert.equal(normalizeReturnTo("/%2e%2e/%5cevil.com", origin), "/");
+  assert.equal(normalizeReturnTo("/%2e%2e//", origin), "/");
+  assert.equal(normalizeReturnTo("//evil.com/path", origin), "/");
   assert.equal(normalizeReturnTo("/\\evil.com/path", origin), "/");
   assert.equal(normalizeReturnTo("/%5Cevil.com/path", origin), "/");
-  assert.equal(normalizeReturnTo("//evil.com/path", origin), "/");
   assert.equal(normalizeReturnTo("https://evil.com/path", origin), "/");
 });
 
@@ -17,6 +20,7 @@ test("returnTo keeps same-origin pathname, query and hash", () => {
     "/plan/beijing?day=2#map",
   );
   assert.equal(normalizeReturnTo("https://travel.example/plan/1?x=1#p2", origin), "/plan/1?x=1#p2");
+  assert.equal(normalizeReturnTo("/pricing?x=1#a", origin), "/pricing?x=1#a");
 });
 
 test("sign-in redirect targets /auth and carries the triggering page", () => {
