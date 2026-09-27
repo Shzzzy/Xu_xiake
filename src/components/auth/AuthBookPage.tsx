@@ -102,7 +102,7 @@ export function AuthBookPage({ returnTo }: AuthBookPageProps) {
       }
     } catch (err) {
       // 只记录认证错误元数据，便于定位部署环境问题，不记录手机号或密码。
-      console.error("[auth] sign-in failed", authErrorDetails(err));
+      console.error("[auth] sign-in failed " + JSON.stringify(authErrorDetails(err)));
       setError(readableAuthError(err, mode));
     } finally {
       setPending(false);
