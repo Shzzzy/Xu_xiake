@@ -11,10 +11,12 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AccountRouteImport } from './routes/account'
+import { Route as AdminRouteImport } from './routes/admin'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as ApiGuidebookPreviewRouteImport } from './routes/api/guidebook-preview'
 import { Route as ApiGuidebookProbeRouteImport } from './routes/api/guidebook-probe'
+import { Route as ShareTokenRouteImport } from './routes/share/$token'
 import { Route as ApiPaymentsWebhookRouteImport } from './routes/api/payments/webhook'
 
 const IndexRoute = IndexRouteImport.update({
@@ -25,6 +27,11 @@ const IndexRoute = IndexRouteImport.update({
 const AccountRoute = AccountRouteImport.update({
   id: '/account',
   path: '/account',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthRoute = AuthRouteImport.update({
@@ -47,6 +54,11 @@ const ApiGuidebookProbeRoute = ApiGuidebookProbeRouteImport.update({
   path: '/api/guidebook-probe',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ShareTokenRoute = ShareTokenRouteImport.update({
+  id: '/share/$token',
+  path: '/share/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPaymentsWebhookRoute = ApiPaymentsWebhookRouteImport.update({
   id: '/api/payments/webhook',
   path: '/api/payments/webhook',
@@ -56,29 +68,35 @@ const ApiPaymentsWebhookRoute = ApiPaymentsWebhookRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/account': typeof AccountRoute
+  '/admin': typeof AdminRoute
   '/auth': typeof AuthRoute
   '/pricing': typeof PricingRoute
   '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
   '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
+  '/share/$token': typeof ShareTokenRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/account': typeof AccountRoute
+  '/admin': typeof AdminRoute
   '/auth': typeof AuthRoute
   '/pricing': typeof PricingRoute
   '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
   '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
+  '/share/$token': typeof ShareTokenRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/account': typeof AccountRoute
+  '/admin': typeof AdminRoute
   '/auth': typeof AuthRoute
   '/pricing': typeof PricingRoute
   '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
   '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
+  '/share/$token': typeof ShareTokenRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
 }
 export interface FileRouteTypes {
@@ -86,38 +104,46 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/account'
+    | '/admin'
     | '/auth'
     | '/pricing'
     | '/api/guidebook-preview'
     | '/api/guidebook-probe'
+    | '/share/$token'
     | '/api/payments/webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/account'
+    | '/admin'
     | '/auth'
     | '/pricing'
     | '/api/guidebook-preview'
     | '/api/guidebook-probe'
+    | '/share/$token'
     | '/api/payments/webhook'
   id:
     | '__root__'
     | '/'
     | '/account'
+    | '/admin'
     | '/auth'
     | '/pricing'
     | '/api/guidebook-preview'
     | '/api/guidebook-probe'
+    | '/share/$token'
     | '/api/payments/webhook'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AccountRoute: typeof AccountRoute
+  AdminRoute: typeof AdminRoute
   AuthRoute: typeof AuthRoute
   PricingRoute: typeof PricingRoute
   ApiGuidebookPreviewRoute: typeof ApiGuidebookPreviewRoute
   ApiGuidebookProbeRoute: typeof ApiGuidebookProbeRoute
+  ShareTokenRoute: typeof ShareTokenRoute
   ApiPaymentsWebhookRoute: typeof ApiPaymentsWebhookRoute
 }
 
@@ -135,6 +161,13 @@ declare module '@tanstack/react-router' {
       path: '/account'
       fullPath: '/account'
       preLoaderRoute: typeof AccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth': {
@@ -165,6 +198,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiGuidebookProbeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/share/$token': {
+      id: '/share/$token'
+      path: '/share/$token'
+      fullPath: '/share/$token'
+      preLoaderRoute: typeof ShareTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/payments/webhook': {
       id: '/api/payments/webhook'
       path: '/api/payments/webhook'
@@ -178,10 +218,12 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AccountRoute: AccountRoute,
+  AdminRoute: AdminRoute,
   AuthRoute: AuthRoute,
   PricingRoute: PricingRoute,
   ApiGuidebookPreviewRoute: ApiGuidebookPreviewRoute,
   ApiGuidebookProbeRoute: ApiGuidebookProbeRoute,
+  ShareTokenRoute: ShareTokenRoute,
   ApiPaymentsWebhookRoute: ApiPaymentsWebhookRoute,
 }
 export const routeTree = rootRouteImport

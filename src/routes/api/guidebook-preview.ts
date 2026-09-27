@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getSessionUser } from "@/lib/auth/verify.server";
 import { readGuestGenerationEntitlementId, resolvePreviewPlan } from "@/lib/entitlements.server";
+import { resolvePlanShare } from "@/lib/shares.server";
 import { encodeGuidebookEvent, streamGuidebookPages } from "@/lib/guidebook-stream.server";
 import { tripPlanSchema } from "@/lib/trip-plan-schema";
 import { z } from "zod";
@@ -12,6 +13,7 @@ const previewRequestSchema = z.object({
   planId: z.string().min(1).max(128),
   entitlementToken: z.string().min(16).max(256).optional(),
   requestFingerprint: z.string().min(1).max(256).optional(),
+  shareToken: z.string().min(16).max(256).optional(),
   plan: tripPlanSchema,
 });
 
@@ -57,18 +59,25 @@ export const Route = createFileRoute("/api/guidebook-preview")({
 
         let plan;
         let resolvedUserId: string | null = null;
+        const shareToken = payload.shareToken;
         try {
-          const user = await getSessionUser();
-          resolvedUserId = user?.id ?? null;
-          const cookieEntitlementId = await readGuestGenerationEntitlementId();
-          plan = await resolvePreviewPlan({
-            userId: resolvedUserId,
-            planId: payload.planId,
-            plan: payload.plan,
-            entitlementToken: payload.entitlementToken ?? null,
-            requestFingerprint: payload.requestFingerprint ?? null,
-            cookieEntitlementId,
-          });
+          if (shareToken) {
+            const shared = await resolvePlanShare(shareToken);
+            if (!shared) throw new Error("链接不存在或已失效");
+            plan = shared.plan;
+          } else {
+            const user = await getSessionUser();
+            resolvedUserId = user?.id ?? null;
+            const cookieEntitlementId = await readGuestGenerationEntitlementId();
+            plan = await resolvePreviewPlan({
+              userId: resolvedUserId,
+              planId: payload.planId,
+              plan: payload.plan,
+              entitlementToken: payload.entitlementToken ?? null,
+              requestFingerprint: payload.requestFingerprint ?? null,
+              cookieEntitlementId,
+            });
+          }
         } catch (error) {
           return new Response(
             encodeGuidebookEvent({
@@ -76,7 +85,7 @@ export const Route = createFileRoute("/api/guidebook-preview")({
               runId,
               message: error instanceof Error ? error.message : "未授权预览路书。",
             }),
-            { status: resolvedUserId ? 403 : 401, headers: NDJSON_HEADERS },
+            { status: shareToken ? 404 : resolvedUserId ? 403 : 401, headers: NDJSON_HEADERS },
           );
         }
 

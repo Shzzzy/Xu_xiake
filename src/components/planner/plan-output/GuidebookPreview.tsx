@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { toast } from "sonner";
 import { AlertCircle, LoaderCircle } from "lucide-react";
 import {
   acceptGuidebookPage,
@@ -6,8 +8,11 @@ import {
   type GuidebookPageAcceptanceState,
   verifyGuidebookPageChecksum,
 } from "@/lib/guidebook-page-protocol";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { sharePlan } from "@/lib/shares.functions";
 import type { TripPlan } from "@/lib/travel-plan";
 import { ExportGuidebookButton } from "./ExportGuidebookButton";
+import { printPreviewDocument } from "./use-guidebook-export";
 
 export const GUIDEBOOK_PREVIEW_SHELL_CLASS =
   "guidebook-preview-scroll guidebook-preview-shell relative w-full overflow-y-auto overflow-x-hidden";
@@ -71,13 +76,18 @@ export function GuidebookPreview({
   entitlementToken = "",
   requestFingerprint = planId,
   runId,
+  shareToken = "",
+  readOnly = false,
 }: {
   plan: TripPlan;
   planId: string;
   entitlementToken?: string;
   requestFingerprint?: string;
   runId?: string;
+  shareToken?: string;
+  readOnly?: boolean;
 }) {
+  const { user } = useCurrentUserState();
   const shellRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -214,7 +224,13 @@ export function GuidebookPreview({
             "content-type": "application/json",
             "x-guidebook-run-id": requestRunId,
           },
-          body: JSON.stringify({ planId, entitlementToken, requestFingerprint, plan }),
+          body: JSON.stringify({
+            planId,
+            entitlementToken,
+            requestFingerprint,
+            plan,
+            shareToken: shareToken || undefined,
+          }),
           signal: controller.signal,
         });
         if (!response.ok || !response.body) {
@@ -250,7 +266,7 @@ export function GuidebookPreview({
       bodyObserver?.disconnect();
       shellObserver?.disconnect();
     };
-  }, [planKey, runId]);
+  }, [planKey, runId, shareToken]);
 
   const ready = total > 0 && received >= total && !error;
   const progress = total > 0 ? Math.round((received / total) * 100) : 0;
@@ -290,15 +306,24 @@ export function GuidebookPreview({
             />
           </div>
         </div>
-        <ExportGuidebookButton
-          plan={plan}
-          planId={planId}
-          entitlementToken={entitlementToken}
-          requestFingerprint={requestFingerprint}
-          previewFrameRef={frameRef}
-          disabled={!ready}
-          disabledHint={error ? "路书生成失败，请先处理上方问题" : "路书全部页面生成完成后即可导出"}
-        />
+        {readOnly ? (
+          <ShareGuidebookPrintButton previewFrameRef={frameRef} disabled={!ready} />
+        ) : (
+          <div className="flex flex-wrap items-start justify-end gap-2">
+            {user ? <SharePlanButton planId={planId} title={plan.meta.title} /> : null}
+            <ExportGuidebookButton
+              plan={plan}
+              planId={planId}
+              entitlementToken={entitlementToken}
+              requestFingerprint={requestFingerprint}
+              previewFrameRef={frameRef}
+              disabled={!ready}
+              disabledHint={
+                error ? "路书生成失败，请先处理上方问题" : "路书全部页面生成完成后即可导出"
+              }
+            />
+          </div>
+        )}
       </div>
 
       <div
@@ -318,5 +343,74 @@ export function GuidebookPreview({
         </div>
       </div>
     </section>
+  );
+}
+
+function ShareGuidebookPrintButton({
+  previewFrameRef,
+  disabled,
+}: {
+  previewFrameRef: RefObject<HTMLIFrameElement | null>;
+  disabled: boolean;
+}) {
+  const [message, setMessage] = useState("可打印或另存为 PDF");
+
+  function handleClick() {
+    if (disabled) return;
+    const result = printPreviewDocument(previewFrameRef.current);
+    if (result === "printed") setMessage("已打开打印窗口，请选择另存为 PDF");
+    else if (result === "blocked") setMessage("打印窗口被拦截，请允许弹窗后重试");
+    else setMessage("路书页面尚未准备好");
+  }
+
+  return (
+    <div className="flex min-w-[220px] flex-col items-stretch gap-2">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={handleClick}
+        className="inline-flex h-9 items-center justify-center rounded-md bg-[var(--v-accent)] px-4 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        打印 / 另存为 PDF
+      </button>
+      <p className="text-center text-[11px] leading-5 text-[var(--v-muted)]">{message}</p>
+    </div>
+  );
+}
+
+function SharePlanButton({ planId, title }: { planId: string; title: string }) {
+  const share = useServerFn(sharePlan);
+  const [busy, setBusy] = useState(false);
+
+  async function handleShare() {
+    setBusy(true);
+    try {
+      const result = await share({ data: { planId } });
+      const url = new URL(result.url, window.location.origin).toString();
+      if (navigator.share) {
+        await navigator.share({ title, url });
+      } else if (navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        toast.success("分享链接已复制");
+      } else {
+        window.prompt("复制分享链接", url);
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      toast.error(error instanceof Error ? error.message : "分享路书失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => void handleShare()}
+      className="inline-flex h-9 items-center justify-center rounded-md border border-[var(--v-line)] px-4 text-sm font-medium text-[var(--v-ink)] transition hover:border-[var(--v-accent)] disabled:opacity-50"
+    >
+      {busy ? "正在生成链接…" : "分享路书"}
+    </button>
   );
 }

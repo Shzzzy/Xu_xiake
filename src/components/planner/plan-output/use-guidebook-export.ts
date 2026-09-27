@@ -118,7 +118,7 @@ function base64ToPdfBlob(base64: string): Blob {
  */
 type PreviewPrintResult = "printed" | "blocked" | "empty";
 
-function printPreviewDocument(frame: HTMLIFrameElement | null): PreviewPrintResult {
+export function printPreviewDocument(frame: HTMLIFrameElement | null): PreviewPrintResult {
   const doc = frame?.contentDocument;
   if (!doc?.documentElement) return "empty";
   const html = "<!doctype html>" + doc.documentElement.outerHTML;
