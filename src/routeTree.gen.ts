@@ -8,139 +8,170 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from "./routes/__root";
-import { Route as IndexRouteImport } from "./routes/index";
-import { Route as AccountRouteImport } from "./routes/account";
-import { Route as AuthRouteImport } from "./routes/auth";
-import { Route as PricingRouteImport } from "./routes/pricing";
-import { Route as ApiGuidebookPreviewRouteImport } from "./routes/api/guidebook-preview";
-import { Route as ApiGuidebookProbeRouteImport } from "./routes/api/guidebook-probe";
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as AccountRouteImport } from './routes/account'
+import { Route as AuthRouteImport } from './routes/auth'
+import { Route as PricingRouteImport } from './routes/pricing'
+import { Route as ApiGuidebookPreviewRouteImport } from './routes/api/guidebook-preview'
+import { Route as ApiGuidebookProbeRouteImport } from './routes/api/guidebook-probe'
+import { Route as ApiPaymentsWebhookRouteImport } from './routes/api/payments/webhook'
 
 const IndexRoute = IndexRouteImport.update({
-  id: "/",
-  path: "/",
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const AccountRoute = AccountRouteImport.update({
-  id: "/account",
-  path: "/account",
+  id: '/account',
+  path: '/account',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const AuthRoute = AuthRouteImport.update({
-  id: "/auth",
-  path: "/auth",
+  id: '/auth',
+  path: '/auth',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const PricingRoute = PricingRouteImport.update({
-  id: "/pricing",
-  path: "/pricing",
+  id: '/pricing',
+  path: '/pricing',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const ApiGuidebookPreviewRoute = ApiGuidebookPreviewRouteImport.update({
-  id: "/api/guidebook-preview",
-  path: "/api/guidebook-preview",
+  id: '/api/guidebook-preview',
+  path: '/api/guidebook-preview',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const ApiGuidebookProbeRoute = ApiGuidebookProbeRouteImport.update({
-  id: "/api/guidebook-probe",
-  path: "/api/guidebook-probe",
+  id: '/api/guidebook-probe',
+  path: '/api/guidebook-probe',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
+const ApiPaymentsWebhookRoute = ApiPaymentsWebhookRouteImport.update({
+  id: '/api/payments/webhook',
+  path: '/api/payments/webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
-  "/": typeof IndexRoute;
-  "/account": typeof AccountRoute;
-  "/auth": typeof AuthRoute;
-  "/pricing": typeof PricingRoute;
-  "/api/guidebook-preview": typeof ApiGuidebookPreviewRoute;
-  "/api/guidebook-probe": typeof ApiGuidebookProbeRoute;
+  '/': typeof IndexRoute
+  '/account': typeof AccountRoute
+  '/auth': typeof AuthRoute
+  '/pricing': typeof PricingRoute
+  '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
+  '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
+  '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
 }
 export interface FileRoutesByTo {
-  "/": typeof IndexRoute;
-  "/account": typeof AccountRoute;
-  "/auth": typeof AuthRoute;
-  "/pricing": typeof PricingRoute;
-  "/api/guidebook-preview": typeof ApiGuidebookPreviewRoute;
-  "/api/guidebook-probe": typeof ApiGuidebookProbeRoute;
+  '/': typeof IndexRoute
+  '/account': typeof AccountRoute
+  '/auth': typeof AuthRoute
+  '/pricing': typeof PricingRoute
+  '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
+  '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
+  '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
 }
 export interface FileRoutesById {
-  __root__: typeof rootRouteImport;
-  "/": typeof IndexRoute;
-  "/account": typeof AccountRoute;
-  "/auth": typeof AuthRoute;
-  "/pricing": typeof PricingRoute;
-  "/api/guidebook-preview": typeof ApiGuidebookPreviewRoute;
-  "/api/guidebook-probe": typeof ApiGuidebookProbeRoute;
+  __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
+  '/account': typeof AccountRoute
+  '/auth': typeof AuthRoute
+  '/pricing': typeof PricingRoute
+  '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
+  '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
+  '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
 }
 export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath;
+  fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    "/" | "/account" | "/auth" | "/pricing" | "/api/guidebook-preview" | "/api/guidebook-probe";
-  fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/account" | "/auth" | "/pricing" | "/api/guidebook-preview" | "/api/guidebook-probe";
+    | '/'
+    | '/account'
+    | '/auth'
+    | '/pricing'
+    | '/api/guidebook-preview'
+    | '/api/guidebook-probe'
+    | '/api/payments/webhook'
+  fileRoutesByTo: FileRoutesByTo
+  to:
+    | '/'
+    | '/account'
+    | '/auth'
+    | '/pricing'
+    | '/api/guidebook-preview'
+    | '/api/guidebook-probe'
+    | '/api/payments/webhook'
   id:
-    | "__root__"
-    | "/"
-    | "/account"
-    | "/auth"
-    | "/pricing"
-    | "/api/guidebook-preview"
-    | "/api/guidebook-probe";
-  fileRoutesById: FileRoutesById;
+    | '__root__'
+    | '/'
+    | '/account'
+    | '/auth'
+    | '/pricing'
+    | '/api/guidebook-preview'
+    | '/api/guidebook-probe'
+    | '/api/payments/webhook'
+  fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute;
-  AccountRoute: typeof AccountRoute;
-  AuthRoute: typeof AuthRoute;
-  PricingRoute: typeof PricingRoute;
-  ApiGuidebookPreviewRoute: typeof ApiGuidebookPreviewRoute;
-  ApiGuidebookProbeRoute: typeof ApiGuidebookProbeRoute;
+  IndexRoute: typeof IndexRoute
+  AccountRoute: typeof AccountRoute
+  AuthRoute: typeof AuthRoute
+  PricingRoute: typeof PricingRoute
+  ApiGuidebookPreviewRoute: typeof ApiGuidebookPreviewRoute
+  ApiGuidebookProbeRoute: typeof ApiGuidebookProbeRoute
+  ApiPaymentsWebhookRoute: typeof ApiPaymentsWebhookRoute
 }
 
-declare module "@tanstack/react-router" {
+declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    "/": {
-      id: "/";
-      path: "/";
-      fullPath: "/";
-      preLoaderRoute: typeof IndexRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/account": {
-      id: "/account";
-      path: "/account";
-      fullPath: "/account";
-      preLoaderRoute: typeof AccountRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/auth": {
-      id: "/auth";
-      path: "/auth";
-      fullPath: "/auth";
-      preLoaderRoute: typeof AuthRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/pricing": {
-      id: "/pricing";
-      path: "/pricing";
-      fullPath: "/pricing";
-      preLoaderRoute: typeof PricingRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/api/guidebook-preview": {
-      id: "/api/guidebook-preview";
-      path: "/api/guidebook-preview";
-      fullPath: "/api/guidebook-preview";
-      preLoaderRoute: typeof ApiGuidebookPreviewRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/api/guidebook-probe": {
-      id: "/api/guidebook-probe";
-      path: "/api/guidebook-probe";
-      fullPath: "/api/guidebook-probe";
-      preLoaderRoute: typeof ApiGuidebookProbeRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account': {
+      id: '/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pricing': {
+      id: '/pricing'
+      path: '/pricing'
+      fullPath: '/pricing'
+      preLoaderRoute: typeof PricingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/guidebook-preview': {
+      id: '/api/guidebook-preview'
+      path: '/api/guidebook-preview'
+      fullPath: '/api/guidebook-preview'
+      preLoaderRoute: typeof ApiGuidebookPreviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/guidebook-probe': {
+      id: '/api/guidebook-probe'
+      path: '/api/guidebook-probe'
+      fullPath: '/api/guidebook-probe'
+      preLoaderRoute: typeof ApiGuidebookProbeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/payments/webhook': {
+      id: '/api/payments/webhook'
+      path: '/api/payments/webhook'
+      fullPath: '/api/payments/webhook'
+      preLoaderRoute: typeof ApiPaymentsWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -151,16 +182,17 @@ const rootRouteChildren: RootRouteChildren = {
   PricingRoute: PricingRoute,
   ApiGuidebookPreviewRoute: ApiGuidebookPreviewRoute,
   ApiGuidebookProbeRoute: ApiGuidebookProbeRoute,
-};
+  ApiPaymentsWebhookRoute: ApiPaymentsWebhookRoute,
+}
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
-  ._addFileTypes<FileRouteTypes>();
+  ._addFileTypes<FileRouteTypes>()
 
-import type { getRouter } from "./router.tsx";
-import type { createStart } from "@tanstack/react-start";
-declare module "@tanstack/react-start" {
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
   interface Register {
-    ssr: true;
-    router: Awaited<ReturnType<typeof getRouter>>;
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
   }
 }
