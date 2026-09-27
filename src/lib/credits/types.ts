@@ -1,3 +1,5 @@
+import type { PackageCode } from "../billing/catalog.ts";
+
 export type UserRole = "user" | "admin";
 export type UserStatus = "active" | "disabled";
 
@@ -42,10 +44,10 @@ export type PaymentOrder = {
   id: string;
   userId: string;
   walletId: string;
-  packageCode: "single" | "ten" | "thirty";
+  packageCode: PackageCode;
   points: number;
   amountCents: number;
-  currency: "CNY";
+  currency: string;
   provider: string;
   providerOrderId: string | null;
   providerTransactionId: string | null;

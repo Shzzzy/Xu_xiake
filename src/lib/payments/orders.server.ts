@@ -11,18 +11,11 @@ export type PaymentSql = {
   transaction<T>(fn: (tx: PaymentSql) => Promise<T>): Promise<T>;
 };
 
-export type CreatePaymentOrderOptions = {
-  /** 客户端生成并重复提交的稳定幂等键。 */
-  clientRequestId?: string;
-  /** 兼容调用方使用 requestId 命名。 */
-  requestId?: string;
-};
-
 export type PaymentOrdersService = {
   createPaymentOrder(
     userId: string,
     packageCode: PackageCode,
-    options?: CreatePaymentOrderOptions,
+    clientRequestId: string,
   ): Promise<PaymentOrder>;
   getPaymentOrder(userId: string, orderId: string): Promise<PaymentOrder>;
   markOrderPaid(orderId: string, event: PaymentWebhookEvent): Promise<void>;
@@ -78,6 +71,9 @@ export class PaymentProviderConflictError extends Error {
   }
 }
 
+/** provider 创建租约时长：并发请求在这个窗口内只能有一个调用外部支付服务商。 */
+export const PROVIDER_CREATION_LEASE_MS = 30_000;
+
 function toIsoString(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   return new Date(String(value)).toISOString();
@@ -112,7 +108,7 @@ function mapPaymentOrder(row: Row): PaymentOrder {
     packageCode: String(row.package_code) as PaymentOrder["packageCode"],
     points: Number(row.points),
     amountCents: Number(row.amount_cents),
-    currency: "CNY",
+    currency: String(row.currency),
     provider: String(row.provider),
     providerOrderId: nullableString(row.provider_order_id),
     providerTransactionId: nullableString(row.provider_transaction_id),
@@ -133,15 +129,14 @@ function assertPackageCode(value: string): asserts value is PackageCode {
   }
 }
 
-function normalizeClientRequestId(options: CreatePaymentOrderOptions): string | null {
-  const clientRequestId = options.clientRequestId?.trim() || null;
-  const requestId = options.requestId?.trim() || null;
-  if (clientRequestId && requestId && clientRequestId !== requestId) {
-    throw new PaymentIdempotencyConflictError("clientRequestId 与 requestId 不一致");
+function normalizeClientRequestId(clientRequestId: string): string {
+  if (typeof clientRequestId !== "string") {
+    throw new PaymentIdempotencyConflictError("缺少 clientRequestId");
   }
-  const value = clientRequestId ?? requestId;
-  if (value && value.length > 128) {
-    throw new Error("clientRequestId 不能超过 128 个字符");
+  const value = clientRequestId.trim();
+  if (!value) throw new PaymentIdempotencyConflictError("缺少 clientRequestId");
+  if (value.length > 128) {
+    throw new PaymentIdempotencyConflictError("clientRequestId 不能超过 128 个字符");
   }
   return value;
 }
@@ -153,6 +148,15 @@ function buildStableOrderId(userId: string, clientRequestId: string): string {
     .digest("hex")
     .slice(0, 32);
   return `payment_${digest}`;
+}
+
+function isCreationLeaseActive(row: Row, nowMs: number): boolean {
+  const token = row.provider_creation_token;
+  const startedAt = row.provider_creation_started_at;
+  if (token == null || startedAt == null) return false;
+  const startedMs = new Date(String(startedAt)).getTime();
+  if (!Number.isFinite(startedMs)) return true;
+  return startedMs + PROVIDER_CREATION_LEASE_MS > nowMs;
 }
 
 function assertOrderMatches(
@@ -178,20 +182,36 @@ export function createPaymentOrdersService(
 ): PaymentOrdersService {
   const credits = createCreditsService(sql);
 
-  async function selectOrder(tx: PaymentSql, orderId: string): Promise<Row | null> {
-    const rows = await tx.query<Row>("select * from payment_orders where id = $1", [orderId]);
+  async function selectOrderForUpdate(tx: PaymentSql, orderId: string): Promise<Row | null> {
+    const rows = await tx.query<Row>("select * from payment_orders where id = $1 for update", [
+      orderId,
+    ]);
     return rows[0] ?? null;
+  }
+
+  async function clearCreationLease(orderId: string, token: string): Promise<void> {
+    await sql.query(
+      `update payment_orders
+       set provider_creation_token = null,
+           provider_creation_started_at = null,
+           updated_at = now()
+       where id = $1 and provider_creation_token = $2`,
+      [orderId, token],
+    );
   }
 
   async function createPaymentOrder(
     userId: string,
     packageCode: PackageCode,
-    options: CreatePaymentOrderOptions = {},
+    clientRequestId: string,
   ): Promise<PaymentOrder> {
     assertPackageCode(packageCode);
     const item = resolvePackage(packageCode);
-    const clientRequestId = normalizeClientRequestId(options);
-    const orderId = clientRequestId ? buildStableOrderId(userId, clientRequestId) : randomUUID();
+    const normalizedRequestId = normalizeClientRequestId(clientRequestId);
+    const orderId = buildStableOrderId(userId, normalizedRequestId);
+    const nowMs = now().getTime();
+    const leaseStartedAt = new Date(nowMs).toISOString();
+    const expiresAt = new Date(nowMs + 30 * 60_000).toISOString();
 
     const prepared = await sql.transaction(async (tx) => {
       const users = await tx.query<{ id: string; status: string }>(
@@ -202,92 +222,112 @@ export function createPaymentOrdersService(
       if (!user) throw new PaymentUserNotFoundError();
       if (user.status !== "active") throw new PaymentAccountDisabledError();
 
-      const existing = await selectOrder(tx, orderId);
-      if (existing) {
-        assertOrderMatches(existing, userId, packageCode, item);
-        return {
-          row: existing,
-          needsProvider: existing.provider_order_id == null,
-        };
+      let order = await selectOrderForUpdate(tx, orderId);
+      if (!order) {
+        const wallet = await createCreditsService(tx).ensureWallet(userId);
+        const creationToken = randomUUID();
+        const inserted = await tx.query<Row>(
+          `insert into payment_orders (
+             id, user_id, wallet_id, package_code, points, amount_cents, currency,
+             provider, provider_order_id, status, expires_at, client_request_id,
+             provider_creation_token, provider_creation_started_at
+           ) values ($1,$2,$3,$4,$5,$6,'CNY',$7,null,'created',$8,$9,$10,$11)
+           on conflict (id) do nothing
+           returning *`,
+          [
+            orderId,
+            userId,
+            wallet.id,
+            item.code,
+            item.points,
+            item.amountCents,
+            provider.id,
+            expiresAt,
+            normalizedRequestId,
+            creationToken,
+            leaseStartedAt,
+          ],
+        );
+        if (inserted[0]) return { row: inserted[0], creationToken };
+        order = await selectOrderForUpdate(tx, orderId);
       }
 
-      const wallet = await createCreditsService(tx).ensureWallet(userId);
-      const expiresAt = new Date(now().getTime() + 30 * 60_000).toISOString();
-      const inserted = await tx.query<Row>(
-        `insert into payment_orders (
-           id, user_id, wallet_id, package_code, points, amount_cents, currency,
-           provider, provider_order_id, status, expires_at, client_request_id
-         ) values ($1,$2,$3,$4,$5,$6,'CNY',$7,null,'created',$8,$9)
-         on conflict (id) do nothing
-         returning *`,
-        [
-          orderId,
-          userId,
-          wallet.id,
-          item.code,
-          item.points,
-          item.amountCents,
-          provider.id,
-          expiresAt,
-          clientRequestId,
-        ],
-      );
-      if (inserted[0]) return { row: inserted[0], needsProvider: true };
+      if (!order) throw new Error("支付订单创建失败");
+      assertOrderMatches(order, userId, packageCode, item);
 
-      const concurrent = await selectOrder(tx, orderId);
-      if (!concurrent) throw new Error("支付订单创建失败");
-      assertOrderMatches(concurrent, userId, packageCode, item);
-      return {
-        row: concurrent,
-        needsProvider: concurrent.provider_order_id == null,
-      };
-    });
+      if (order.provider_order_id != null) {
+        return { row: order, creationToken: null };
+      }
+      if (isCreationLeaseActive(order, nowMs)) {
+        return { row: order, creationToken: null };
+      }
 
-    if (!prepared.needsProvider) return mapPaymentOrder(prepared.row);
-
-    const payment = await provider.createPayment({
-      orderId,
-      amountCents: item.amountCents,
-      description: `${item.points} 次旅行规划点数`,
-    });
-    if (payment.provider !== provider.id) {
-      throw new PaymentProviderConflictError("支付服务商返回的 provider 标识不一致");
-    }
-    if (!payment.providerOrderId.trim()) {
-      throw new PaymentProviderConflictError("支付服务商未返回支付单号");
-    }
-
-    const updated = await sql.transaction(async (tx) => {
-      const rows = await tx.query<Row>(
+      const creationToken = randomUUID();
+      const updated = await tx.query<Row>(
         `update payment_orders
-         set provider_order_id = $2,
-             provider_redirect_url = $3,
-             provider_payload = $4::jsonb,
+         set provider_creation_token = $2,
+             provider_creation_started_at = $3,
              updated_at = now()
          where id = $1
-           and user_id = $5
-           and provider_order_id is null
          returning *`,
-        [
-          orderId,
-          payment.providerOrderId,
-          payment.redirectUrl,
-          JSON.stringify(payment.payload),
-          userId,
-        ],
+        [orderId, creationToken, leaseStartedAt],
       );
-      if (rows[0]) return rows[0];
-
-      const current = await selectOrder(tx, orderId);
-      if (!current) throw new PaymentOrderNotFoundError();
-      assertOrderMatches(current, userId, packageCode, item);
-      if (String(current.provider_order_id) !== payment.providerOrderId) {
-        throw new PaymentProviderConflictError();
-      }
-      return current;
+      if (!updated[0]) throw new Error("支付服务商创建租约获取失败");
+      return { row: updated[0], creationToken };
     });
 
-    return mapPaymentOrder(updated);
+    if (!prepared.creationToken) return mapPaymentOrder(prepared.row);
+
+    const creationToken = prepared.creationToken;
+    try {
+      const payment = await provider.createPayment({
+        orderId,
+        amountCents: item.amountCents,
+        description: `${item.points} 次旅行规划点数`,
+      });
+      if (payment.provider !== provider.id) {
+        throw new PaymentProviderConflictError("支付服务商返回的 provider 标识不一致");
+      }
+      if (!payment.providerOrderId.trim()) {
+        throw new PaymentProviderConflictError("支付服务商未返回支付单号");
+      }
+
+      const updated = await sql.transaction(async (tx) => {
+        const rows = await tx.query<Row>(
+          `update payment_orders
+           set provider_order_id = $2,
+               provider_redirect_url = $3,
+               provider_payload = $4::jsonb,
+               provider_creation_token = null,
+               provider_creation_started_at = null,
+               updated_at = now()
+           where id = $1
+             and user_id = $5
+             and provider_creation_token = $6
+           returning *`,
+          [
+            orderId,
+            payment.providerOrderId,
+            payment.redirectUrl,
+            JSON.stringify(payment.payload),
+            userId,
+            creationToken,
+          ],
+        );
+        if (rows[0]) return rows[0];
+
+        const current = await selectOrderForUpdate(tx, orderId);
+        if (!current) throw new PaymentOrderNotFoundError();
+        assertOrderMatches(current, userId, packageCode, item);
+        if (String(current.provider_order_id) === payment.providerOrderId) return current;
+        throw new PaymentProviderConflictError("支付服务商创建租约已失效");
+      });
+
+      return mapPaymentOrder(updated);
+    } catch (error) {
+      await clearCreationLease(orderId, creationToken).catch(() => undefined);
+      throw error;
+    }
   }
 
   async function getPaymentOrder(userId: string, orderId: string): Promise<PaymentOrder> {
@@ -366,9 +406,9 @@ async function getDefaultService(): Promise<PaymentOrdersService> {
 export async function createPaymentOrder(
   userId: string,
   packageCode: PackageCode,
-  options: CreatePaymentOrderOptions = {},
+  clientRequestId: string,
 ): Promise<PaymentOrder> {
-  return (await getDefaultService()).createPaymentOrder(userId, packageCode, options);
+  return (await getDefaultService()).createPaymentOrder(userId, packageCode, clientRequestId);
 }
 
 export async function getPaymentOrder(userId: string, orderId: string): Promise<PaymentOrder> {

@@ -12,6 +12,7 @@ const migrationNames = [
   "0005_username_auth.sql",
   "0006_credit_reservation_idempotency.sql",
   "0007_payment_order_idempotency.sql",
+  "0008_provider_creation_lease.sql",
 ] as const;
 
 const commercialTables = [
@@ -149,6 +150,26 @@ test("username migration creates Better Auth user columns and enforces uniquenes
          '13800138000', '13800138000'
        )`,
       /user_username_unique_idx|duplicate key|unique constraint/i,
+    );
+  } finally {
+    await pg.close();
+  }
+});
+
+test("payment orders include provider creation lease columns", async () => {
+  const pg = await createMigratedDatabase();
+  try {
+    const columns = await pg.query<{ column_name: string }>(
+      `select column_name
+         from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'payment_orders'
+          and column_name in ('provider_creation_token', 'provider_creation_started_at')
+        order by column_name`,
+    );
+    assert.deepEqual(
+      columns.rows.map((row) => row.column_name),
+      ["provider_creation_started_at", "provider_creation_token"],
     );
   } finally {
     await pg.close();

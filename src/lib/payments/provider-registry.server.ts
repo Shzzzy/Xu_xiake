@@ -8,16 +8,20 @@ type PaymentEnv = {
 
 /**
  * 根据运行环境解析支付服务商。
- * 非生产环境默认 test；生产环境永远不允许回退到 test。
+ * 只有明确处于测试或开发环境时才允许 test provider，其他环境一律 fail closed。
  */
 export function resolvePaymentProvider(env: PaymentEnv = process.env): PaymentProvider {
-  const production = env.NODE_ENV === "production";
+  const nodeEnv = env.NODE_ENV?.trim();
   const configured = env.PAYMENT_PROVIDER?.trim();
+  const testEnvironment = nodeEnv === "test" || nodeEnv === "development";
 
-  if (production) {
-    if (!configured) throw new Error("生产环境必须配置 PAYMENT_PROVIDER");
-    if (configured === "test") throw new Error("生产环境禁止使用 test 支付服务商");
-    throw new Error(`暂不支持支付服务商：${configured}`);
+  if (!testEnvironment) {
+    if (nodeEnv === "production") {
+      if (!configured) throw new Error("生产环境必须配置 PAYMENT_PROVIDER");
+      if (configured === "test") throw new Error("生产环境禁止使用 test 支付服务商");
+      throw new Error(`暂不支持支付服务商：${configured}`);
+    }
+    throw new Error("仅 NODE_ENV=test 或 development 允许使用 test 支付服务商");
   }
 
   if (!configured || configured === "test") return createTestPaymentProvider();
