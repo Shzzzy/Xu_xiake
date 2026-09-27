@@ -15,12 +15,14 @@ alter table "user" add constraint "user_status_check" check ("status" in ('activ
 create table if not exists credit_wallets (
   id text primary key,
   user_id text not null unique references "user" ("id") on delete cascade,
-  balance integer not null default 0 check (balance >= 0),
-  reserved integer not null default 0 check (reserved >= 0 and reserved <= balance),
+  balance integer not null default 0,
+  reserved integer not null default 0,
   free_trial_claimed boolean not null default false,
   version integer not null default 0,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint credit_wallets_balance_check check (balance >= 0),
+  constraint credit_wallets_reserved_check check (reserved >= 0 and reserved <= balance)
 );
 
 create table if not exists credit_ledger (
@@ -33,7 +35,18 @@ create table if not exists credit_ledger (
   plan_id text,
   operator_user_id text,
   note text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint credit_ledger_reason_check check (
+    reason in (
+      'free_trial',
+      'purchase',
+      'generation',
+      'refund',
+      'admin_adjustment',
+      'expiration',
+      'migration'
+    )
+  )
 );
 
 create index if not exists credit_ledger_wallet_created_idx
@@ -55,7 +68,7 @@ create index if not exists credit_reservations_wallet_status_idx
 create table if not exists payment_orders (
   id text primary key,
   user_id text not null references "user" ("id") on delete cascade,
-  wallet_id text not null references credit_wallets (id) on delete cascade,
+  wallet_id text not null,
   package_code text not null,
   points integer not null check (points > 0),
   amount_cents integer not null check (amount_cents > 0),
@@ -76,7 +89,7 @@ create index if not exists payment_orders_user_created_idx
 create table if not exists payment_events (
   id text primary key,
   provider text not null,
-  provider_event_id text not null unique,
+  provider_event_id text not null,
   order_id text,
   payload jsonb not null,
   status text not null,
@@ -102,8 +115,8 @@ create index if not exists travel_plans_user_created_idx
 
 create table if not exists plan_shares (
   id text primary key,
-  plan_id text not null references travel_plans (id) on delete cascade,
-  owner_user_id text not null references "user" ("id") on delete cascade,
+  plan_id text not null,
+  owner_user_id text not null,
   token_hash text not null unique,
   status text not null check (status in ('active', 'revoked', 'expired')),
   expires_at timestamptz,
@@ -120,3 +133,67 @@ create table if not exists admin_audit_logs (
   details jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
+
+-- 所有商业表建完后，再补充跨表唯一约束和外键，避免前向依赖。
+alter table credit_wallets
+  add constraint credit_wallets_id_user_id_key unique (id, user_id);
+
+alter table travel_plans
+  add constraint travel_plans_id_user_id_key unique (id, user_id);
+
+alter table payment_events
+  drop constraint if exists payment_events_provider_event_id_key;
+alter table payment_events
+  add constraint payment_events_provider_event_id_key unique (provider, provider_event_id);
+
+alter table payment_orders
+  drop constraint if exists payment_orders_wallet_id_fkey;
+alter table payment_orders
+  add constraint payment_orders_wallet_owner_fkey
+  foreign key (wallet_id, user_id) references credit_wallets (id, user_id)
+  on delete cascade;
+
+alter table credit_ledger
+  add constraint credit_ledger_order_id_fkey
+  foreign key (order_id) references payment_orders (id) on delete set null;
+alter table credit_ledger
+  add constraint credit_ledger_plan_id_fkey
+  foreign key (plan_id) references travel_plans (id) on delete set null;
+alter table credit_ledger
+  add constraint credit_ledger_operator_user_id_fkey
+  foreign key (operator_user_id) references "user" ("id") on delete set null;
+
+alter table credit_reservations
+  add constraint credit_reservations_plan_id_fkey
+  foreign key (plan_id) references travel_plans (id) on delete set null;
+
+alter table payment_events
+  add constraint payment_events_order_id_fkey
+  foreign key (order_id) references payment_orders (id) on delete set null;
+
+alter table plan_shares
+  drop constraint if exists plan_shares_plan_id_fkey;
+alter table plan_shares
+  drop constraint if exists plan_shares_owner_user_id_fkey;
+alter table plan_shares
+  add constraint plan_shares_plan_owner_fkey
+  foreign key (plan_id, owner_user_id) references travel_plans (id, user_id)
+  on delete cascade;
+
+alter table admin_audit_logs
+  add constraint admin_audit_logs_target_user_id_fkey
+  foreign key (target_user_id) references "user" ("id") on delete set null;
+alter table admin_audit_logs
+  add constraint admin_audit_logs_target_order_id_fkey
+  foreign key (target_order_id) references payment_orders (id) on delete set null;
+alter table admin_audit_logs
+  add constraint admin_audit_logs_target_plan_id_fkey
+  foreign key (target_plan_id) references travel_plans (id) on delete set null;
+
+create unique index if not exists payment_orders_provider_order_id_unique_idx
+  on payment_orders (provider, provider_order_id)
+  where provider_order_id is not null;
+
+create unique index if not exists payment_orders_provider_transaction_id_unique_idx
+  on payment_orders (provider, provider_transaction_id)
+  where provider_transaction_id is not null;
