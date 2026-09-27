@@ -9,6 +9,7 @@ const migrationNames = [
   "0002_discovered_places.sql",
   "0003_clear_discovered_route_context.sql",
   "0004_commercial_accounts.sql",
+  "0005_username_auth.sql",
 ] as const;
 
 const commercialTables = [
@@ -44,6 +45,7 @@ const requiredConstraints = [
 const requiredIndexes = [
   "payment_orders_provider_order_id_unique_idx",
   "payment_orders_provider_transaction_id_unique_idx",
+  "user_username_unique_idx",
 ] as const;
 
 async function createMigratedDatabase() {
@@ -79,11 +81,7 @@ async function seedCommercialFixtures(pg: PGlite) {
   `);
 }
 
-async function expectFailure(
-  pg: PGlite,
-  statement: string,
-  pattern: RegExp,
-) {
+async function expectFailure(pg: PGlite, statement: string, pattern: RegExp) {
   await assert.rejects(() => pg.exec(statement), pattern);
 }
 
@@ -97,6 +95,57 @@ test("commercial migrations create all commercial tables", async () => {
     for (const table of commercialTables) {
       assert.ok(names.includes(table), `缺少商业表：${table}`);
     }
+  } finally {
+    await pg.close();
+  }
+});
+
+test("username migration creates Better Auth user columns and enforces uniqueness", async () => {
+  const pg = await createMigratedDatabase();
+  try {
+    const columns = await pg.query<{ column_name: string }>(
+      `select column_name
+         from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'user'
+          and column_name in ('username', 'displayUsername')
+        order by column_name`,
+    );
+    assert.deepEqual(
+      columns.rows.map((row) => row.column_name),
+      ["displayUsername", "username"],
+    );
+
+    const indexes = await pg.query<{ indexdef: string }>(
+      `select indexdef
+         from pg_indexes
+        where schemaname = 'public'
+          and indexname = 'user_username_unique_idx'`,
+    );
+    assert.equal(indexes.rows.length, 1, "缺少用户名部分唯一索引");
+    assert.match(indexes.rows[0].indexdef, /unique/i);
+    assert.match(indexes.rows[0].indexdef, /username/i);
+    assert.match(indexes.rows[0].indexdef, /where .*username.*is not null/i);
+
+    await pg.exec(`
+      insert into "user" (
+        "id", "name", "email", "emailVerified", "username", "displayUsername"
+      ) values (
+        'user-username-1', '用户甲', 'username-a@example.com', true,
+        '13800138000', '13800138000'
+      );
+    `);
+
+    await expectFailure(
+      pg,
+      `insert into "user" (
+         "id", "name", "email", "emailVerified", "username", "displayUsername"
+       ) values (
+         'user-username-2', '用户乙', 'username-b@example.com', true,
+         '13800138000', '13800138000'
+       )`,
+      /user_username_unique_idx|duplicate key|unique constraint/i,
+    );
   } finally {
     await pg.close();
   }
