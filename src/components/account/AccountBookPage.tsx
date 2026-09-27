@@ -276,3 +276,91 @@ export function AccountBookPage({ user, wallet, ledger }: AccountBookPageProps) 
     </main>
   );
 }
+
+export const ACCOUNT_SIGN_IN_HREF = "/auth?returnTo=/account";
+
+export type AccountBookSummary = {
+  userId: string;
+  wallet: AccountBookWallet;
+  ledger: AccountBookLedgerEntry[];
+};
+
+export type AccountRouteViewProps = {
+  user: AccountBookUser | null;
+  isPending: boolean;
+  summary: AccountBookSummary | null;
+  loading: boolean;
+  error: string | null;
+};
+
+/** 识别钱包读取失败是否属于登录失效，供路由决定跳转还是展示普通错误。 */
+export function getWalletLoadErrorAction(error: unknown): "redirect" | "message" {
+  if (error && typeof error === "object" && "status" in error) {
+    if ((error as { status?: unknown }).status === 401) return "redirect";
+  }
+  if (error instanceof Error && error.message === "Unauthorized") return "redirect";
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    (error as { message?: unknown }).message === "Unauthorized"
+  ) {
+    return "redirect";
+  }
+  return "message";
+}
+
+function AccountRouteState({
+  message,
+  tone = "neutral",
+}: {
+  message: string;
+  tone?: "neutral" | "error";
+}) {
+  return (
+    <main className="grid min-h-dvh place-items-center bg-bg px-4 text-fg">
+      <div
+        className={`w-full max-w-md rounded-[24px] border bg-surface p-7 text-center shadow-soft ${
+          tone === "error" ? "border-warn/25" : "border-border"
+        }`}
+        role={tone === "error" ? "alert" : "status"}
+      >
+        <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-primary text-lg font-bold text-primary-fg">
+          徐
+        </span>
+        <p className="mt-4 text-sm leading-6 text-muted">{message}</p>
+      </div>
+    </main>
+  );
+}
+
+/**
+ * 将钱包摘要绑定到用户 id。用户切换时，旧摘要会被视为无效并继续显示加载态，
+ * 从而避免把上一个账号的余额或流水渲染给下一个账号。
+ */
+export function AccountBookRouteView({
+  user,
+  isPending,
+  summary,
+  loading,
+  error,
+}: AccountRouteViewProps) {
+  if (isPending) {
+    return <AccountRouteState message="正在确认真实行程账号…" />;
+  }
+
+  const activeSummary = user && summary?.userId === user.id ? summary : null;
+  if (loading || (summary && !activeSummary)) {
+    return <AccountRouteState message="正在整理你的行旅点册…" />;
+  }
+  if (error && !activeSummary) {
+    return <AccountRouteState message="暂时无法加载账号信息，请稍后重试。" tone="error" />;
+  }
+  if (!user || !activeSummary) {
+    return <AccountRouteState message="钱包正在准备中，请稍后刷新。" />;
+  }
+
+  return (
+    <AccountBookPage user={user} wallet={activeSummary.wallet} ledger={activeSummary.ledger} />
+  );
+}
