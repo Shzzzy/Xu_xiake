@@ -13,6 +13,7 @@ const migrationNames = [
   "0006_credit_reservation_idempotency.sql",
   "0007_payment_order_idempotency.sql",
   "0008_provider_creation_lease.sql",
+  "0009_payment_credits_applied.sql",
 ] as const;
 
 const commercialTables = [
@@ -48,6 +49,7 @@ const requiredConstraints = [
 const requiredIndexes = [
   "payment_orders_provider_order_id_unique_idx",
   "payment_orders_provider_transaction_id_unique_idx",
+  "credit_ledger_purchase_order_unique_idx",
   "user_username_unique_idx",
   "credit_reservations_wallet_plan_unique_idx",
   "payment_orders_user_client_request_unique_idx",
@@ -156,7 +158,7 @@ test("username migration creates Better Auth user columns and enforces uniquenes
   }
 });
 
-test("payment orders include provider creation lease columns", async () => {
+test("payment orders include provider creation lease and credit application columns", async () => {
   const pg = await createMigratedDatabase();
   try {
     const columns = await pg.query<{ column_name: string }>(
@@ -164,12 +166,12 @@ test("payment orders include provider creation lease columns", async () => {
          from information_schema.columns
         where table_schema = 'public'
           and table_name = 'payment_orders'
-          and column_name in ('provider_creation_token', 'provider_creation_started_at')
+          and column_name in ('credits_applied_at', 'provider_creation_token', 'provider_creation_started_at')
         order by column_name`,
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      ["provider_creation_started_at", "provider_creation_token"],
+      ["credits_applied_at", "provider_creation_started_at", "provider_creation_token"],
     );
   } finally {
     await pg.close();
@@ -356,6 +358,40 @@ test("plan shares require the share owner to match the plan owner", async () => 
       insert into plan_shares (id, plan_id, owner_user_id, token_hash, status)
       values ('share-valid', 'plan-a', 'user-a', 'token-valid', 'active');
     `);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("purchase ledger is unique per payment order", async () => {
+  const pg = await createMigratedDatabase();
+  try {
+    await seedCommercialFixtures(pg);
+    await pg.exec(`
+      insert into payment_orders (
+        id, user_id, wallet_id, package_code, points, amount_cents, provider,
+        provider_order_id, status, expires_at
+      ) values (
+        'order-purchase-unique', 'user-a', 'wallet-a', 'single', 1, 99, 'wechat',
+        'provider-purchase-unique', 'paid', now() + interval '1 day'
+      );
+
+      insert into credit_ledger (
+        id, wallet_id, delta, balance_after, reason, order_id
+      ) values (
+        'ledger-purchase-unique-1', 'wallet-a', 1, 11, 'purchase', 'order-purchase-unique'
+      );
+    `);
+
+    await expectFailure(
+      pg,
+      `insert into credit_ledger (
+         id, wallet_id, delta, balance_after, reason, order_id
+       ) values (
+         'ledger-purchase-unique-2', 'wallet-a', 1, 12, 'purchase', 'order-purchase-unique'
+       )`,
+      /credit_ledger_purchase_order_unique_idx|duplicate key|unique constraint/i,
+    );
   } finally {
     await pg.close();
   }

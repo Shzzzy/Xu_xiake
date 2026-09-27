@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { PACKAGE_CATALOG, resolvePackage, type PackageCode } from "../billing/catalog.ts";
 import { createCreditsService } from "../credits.server.ts";
 import type { PaymentOrder } from "../credits/types.ts";
+import { applyPaidOrderCredits } from "./credit-application.server.ts";
 import type { PaymentProvider, PaymentWebhookEvent } from "./provider.ts";
 
 type Row = Record<string, unknown>;
@@ -114,6 +115,7 @@ function mapPaymentOrder(row: Row): PaymentOrder {
     providerTransactionId: nullableString(row.provider_transaction_id),
     status: String(row.status) as PaymentOrder["status"],
     paidAt: row.paid_at == null ? null : toIsoString(row.paid_at),
+    creditsAppliedAt: row.credits_applied_at == null ? null : toIsoString(row.credits_applied_at),
     expiresAt: toIsoString(row.expires_at),
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
@@ -340,6 +342,7 @@ export function createPaymentOrdersService(
     return mapPaymentOrder(row);
   }
 
+  /** @deprecated 正式支付请走 webhook；保留给主动查单，但同样必须完成点数入账。 */
   async function markOrderPaid(orderId: string, event: PaymentWebhookEvent): Promise<void> {
     if (event.status !== "paid") throw new Error("支付事件状态不是 paid");
 
@@ -362,28 +365,33 @@ export function createPaymentOrdersService(
         throw new PaymentProviderConflictError("支付服务商订单号不匹配");
       }
 
-      if (String(order.status) === "paid") {
-        if (String(order.provider_transaction_id) !== event.providerTransactionId) {
-          throw new PaymentProviderConflictError("支付流水号冲突");
-        }
-        return;
-      }
-      if (!["created", "pending"].includes(String(order.status))) {
+      const orderStatus = String(order.status);
+      if (!["created", "pending", "paid"].includes(orderStatus)) {
         throw new PaymentProviderConflictError("当前订单状态不能标记为已支付");
       }
+      if (
+        orderStatus === "paid" &&
+        order.provider_transaction_id != null &&
+        String(order.provider_transaction_id) !== event.providerTransactionId
+      ) {
+        throw new PaymentProviderConflictError("支付流水号冲突");
+      }
 
-      await tx.query(
-        `update payment_orders
-         set status = 'paid',
-             provider_transaction_id = $2,
-             paid_at = now(),
-             updated_at = now()
-         where id = $1`,
-        [orderId, event.providerTransactionId],
+      const transactionConflict = await tx.query<{ id: string }>(
+        `select id from payment_orders
+         where provider = $1
+           and provider_transaction_id = $2
+           and id <> $3
+         limit 1`,
+        [event.provider, event.providerTransactionId, orderId],
       );
+      if (transactionConflict[0]) {
+        throw new PaymentProviderConflictError("支付流水号冲突");
+      }
+
+      await applyPaidOrderCredits(tx, order, event);
     });
   }
-
   return { createPaymentOrder, getPaymentOrder, markOrderPaid };
 }
 

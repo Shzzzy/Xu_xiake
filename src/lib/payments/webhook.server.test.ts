@@ -16,6 +16,7 @@ const migrationNames = [
   "0006_credit_reservation_idempotency.sql",
   "0007_payment_order_idempotency.sql",
   "0008_provider_creation_lease.sql",
+  "0009_payment_credits_applied.sql",
 ] as const;
 
 type TestSql = {
@@ -237,10 +238,12 @@ test("amount and currency mismatches are rejected without credits", async () => 
     assert.deepEqual(await service.processPaymentWebhook(wrongAmount), {
       processed: false,
       reason: "amount_or_currency_mismatch",
+      rejected: true,
     });
     assert.deepEqual(await service.processPaymentWebhook(wrongCurrency), {
       processed: false,
       reason: "amount_or_currency_mismatch",
+      rejected: true,
     });
 
     assert.equal(await walletBalance(sql, order.walletId), 0);
@@ -269,7 +272,7 @@ test("amount and currency mismatches are rejected without credits", async () => 
   }
 });
 
-test("unknown provider order is recorded and rejected without credits", async () => {
+test("unknown provider order is recorded as retryable without credits", async () => {
   const { pg, sql } = await createTestContext();
   try {
     const event: PaymentWebhookEvent = {
@@ -285,14 +288,14 @@ test("unknown provider order is recorded and rejected without credits", async ()
 
     const result = await createPaymentWebhookService(sql).processPaymentWebhook(event);
 
-    assert.deepEqual(result, { processed: false, reason: "unknown_order" });
+    assert.deepEqual(result, { processed: false, reason: "unknown_order", retryable: true });
     const events = await sql.query<{ order_id: string | null; status: string }>(
       `select order_id, status from payment_events
         where provider = $1 and provider_event_id = $2`,
       [event.provider, event.providerEventId],
     );
     assert.equal(events[0]?.order_id, null);
-    assert.equal(events[0]?.status, "rejected_unknown_order");
+    assert.equal(events[0]?.status, "retryable_unknown_order");
     const ledger = await sql.query<{ count: number }>(
       "select count(*)::int as count from credit_ledger",
     );
@@ -400,7 +403,7 @@ test("failed and refunded events are preserved but explicitly not processed", as
     );
     assert.deepEqual(
       events.map((row) => row.status),
-      ["unsupported", "unsupported"],
+      ["unsupported_failed", "unsupported_refunded"],
     );
   } finally {
     await pg.close();
@@ -482,7 +485,7 @@ test("webhook handler verifies then processes a valid event", async () => {
   assert.deepEqual(await response.json(), { ok: true, processed: true });
 });
 
-test("provider mismatch is recorded and rejected without credits", async () => {
+test("provider mismatch is recorded as retryable without credits", async () => {
   const { pg, sql } = await createTestContext();
   try {
     const order = await createPendingOrder(sql);
@@ -493,7 +496,7 @@ test("provider mismatch is recorded and rejected without credits", async () => {
 
     const result = await createPaymentWebhookService(sql).processPaymentWebhook(event);
 
-    assert.deepEqual(result, { processed: false, reason: "unknown_order" });
+    assert.deepEqual(result, { processed: false, reason: "unknown_order", retryable: true });
     assert.equal(await walletBalance(sql, order.walletId), 0);
     const ledger = await sql.query<{ count: number }>(
       "select count(*)::int as count from credit_ledger where order_id = $1",
@@ -506,7 +509,7 @@ test("provider mismatch is recorded and rejected without credits", async () => {
       [event.provider, event.providerEventId],
     );
     assert.equal(events[0]?.order_id, null);
-    assert.equal(events[0]?.status, "rejected_unknown_order");
+    assert.equal(events[0]?.status, "retryable_unknown_order");
   } finally {
     await pg.close();
   }
@@ -553,6 +556,304 @@ test("webhook handler returns 422 for unsupported payment event statuses", async
     ok: false,
     processed: false,
     reason: "unsupported_status",
+    rejected: true,
+  });
+});
+
+test("paid order without credits is repaired exactly once by webhook", async () => {
+  const { pg, sql } = await createTestContext();
+  try {
+    const order = await createPendingOrder(sql);
+    await sql.query(
+      `update payment_orders
+       set status = 'paid',
+           provider_transaction_id = $2,
+           paid_at = now(),
+           credits_applied_at = null
+       where id = $1`,
+      [order.orderId, "legacy-paid-transaction"],
+    );
+
+    const event = eventFor(order, {
+      providerEventId: "repair-missing-credits",
+      providerTransactionId: "legacy-paid-transaction",
+    });
+    const service = createPaymentWebhookService(sql);
+
+    assert.deepEqual(await service.processPaymentWebhook(event), { processed: true });
+    assert.equal(await walletBalance(sql, order.walletId), 10);
+
+    const ledger = await sql.query<{ count: number }>(
+      "select count(*)::int as count from credit_ledger where order_id = $1",
+      [order.orderId],
+    );
+    assert.equal(ledger[0]?.count, 1);
+
+    const orders = await sql.query<{ credits_applied_at: string | null }>(
+      "select credits_applied_at from payment_orders where id = $1",
+      [order.orderId],
+    );
+    assert.ok(orders[0]?.credits_applied_at);
+
+    assert.deepEqual(await service.processPaymentWebhook(event), {
+      processed: false,
+      reason: "duplicate_event",
+    });
+    assert.equal(await walletBalance(sql, order.walletId), 10);
+    const repeatedLedger = await sql.query<{ count: number }>(
+      "select count(*)::int as count from credit_ledger where order_id = $1",
+      [order.orderId],
+    );
+    assert.equal(repeatedLedger[0]?.count, 1);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("unknown order event is retried and processed after the order appears", async () => {
+  const { pg, sql } = await createTestContext();
+  try {
+    const event: PaymentWebhookEvent = {
+      provider: "test",
+      providerEventId: "late-order-event",
+      providerOrderId: "late-order-provider-id",
+      providerTransactionId: "late-order-transaction",
+      status: "paid",
+      amountCents: 941,
+      currency: "CNY",
+      raw: {},
+    };
+    const service = createPaymentWebhookService(sql);
+
+    assert.deepEqual(await service.processPaymentWebhook(event), {
+      processed: false,
+      reason: "unknown_order",
+      retryable: true,
+    });
+
+    const firstEvents = await sql.query<{ status: string; processed_at: string | null }>(
+      `select status, processed_at from payment_events
+        where provider = $1 and provider_event_id = $2`,
+      [event.provider, event.providerEventId],
+    );
+    assert.equal(firstEvents[0]?.status, "retryable_unknown_order");
+    assert.equal(firstEvents[0]?.processed_at, null);
+
+    const order = await createPendingOrder(sql, { providerOrderId: event.providerOrderId });
+    assert.deepEqual(await service.processPaymentWebhook(event), { processed: true });
+    assert.equal(await walletBalance(sql, order.walletId), 10);
+
+    const finalEvents = await sql.query<{ status: string; order_id: string | null }>(
+      `select status, order_id from payment_events
+        where provider = $1 and provider_event_id = $2`,
+      [event.provider, event.providerEventId],
+    );
+    assert.equal(finalEvents[0]?.status, "processed");
+    assert.equal(finalEvents[0]?.order_id, order.orderId);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("two different concurrent events for one order credit only once", async () => {
+  const { pg, sql } = await createTestContext();
+  try {
+    const order = await createPendingOrder(sql);
+    const firstEvent = eventFor(order, {
+      providerEventId: "same-order-event-1",
+      providerTransactionId: "same-order-transaction",
+    });
+    const secondEvent = eventFor(order, {
+      providerEventId: "same-order-event-2",
+      providerTransactionId: "same-order-transaction",
+    });
+    const service = createPaymentWebhookService(sql);
+
+    const results = await Promise.all([
+      service.processPaymentWebhook(firstEvent),
+      service.processPaymentWebhook(secondEvent),
+    ]);
+
+    assert.equal(results.filter((result) => result.processed).length, 1);
+    assert.equal(await walletBalance(sql, order.walletId), 10);
+    const ledger = await sql.query<{ count: number }>(
+      "select count(*)::int as count from credit_ledger where order_id = $1",
+      [order.orderId],
+    );
+    assert.equal(ledger[0]?.count, 1);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("refunded event arriving before paid prevents later credit application", async () => {
+  const { pg, sql } = await createTestContext();
+  try {
+    const order = await createPendingOrder(sql);
+    const refunded = eventFor(order, {
+      status: "refunded",
+      providerEventId: "refund-first",
+    });
+    const paid = eventFor(order, {
+      providerEventId: "paid-after-refund",
+      providerTransactionId: "paid-after-refund-transaction",
+    });
+    const service = createPaymentWebhookService(sql);
+
+    assert.deepEqual(await service.processPaymentWebhook(refunded), {
+      processed: false,
+      reason: "unsupported_status",
+      rejected: true,
+    });
+    assert.deepEqual(await service.processPaymentWebhook(paid), {
+      processed: false,
+      reason: "refunded_before_paid",
+      rejected: true,
+    });
+
+    assert.equal(await walletBalance(sql, order.walletId), 0);
+    const ledger = await sql.query<{ count: number }>(
+      "select count(*)::int as count from credit_ledger where order_id = $1",
+      [order.orderId],
+    );
+    assert.equal(ledger[0]?.count, 0);
+    const events = await sql.query<{ status: string }>(
+      "select status from payment_events where provider_event_id = $1",
+      [paid.providerEventId],
+    );
+    assert.equal(events[0]?.status, "rejected_refunded_before_paid");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("webhook handler rejects provider id mismatches before processing", async () => {
+  let processCalls = 0;
+  const event: PaymentWebhookEvent = {
+    provider: "other",
+    providerEventId: "provider-id-mismatch",
+    providerOrderId: "provider-id-mismatch-order",
+    providerTransactionId: "provider-id-mismatch-transaction",
+    status: "paid",
+    amountCents: 99,
+    currency: "CNY",
+    raw: {},
+  };
+  const provider: PaymentProvider = {
+    id: "test",
+    async createPayment() {
+      throw new Error("unused");
+    },
+    async verifyWebhook() {
+      return event;
+    },
+  };
+  const handler = createPaymentWebhookHandler({
+    provider,
+    processEvent: async () => {
+      processCalls += 1;
+      return { processed: true };
+    },
+  });
+
+  const response = await handler(
+    new Request("https://example.com/api/payments/webhook", {
+      method: "POST",
+      body: "{}",
+    }),
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal(processCalls, 0);
+  assert.deepEqual(await response.json(), { ok: false, error: "provider_mismatch" });
+});
+
+test("webhook handler returns 503 for retryable unknown orders", async () => {
+  const event: PaymentWebhookEvent = {
+    provider: "test",
+    providerEventId: "route-unknown-order",
+    providerOrderId: "route-unknown-order-provider",
+    providerTransactionId: "route-unknown-order-transaction",
+    status: "paid",
+    amountCents: 99,
+    currency: "CNY",
+    raw: {},
+  };
+  const provider: PaymentProvider = {
+    id: "test",
+    async createPayment() {
+      throw new Error("unused");
+    },
+    async verifyWebhook() {
+      return event;
+    },
+  };
+  const handler = createPaymentWebhookHandler({
+    provider,
+    processEvent: async () => ({
+      processed: false,
+      reason: "unknown_order",
+      retryable: true,
+    }),
+  });
+
+  const response = await handler(
+    new Request("https://example.com/api/payments/webhook", {
+      method: "POST",
+      body: "{}",
+    }),
+  );
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    processed: false,
+    reason: "unknown_order",
+    retryable: true,
+  });
+});
+
+test("webhook handler returns 409 for amount mismatches", async () => {
+  const event: PaymentWebhookEvent = {
+    provider: "test",
+    providerEventId: "route-amount-mismatch",
+    providerOrderId: "route-amount-mismatch-provider",
+    providerTransactionId: "route-amount-mismatch-transaction",
+    status: "paid",
+    amountCents: 98,
+    currency: "CNY",
+    raw: {},
+  };
+  const provider: PaymentProvider = {
+    id: "test",
+    async createPayment() {
+      throw new Error("unused");
+    },
+    async verifyWebhook() {
+      return event;
+    },
+  };
+  const handler = createPaymentWebhookHandler({
+    provider,
+    processEvent: async () => ({
+      processed: false,
+      reason: "amount_or_currency_mismatch",
+      rejected: true,
+    }),
+  });
+
+  const response = await handler(
+    new Request("https://example.com/api/payments/webhook", {
+      method: "POST",
+      body: "{}",
+    }),
+  );
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    processed: false,
+    reason: "amount_or_currency_mismatch",
     rejected: true,
   });
 });

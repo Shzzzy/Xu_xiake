@@ -18,6 +18,7 @@ const migrationNames = [
   "0006_credit_reservation_idempotency.sql",
   "0007_payment_order_idempotency.sql",
   "0008_provider_creation_lease.sql",
+  "0009_payment_credits_applied.sql",
 ] as const;
 
 type TestSql = {
@@ -303,7 +304,7 @@ test("invalid provider output clears the lease without writing a provider order 
   }
 });
 
-test("getPaymentOrder is scoped to its owner and markOrderPaid updates once", async () => {
+test("getPaymentOrder is scoped to its owner and markOrderPaid books credits once", async () => {
   const { pg, sql } = await createTestContext();
   try {
     const { id: userId } = await createUser(sql);
@@ -331,11 +332,17 @@ test("getPaymentOrder is scoped to its owner and markOrderPaid updates once", as
     assert.equal(paid.status, "paid");
     assert.equal(paid.providerTransactionId, event.providerTransactionId);
     assert.ok(paid.paidAt);
+    assert.ok(paid.creditsAppliedAt);
     const ledger = await sql.query<{ count: number }>(
       "select count(*)::int as count from credit_ledger where order_id = $1",
       [order.id],
     );
-    assert.equal(ledger[0]?.count, 0);
+    assert.equal(ledger[0]?.count, 1);
+    const wallets = await sql.query<{ balance: number }>(
+      "select balance from credit_wallets where id = $1",
+      [order.walletId],
+    );
+    assert.equal(Number(wallets[0]?.balance), 1);
 
     await assert.rejects(
       () => orders.markOrderPaid(order.id, { ...event, amountCents: 1 }),
@@ -382,7 +389,7 @@ test("markOrderPaid rejects duplicate provider transaction ids", async () => {
           currency: "CNY",
           raw: {},
         }),
-      /duplicate|unique constraint/i,
+      /支付流水号冲突/,
     );
     assert.equal((await orders.getPaymentOrder(userId, second.id)).status, "created");
   } finally {

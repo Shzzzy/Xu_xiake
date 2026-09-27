@@ -52,7 +52,9 @@ export type PaymentOrder = {
   providerOrderId: string | null;
   providerTransactionId: string | null;
   status: "created" | "pending" | "paid" | "failed" | "expired" | "refunded" | "closed";
+
   paidAt: string | null;
+  creditsAppliedAt: string | null;
   expiresAt: string;
   createdAt: string;
   updatedAt: string;

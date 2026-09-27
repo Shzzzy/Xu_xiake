@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { applyPaidOrderCredits } from "./credit-application.server.ts";
 import type { PaymentProvider, PaymentWebhookEvent } from "./provider.ts";
 
 type Row = Record<string, unknown>;
@@ -13,13 +14,16 @@ export type PaymentWebhookReason =
   | "unknown_order"
   | "amount_or_currency_mismatch"
   | "already_paid"
+  | "paid_transaction_conflict"
   | "order_status_conflict"
   | "duplicate_transaction"
+  | "refunded_before_paid"
   | "unsupported_status";
 
 export type PaymentWebhookResult = {
   processed: boolean;
   reason?: PaymentWebhookReason;
+  retryable?: true;
   rejected?: true;
 };
 
@@ -28,7 +32,7 @@ export type PaymentWebhookService = {
 };
 
 export type PaymentWebhookHandlerDependencies = {
-  provider: Pick<PaymentProvider, "verifyWebhook">;
+  provider: Pick<PaymentProvider, "id" | "verifyWebhook">;
   processEvent?: (event: PaymentWebhookEvent) => Promise<PaymentWebhookResult>;
 };
 
@@ -56,6 +60,58 @@ async function updateEventStatus(
   );
 }
 
+async function markEventRetryable(
+  tx: PaymentWebhookSql,
+  eventId: string,
+  orderId: string | null = null,
+): Promise<void> {
+  await tx.query(
+    `update payment_events
+     set order_id = $3, status = $2, processed_at = null
+     where id = $1`,
+    [eventId, "retryable_unknown_order", orderId],
+  );
+}
+
+/** 已有事件状态决定重试是继续处理，还是返回稳定的终态结果。 */
+function resultForExistingEvent(status: string): PaymentWebhookResult | null {
+  if (
+    status === "received" ||
+    status === "retryable_unknown_order" ||
+    status === "rejected_unknown_order" ||
+    status === "rejected_order"
+  ) {
+    return null;
+  }
+
+  if (status === "processed") return { processed: false, reason: "duplicate_event" };
+  if (status === "duplicate_paid") return { processed: false, reason: "already_paid" };
+  if (status === "rejected_mismatch") {
+    return { processed: false, reason: "amount_or_currency_mismatch", rejected: true };
+  }
+  if (status === "rejected_duplicate_transaction") {
+    return { processed: false, reason: "duplicate_transaction", rejected: true };
+  }
+  if (status === "rejected_order_status") {
+    return { processed: false, reason: "order_status_conflict", rejected: true };
+  }
+  if (status === "rejected_paid_conflict") {
+    return { processed: false, reason: "paid_transaction_conflict", rejected: true };
+  }
+  if (status === "rejected_refunded_before_paid") {
+    return { processed: false, reason: "refunded_before_paid", rejected: true };
+  }
+  if (
+    status === "unsupported" ||
+    status === "unsupported_failed" ||
+    status === "unsupported_refunded"
+  ) {
+    return { processed: false, reason: "unsupported_status", rejected: true };
+  }
+
+  return { processed: false, reason: "duplicate_event" };
+}
+
 /**
  * 使用注入的 Sql.query()/transaction() 构造支付回调服务。
  * 生产入口注入 getSql()，测试注入真实 PGlite，二者执行同一套事务逻辑。
@@ -71,19 +127,21 @@ export function createPaymentWebhookService(sql: PaymentWebhookSql): PaymentWebh
          returning id`,
         [eventId, event.provider, event.providerEventId, JSON.stringify(event.raw)],
       );
-      const insertedEventId = insertedEvents[0]?.id;
-      if (!insertedEventId) return { processed: false, reason: "duplicate_event" };
 
-      // failed/refunded 已超出本任务范围：保留事件并明确拒绝，不触碰订单和钱包。
-      if (event.status !== "paid") {
-        const relatedOrders = await tx.query<{ id: string }>(
-          `select id from payment_orders
-           where provider = $1 and provider_order_id = $2
-           limit 1`,
-          [event.provider, event.providerOrderId],
+      let eventRowId = insertedEvents[0]?.id;
+      if (!eventRowId) {
+        // 同一事件重试时，只有可重试状态才允许继续处理。
+        const existingRows = await tx.query<{ id: string; status: string }>(
+          `select id, status from payment_events
+           where provider = $1 and provider_event_id = $2
+           for update`,
+          [event.provider, event.providerEventId],
         );
-        await updateEventStatus(tx, insertedEventId, "unsupported", relatedOrders[0]?.id ?? null);
-        return { processed: false, reason: "unsupported_status", rejected: true };
+        const existing = existingRows[0];
+        if (!existing) throw new Error("支付事件幂等记录不存在");
+        const existingResult = resultForExistingEvent(String(existing.status));
+        if (existingResult) return existingResult;
+        eventRowId = existing.id;
       }
 
       const orderRows = await tx.query<Row>(
@@ -93,14 +151,23 @@ export function createPaymentWebhookService(sql: PaymentWebhookSql): PaymentWebh
         [event.provider, event.providerOrderId],
       );
       const order = orderRows[0];
+
+      // failed/refunded 已超出本任务范围：保留事件并明确拒绝，不发放点数。
+      if (event.status !== "paid") {
+        const status = event.status === "refunded" ? "unsupported_refunded" : "unsupported_failed";
+        await updateEventStatus(tx, eventRowId, status, order ? String(order.id) : null);
+        return { processed: false, reason: "unsupported_status", rejected: true };
+      }
+
       if (!order) {
-        await updateEventStatus(tx, insertedEventId, "rejected_unknown_order");
-        return { processed: false, reason: "unknown_order" };
+        // 未知订单不能在首次事件记录后永久吞掉；保留可重试审计状态。
+        await markEventRetryable(tx, eventRowId);
+        return { processed: false, reason: "unknown_order", retryable: true };
       }
 
       const orderId = String(order.id);
       await tx.query("update payment_events set order_id = $2 where id = $1", [
-        insertedEventId,
+        eventRowId,
         orderId,
       ]);
 
@@ -108,35 +175,44 @@ export function createPaymentWebhookService(sql: PaymentWebhookSql): PaymentWebh
         String(order.provider) !== event.provider ||
         String(order.provider_order_id) !== event.providerOrderId
       ) {
-        await updateEventStatus(tx, insertedEventId, "rejected_order", orderId);
-        return { processed: false, reason: "unknown_order" };
+        await markEventRetryable(tx, eventRowId);
+        return { processed: false, reason: "unknown_order", retryable: true };
       }
 
       if (
         Number(order.amount_cents) !== event.amountCents ||
         String(order.currency) !== event.currency
       ) {
-        await updateEventStatus(tx, insertedEventId, "rejected_mismatch", orderId);
-        return { processed: false, reason: "amount_or_currency_mismatch" };
+        await updateEventStatus(tx, eventRowId, "rejected_mismatch", orderId);
+        return { processed: false, reason: "amount_or_currency_mismatch", rejected: true };
+      }
+
+      // refunded 先到时，后续 paid 不得补发点数。
+      const refundRows = await tx.query<{ id: string }>(
+        `select id from payment_events
+         where order_id = $1 and status = 'unsupported_refunded'
+         order by created_at asc
+         limit 1
+         for update`,
+        [orderId],
+      );
+      if (refundRows[0]) {
+        await updateEventStatus(tx, eventRowId, "rejected_refunded_before_paid", orderId);
+        return { processed: false, reason: "refunded_before_paid", rejected: true };
       }
 
       const orderStatus = String(order.status);
       if (orderStatus === "paid") {
         const sameTransaction =
-          order.provider_transaction_id != null &&
+          order.provider_transaction_id == null ||
           String(order.provider_transaction_id) === event.providerTransactionId;
-        await updateEventStatus(
-          tx,
-          insertedEventId,
-          sameTransaction ? "duplicate_paid" : "rejected_paid_conflict",
-          orderId,
-        );
-        return { processed: false, reason: "already_paid" };
-      }
-
-      if (!["created", "pending"].includes(orderStatus)) {
-        await updateEventStatus(tx, insertedEventId, "rejected_order_status", orderId);
-        return { processed: false, reason: "order_status_conflict" };
+        if (!sameTransaction) {
+          await updateEventStatus(tx, eventRowId, "rejected_paid_conflict", orderId);
+          return { processed: false, reason: "paid_transaction_conflict", rejected: true };
+        }
+      } else if (!["created", "pending"].includes(orderStatus)) {
+        await updateEventStatus(tx, eventRowId, "rejected_order_status", orderId);
+        return { processed: false, reason: "order_status_conflict", rejected: true };
       }
 
       const transactionConflict = await tx.query<{ id: string }>(
@@ -148,55 +224,19 @@ export function createPaymentWebhookService(sql: PaymentWebhookSql): PaymentWebh
         [event.provider, event.providerTransactionId, orderId],
       );
       if (transactionConflict[0]) {
-        await updateEventStatus(tx, insertedEventId, "rejected_duplicate_transaction", orderId);
-        return { processed: false, reason: "duplicate_transaction" };
+        await updateEventStatus(tx, eventRowId, "rejected_duplicate_transaction", orderId);
+        return { processed: false, reason: "duplicate_transaction", rejected: true };
       }
 
-      const walletId = String(order.wallet_id);
-      const points = Number(order.points);
-      if (!Number.isInteger(points) || points <= 0) {
-        throw new Error("支付订单点数异常");
+      const requiresRepair = order.credits_applied_at == null;
+      const creditResult = await applyPaidOrderCredits(tx, order, event);
+      if (creditResult.applied || requiresRepair) {
+        await updateEventStatus(tx, eventRowId, "processed", orderId);
+        return { processed: creditResult.applied };
       }
 
-      // 固定顺序：先锁订单，再锁钱包；加点与流水必须依赖同一个钱包余额快照。
-      const wallets = await tx.query<Row>("select * from credit_wallets where id = $1 for update", [
-        walletId,
-      ]);
-      if (!wallets[0]) throw new Error("支付订单关联钱包不存在");
-
-      const walletUpdates = await tx.query<{ balance: number }>(
-        `update credit_wallets
-         set balance = balance + $2,
-             version = version + 1,
-             updated_at = now()
-         where id = $1
-         returning balance`,
-        [walletId, points],
-      );
-      const balanceAfter = Number(walletUpdates[0]?.balance);
-      if (!Number.isFinite(balanceAfter)) throw new Error("钱包加点失败");
-
-      await tx.query(
-        `insert into credit_ledger (
-           id, wallet_id, delta, balance_after, reason, order_id, note
-         ) values ($1, $2, $3, $4, 'purchase', $5, '购买点数')`,
-        [randomUUID(), walletId, points, balanceAfter, orderId],
-      );
-
-      const orderUpdates = await tx.query<{ id: string }>(
-        `update payment_orders
-         set status = 'paid',
-             provider_transaction_id = $2,
-             paid_at = now(),
-             updated_at = now()
-         where id = $1 and status in ('created', 'pending')
-         returning id`,
-        [orderId, event.providerTransactionId],
-      );
-      if (!orderUpdates[0]) throw new Error("支付订单状态更新失败");
-
-      await updateEventStatus(tx, insertedEventId, "processed", orderId);
-      return { processed: true };
+      await updateEventStatus(tx, eventRowId, "duplicate_paid", orderId);
+      return { processed: false, reason: "already_paid" };
     });
   }
 
@@ -243,10 +283,18 @@ export function createPaymentWebhookHandler({
       return Response.json({ ok: false, error: "invalid_webhook" }, { status: 401 });
     }
 
+    if (event.provider !== provider.id) {
+      return Response.json({ ok: false, error: "provider_mismatch" }, { status: 400 });
+    }
+
     try {
       const result = await processEvent(event);
-      if (result.reason === "unsupported_status") {
-        return Response.json({ ok: false, ...result }, { status: 422 });
+      if (result.retryable) {
+        return Response.json({ ok: false, ...result }, { status: 503 });
+      }
+      if (result.rejected) {
+        const status = result.reason === "unsupported_status" ? 422 : 409;
+        return Response.json({ ok: false, ...result }, { status });
       }
       return Response.json({ ok: true, ...result });
     } catch (error) {
