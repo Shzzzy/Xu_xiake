@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  ACCOUNT_SIGN_IN_HREF,
   AccountBookPage,
   AccountBookRouteView,
-  getWalletLoadErrorAction,
+  loadAccountSummary,
+  type AccountBookSummary,
 } from "./AccountBookPage.tsx";
 
 const baseUser = {
@@ -88,11 +88,91 @@ test("does not render the previous user's wallet while the next user loads", () 
   assert.match(html, /正在整理你的行旅点册/);
 });
 
-test("maps a 401 wallet failure to the account sign-in redirect", () => {
-  assert.equal(getWalletLoadErrorAction({ status: 401 }), "redirect");
-  assert.equal(getWalletLoadErrorAction(new Error("Unauthorized")), "redirect");
-  assert.equal(getWalletLoadErrorAction(new Error("数据库连接失败")), "message");
-  assert.equal(ACCOUNT_SIGN_IN_HREF, "/auth?returnTo=/account");
+test("loads a wallet summary bound to the current user", async () => {
+  const written = { summary: null as AccountBookSummary | null };
+
+  await loadAccountSummary({
+    userId: "u2",
+    fetchWallet: async () => ({
+      wallet: { balance: 7, reserved: 1, freeTrialClaimed: false },
+      ledger: [],
+    }),
+    onSuccess: (summary) => {
+      written.summary = summary;
+    },
+    onAuthRequired: () => {
+      throw new Error("不应要求重新登录");
+    },
+    onError: () => {
+      throw new Error("不应报告普通错误");
+    },
+  });
+
+  assert.equal(written.summary?.userId, "u2");
+  assert.equal(written.summary?.wallet.balance, 7);
+});
+
+test("401 only calls onAuthRequired and leaves the summary null", async () => {
+  let summary: Awaited<ReturnType<typeof loadAccountSummary>> = null;
+  let authRequiredCount = 0;
+  let errorCount = 0;
+
+  await loadAccountSummary({
+    userId: "u2",
+    fetchWallet: async () => {
+      throw { status: 401 };
+    },
+    onSuccess: (nextSummary) => {
+      summary = nextSummary;
+    },
+    onAuthRequired: () => {
+      authRequiredCount += 1;
+    },
+    onError: () => {
+      errorCount += 1;
+    },
+  });
+
+  assert.equal(summary, null);
+  assert.equal(authRequiredCount, 1);
+  assert.equal(errorCount, 0);
+});
+
+test("non-401 errors call onError with a friendly message", async () => {
+  let authRequiredCount = 0;
+  let errorMessage = "";
+  const logged: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args);
+  };
+
+  try {
+    await loadAccountSummary({
+      userId: "u2",
+      fetchWallet: async () => {
+        throw new Error("数据库连接失败");
+      },
+      onSuccess: () => {
+        throw new Error("不应写入摘要");
+      },
+      onAuthRequired: () => {
+        authRequiredCount += 1;
+      },
+      onError: (message) => {
+        errorMessage = message;
+      },
+    });
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(authRequiredCount, 0);
+  assert.equal(errorMessage, "暂时无法加载账号信息，请稍后重试。");
+  assert.doesNotMatch(errorMessage, /数据库连接失败/);
+  assert.equal(logged.length, 1);
+  assert.match(String(logged[0]?.[0]), /钱包加载失败/);
+  assert.match(String(logged[0]?.[1]), /数据库连接失败/);
 });
 
 test("shows a friendly message instead of an internal wallet error", () => {

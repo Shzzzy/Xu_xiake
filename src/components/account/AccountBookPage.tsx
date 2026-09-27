@@ -277,8 +277,6 @@ export function AccountBookPage({ user, wallet, ledger }: AccountBookPageProps) 
   );
 }
 
-export const ACCOUNT_SIGN_IN_HREF = "/auth?returnTo=/account";
-
 export type AccountBookSummary = {
   userId: string;
   wallet: AccountBookWallet;
@@ -294,7 +292,7 @@ export type AccountRouteViewProps = {
 };
 
 /** 识别钱包读取失败是否属于登录失效，供路由决定跳转还是展示普通错误。 */
-export function getWalletLoadErrorAction(error: unknown): "redirect" | "message" {
+function getWalletLoadErrorAction(error: unknown): "redirect" | "message" {
   if (error && typeof error === "object" && "status" in error) {
     if ((error as { status?: unknown }).status === 401) return "redirect";
   }
@@ -363,4 +361,47 @@ export function AccountBookRouteView({
   return (
     <AccountBookPage user={user} wallet={activeSummary.wallet} ledger={activeSummary.ledger} />
   );
+}
+
+export type WalletFetchResult = {
+  wallet: AccountBookWallet;
+  ledger: AccountBookLedgerEntry[];
+};
+
+export type LoadAccountSummaryOptions = {
+  userId: string;
+  fetchWallet: () => Promise<WalletFetchResult>;
+  onSuccess?: (summary: AccountBookSummary) => void;
+  onAuthRequired: () => void;
+  onError: (message: string) => void;
+};
+
+export const ACCOUNT_WALLET_ERROR_MESSAGE = "暂时无法加载账号信息，请稍后重试。";
+
+/**
+ * 账号加载控制器：成功返回绑定 userId 的摘要；401 只触发登录跳转回调；
+ * 其他错误只向调用方提供统一友好文案，并保留详细日志供排查。
+ */
+export async function loadAccountSummary({
+  userId,
+  fetchWallet,
+  onSuccess,
+  onAuthRequired,
+  onError,
+}: LoadAccountSummaryOptions): Promise<AccountBookSummary | null> {
+  try {
+    const result = await fetchWallet();
+    const summary = { ...result, userId };
+    onSuccess?.(summary);
+    return summary;
+  } catch (error: unknown) {
+    if (getWalletLoadErrorAction(error) === "redirect") {
+      onAuthRequired();
+      return null;
+    }
+
+    console.error("[account] 钱包加载失败", error);
+    onError(ACCOUNT_WALLET_ERROR_MESSAGE);
+    return null;
+  }
 }

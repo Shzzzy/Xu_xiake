@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import {
   AccountBookRouteView,
-  getWalletLoadErrorAction,
+  loadAccountSummary,
   type AccountBookSummary,
 } from "@/components/account/AccountBookPage";
 import { RedirectToSignIn } from "@/lib/auth/gates";
@@ -43,27 +43,21 @@ function AccountRoute() {
     setAuthRequiredFor(null);
     setLoading(true);
 
-    loadWallet()
-      .then((result) => {
-        if (!cancelled) {
-          setSummary({ ...result, userId });
-        }
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-
-        if (getWalletLoadErrorAction(err) === "redirect") {
-          setAuthRequiredFor(userId);
-          return;
-        }
-
-        // 只向用户展示统一文案；详细错误留在控制台供排查，避免泄露内部信息。
-        console.error("[account] 钱包加载失败", err);
-        setFailure({ userId, message: "暂时无法加载账号信息，请稍后重试。" });
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    void loadAccountSummary({
+      userId,
+      fetchWallet: () => loadWallet(),
+      onSuccess: (nextSummary) => {
+        if (!cancelled) setSummary(nextSummary);
+      },
+      onAuthRequired: () => {
+        if (!cancelled) setAuthRequiredFor(userId);
+      },
+      onError: (message) => {
+        if (!cancelled) setFailure({ userId, message });
+      },
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
 
     return () => {
       cancelled = true;
