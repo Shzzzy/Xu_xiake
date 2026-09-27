@@ -35,17 +35,18 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { getCookie } from "@tanstack/react-start/server";
 import { randomBytes } from "node:crypto";
 import { Pool } from "pg";
-import { ensureDbReady, getPglite } from "../db";
-import { emailAndPasswordEnabled } from "./email-password";
-import { GATE_PROVIDER_ID, gateIdentitySessions } from "./gate-session.server";
-import { GROK_PROVIDERS } from "./providers";
-import { pgliteDialect } from "./pglite-dialect";
+import { ensureDbReady, getPglite } from "../db.ts";
+import { emailAndPasswordEnabled } from "./email-password.ts";
+import { GATE_PROVIDER_ID, gateIdentitySessions } from "./gate-session.server.ts";
+import { GROK_PROVIDERS } from "./providers.ts";
+import { pgliteDialect } from "./pglite-dialect.ts";
+import { createPhoneSignupGuard } from "./phone-signup-guard.ts";
 import {
   GROK_ISSUER_DEFAULT,
   PREVIEW_ALLOWED_HOSTS,
   PREVIEW_CLIENT_ID,
   PREVIEW_CLIENT_SECRET,
-} from "./preview";
+} from "./preview.ts";
 
 // Kick (and share) PGLite bootstrap as soon as the auth server module loads.
 void ensureDbReady();
@@ -179,6 +180,18 @@ export const auth = betterAuth({
   secret: env("BETTER_AUTH_SECRET") ?? previewAuthSecret(),
   database,
 
+  // 公开账号额外字段：手机号参与登录，角色与状态由服务端维护，客户端不可注入。
+  user: {
+    additionalFields: {
+      phone: { type: "string", required: false, input: true },
+      role: { type: "string", required: false, defaultValue: "user", input: false },
+      status: { type: "string", required: false, defaultValue: "active", input: false },
+    },
+  },
+
+  // 防止公开邮箱注册绕过手机号账号模型；OAuth 等其他创建路径不受影响。
+  databaseHooks: createPhoneSignupGuard(),
+
   // CSRF / origin check for credentialed auth POSTs (email sign-up/sign-in, …).
   // See `trustedOrigins` construction above — must cover live preview hosts AND
   // local loopback variants, or clients get "Invalid origin".
@@ -265,4 +278,4 @@ export function readSessionToken(): string | null {
 
 // Re-exported for convenience; the array lives in the dependency-free
 // `providers.ts` so the client can import it too.
-export { GROK_PROVIDERS } from "./providers";
+export { GROK_PROVIDERS } from "./providers.ts";

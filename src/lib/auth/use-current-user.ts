@@ -5,6 +5,9 @@ export type AppUser = {
   id: string;
   displayName: string | null;
   primaryEmail: string | null;
+  phone: string | null;
+  role: "user" | "admin";
+  status: "active" | "disabled";
   profileImageUrl: string | null;
   /** True when this is the sandbox/dev fallback (auth not configured). */
   isDevFallback: boolean;
@@ -21,6 +24,9 @@ export const DEV_USER: AppUser = {
   id: "dev-user",
   displayName: "Dev User",
   primaryEmail: "dev@example.com",
+  phone: null,
+  role: "user",
+  status: "active",
   profileImageUrl: null,
   isDevFallback: true,
 };
@@ -58,13 +64,30 @@ export function useCurrentUserState(): CurrentUserState {
   if (!authEnabled) return { user: DEV_USER, isPending: false };
   // eslint-disable-next-line react-hooks/rules-of-hooks -- authEnabled is constant for the app's lifetime
   const { data, isPending } = authClient.useSession();
-  const user = data?.user;
+  type SessionUserWithFields = {
+    id: string;
+    name?: string | null;
+    email?: string | null;
+    image?: string | null;
+    phone?: unknown;
+    role?: unknown;
+    status?: unknown;
+  };
+  const user = data?.user as SessionUserWithFields | undefined;
+  const phone = typeof user?.phone === "string" ? user.phone : null;
+  const rawEmail = typeof user?.email === "string" ? user.email : null;
+  const primaryEmail = rawEmail?.endsWith("@phone.invalid") ? null : rawEmail;
+  const role = user?.role === "admin" ? "admin" : "user";
+  const status = user?.status === "disabled" ? "disabled" : "active";
   return {
     user: user
       ? {
           id: user.id,
           displayName: user.name ?? null,
-          primaryEmail: user.email ?? null,
+          primaryEmail,
+          phone,
+          role,
+          status,
           profileImageUrl: user.image ?? null,
           isDevFallback: false,
         }

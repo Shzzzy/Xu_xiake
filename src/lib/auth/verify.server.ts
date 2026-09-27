@@ -1,6 +1,6 @@
 import { getRequest } from "@tanstack/react-start/server";
 import { gateIdentityEnabled } from "./gate-identity.server";
-import { auth, authConfigured } from "./server";
+import { auth, authConfigured } from "./server.ts";
 
 /**
  * Server-side session resolution (server-only).
@@ -42,7 +42,13 @@ export class UnauthorizedError extends Error {
   }
 }
 
-export type VerifiedUser = { id: string; email: string | null };
+export type VerifiedUser = {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  role: "user" | "admin";
+  status: "active" | "disabled";
+};
 
 /**
  * Resolve the signed-in user from the current request, or `null` when auth isn't
@@ -67,7 +73,18 @@ export async function getSessionUser(
   }
   const session = await auth.api.getSession({ headers });
   if (!session?.user) return null;
-  return { id: session.user.id, email: session.user.email ?? null };
+  const user = session.user as typeof session.user & {
+    phone?: unknown;
+    role?: unknown;
+    status?: unknown;
+  };
+  return {
+    id: user.id,
+    email: typeof user.email === "string" ? user.email : null,
+    phone: typeof user.phone === "string" ? user.phone : null,
+    role: user.role === "admin" ? "admin" : "user",
+    status: user.status === "disabled" ? "disabled" : "active",
+  };
 }
 
 /**
@@ -94,4 +111,41 @@ export async function requireUserId(bearerToken?: string): Promise<string> {
   const user = await getSessionUser(bearerToken);
   if (!user) throw new UnauthorizedError();
   return user.id;
+}
+
+/** Disabled account error; callers can map this to a 403 without leaking details. */
+export class DisabledAccountError extends Error {
+  readonly status = 403;
+  constructor() {
+    super("Account disabled");
+    this.name = "DisabledAccountError";
+  }
+}
+
+/**
+ * Resolve a full active user for protected server functions.
+ * The existing requireUserId contract remains string-only for compatibility.
+ */
+export async function requireActiveUserId(
+  bearerToken?: string,
+): Promise<VerifiedUser> {
+  if (!authConfigured && !gateIdentityEnabled()) {
+    if (databaseConfigured) {
+      throw new Error(
+        "Auth is disabled (VITE_AUTH_ENABLED=false) but DATABASE_URL is set — " +
+          "refusing to fall back to the shared dev user against a real database.",
+      );
+    }
+    return {
+      id: DEV_USER_ID,
+      email: null,
+      phone: null,
+      role: "user",
+      status: "active",
+    };
+  }
+  const user = await getSessionUser(bearerToken);
+  if (!user) throw new UnauthorizedError();
+  if (user.status !== "active") throw new DisabledAccountError();
+  return user;
 }
