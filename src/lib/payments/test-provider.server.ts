@@ -28,6 +28,8 @@ export function createTestPaymentProvider(): PaymentProvider {
       return {
         provider: "test",
         providerOrderId: `test-${input.orderId}`,
+        providerTransactionId: null,
+        status: "created",
         redirectUrl: `/pricing?testOrder=${encodeURIComponent(input.orderId)}`,
         payload: {
           amountCents: input.amountCents,

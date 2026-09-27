@@ -14,7 +14,25 @@ export type CreatedPayment = {
   providerOrderId: string;
   redirectUrl: string | null;
   payload: Record<string, unknown>;
+  providerTransactionId?: string | null;
+  /** paid 表示通过查单恢复了已支付订单，而不是本次新建支付。 */
+  status?: "created" | "paid";
 };
+
+/** 微信已有支付单但暂时无法恢复 code_url 时抛出，调用方应保留订单号和待查询状态。 */
+export class PaymentProviderRecoveryRequiredError extends Error {
+  readonly code = "PAYMENT_PROVIDER_RECOVERY_REQUIRED";
+  readonly retryable = true;
+  readonly providerOrderId: string;
+  readonly payload: Record<string, unknown>;
+
+  constructor(providerOrderId: string, message: string, payload: Record<string, unknown> = {}) {
+    super(message);
+    this.name = "PaymentProviderRecoveryRequiredError";
+    this.providerOrderId = providerOrderId;
+    this.payload = payload;
+  }
+}
 
 export type CreatePaymentInput = {
   orderId: string;

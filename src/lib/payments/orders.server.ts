@@ -3,7 +3,11 @@ import { PACKAGE_CATALOG, resolvePackage, type PackageCode } from "../billing/ca
 import { createCreditsService } from "../credits.server.ts";
 import type { PaymentOrder } from "../credits/types.ts";
 import { applyPaidOrderCredits } from "./credit-application.server.ts";
-import type { PaymentProvider, PaymentWebhookEvent } from "./provider.ts";
+import {
+  PaymentProviderRecoveryRequiredError,
+  type PaymentProvider,
+  type PaymentWebhookEvent,
+} from "./provider.ts";
 
 type Row = Record<string, unknown>;
 
@@ -148,7 +152,7 @@ function buildStableOrderId(userId: string, clientRequestId: string): string {
   const digest = createHash("sha256")
     .update(`payment-order\0${userId}\0${clientRequestId}`)
     .digest("hex")
-    .slice(0, 32);
+    .slice(0, 24);
   return `payment_${digest}`;
 }
 
@@ -298,35 +302,85 @@ export function createPaymentOrdersService(
         const rows = await tx.query<Row>(
           `update payment_orders
            set provider_order_id = $2,
-               provider_redirect_url = $3,
-               provider_payload = $4::jsonb,
+               provider_transaction_id = coalesce($3::text, provider_transaction_id),
+               provider_redirect_url = $4,
+               provider_payload = $5::jsonb,
                provider_creation_token = null,
                provider_creation_started_at = null,
                updated_at = now()
            where id = $1
-             and user_id = $5
-             and provider_creation_token = $6
+             and user_id = $6
+             and provider_creation_token = $7
            returning *`,
           [
             orderId,
             payment.providerOrderId,
+            payment.providerTransactionId ?? null,
             payment.redirectUrl,
             JSON.stringify(payment.payload),
             userId,
             creationToken,
           ],
         );
-        if (rows[0]) return rows[0];
+        if (!rows[0]) {
+          const current = await selectOrderForUpdate(tx, orderId);
+          if (!current) throw new PaymentOrderNotFoundError();
+          assertOrderMatches(current, userId, packageCode, item);
+          if (String(current.provider_order_id) === payment.providerOrderId) return current;
+          throw new PaymentProviderConflictError("支付服务商创建租约已失效");
+        }
 
-        const current = await selectOrderForUpdate(tx, orderId);
-        if (!current) throw new PaymentOrderNotFoundError();
-        assertOrderMatches(current, userId, packageCode, item);
-        if (String(current.provider_order_id) === payment.providerOrderId) return current;
-        throw new PaymentProviderConflictError("支付服务商创建租约已失效");
+        let updatedRow = rows[0];
+        if (payment.status === "paid") {
+          const providerTransactionId = payment.providerTransactionId?.trim();
+          if (!providerTransactionId) {
+            throw new PaymentProviderConflictError("支付服务商未返回已支付交易流水号");
+          }
+          const event: PaymentWebhookEvent = {
+            provider: provider.id,
+            providerEventId: `query:${providerTransactionId}`,
+            providerOrderId: payment.providerOrderId,
+            providerTransactionId,
+            status: "paid",
+            amountCents: item.amountCents,
+            currency: "CNY",
+            raw: payment.payload,
+          };
+          const creditResult = await applyPaidOrderCredits(tx, updatedRow, event);
+          if (creditResult.blockedByRefund) {
+            throw new PaymentProviderConflictError("订单已退款，不能入账");
+          }
+          updatedRow = (await selectOrderForUpdate(tx, orderId)) ?? updatedRow;
+        }
+        return updatedRow;
       });
 
       return mapPaymentOrder(updated);
     } catch (error) {
+      if (error instanceof PaymentProviderRecoveryRequiredError) {
+        // 微信已有订单但暂时无法恢复 code_url：保留订单号并标记待查询，再抛给上层重试。
+        await sql.transaction(async (tx) => {
+          const rows = await tx.query<Row>(
+            `update payment_orders
+             set provider_order_id = $2,
+                 status = 'pending',
+                 provider_payload = $3::jsonb,
+                 provider_creation_token = null,
+                 provider_creation_started_at = null,
+                 updated_at = now()
+             where id = $1
+               and user_id = $4
+               and provider_creation_token = $5
+             returning *`,
+            [orderId, error.providerOrderId, JSON.stringify(error.payload), userId, creationToken],
+          );
+          if (rows[0]) return;
+          const current = await selectOrderForUpdate(tx, orderId);
+          if (current && String(current.provider_order_id) === error.providerOrderId) return;
+          throw new PaymentProviderConflictError("支付服务商待查询状态保存失败");
+        });
+        throw error;
+      }
       await clearCreationLease(orderId, creationToken).catch(() => undefined);
       throw error;
     }
