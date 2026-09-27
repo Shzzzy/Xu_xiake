@@ -16,6 +16,7 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as ApiGuidebookPreviewRouteImport } from './routes/api/guidebook-preview'
 import { Route as ApiGuidebookProbeRouteImport } from './routes/api/guidebook-probe'
+import { Route as AuthApiSplatRouteImport } from './routes/auth-api.$'
 import { Route as ShareTokenRouteImport } from './routes/share/$token'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth.$'
 import { Route as ApiPaymentsWebhookRouteImport } from './routes/api/payments/webhook'
@@ -55,6 +56,11 @@ const ApiGuidebookProbeRoute = ApiGuidebookProbeRouteImport.update({
   path: '/api/guidebook-probe',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthApiSplatRoute = AuthApiSplatRouteImport.update({
+  id: '/auth-api/$',
+  path: '/auth-api/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ShareTokenRoute = ShareTokenRouteImport.update({
   id: '/share/$token',
   path: '/share/$token',
@@ -79,6 +85,7 @@ export interface FileRoutesByFullPath {
   '/pricing': typeof PricingRoute
   '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
   '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
+  '/auth-api/$': typeof AuthApiSplatRoute
   '/share/$token': typeof ShareTokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
@@ -91,6 +98,7 @@ export interface FileRoutesByTo {
   '/pricing': typeof PricingRoute
   '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
   '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
+  '/auth-api/$': typeof AuthApiSplatRoute
   '/share/$token': typeof ShareTokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
@@ -104,6 +112,7 @@ export interface FileRoutesById {
   '/pricing': typeof PricingRoute
   '/api/guidebook-preview': typeof ApiGuidebookPreviewRoute
   '/api/guidebook-probe': typeof ApiGuidebookProbeRoute
+  '/auth-api/$': typeof AuthApiSplatRoute
   '/share/$token': typeof ShareTokenRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
@@ -118,6 +127,7 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/api/guidebook-preview'
     | '/api/guidebook-probe'
+    | '/auth-api/$'
     | '/share/$token'
     | '/api/auth/$'
     | '/api/payments/webhook'
@@ -130,6 +140,7 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/api/guidebook-preview'
     | '/api/guidebook-probe'
+    | '/auth-api/$'
     | '/share/$token'
     | '/api/auth/$'
     | '/api/payments/webhook'
@@ -142,6 +153,7 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/api/guidebook-preview'
     | '/api/guidebook-probe'
+    | '/auth-api/$'
     | '/share/$token'
     | '/api/auth/$'
     | '/api/payments/webhook'
@@ -155,6 +167,7 @@ export interface RootRouteChildren {
   PricingRoute: typeof PricingRoute
   ApiGuidebookPreviewRoute: typeof ApiGuidebookPreviewRoute
   ApiGuidebookProbeRoute: typeof ApiGuidebookProbeRoute
+  AuthApiSplatRoute: typeof AuthApiSplatRoute
   ShareTokenRoute: typeof ShareTokenRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiPaymentsWebhookRoute: typeof ApiPaymentsWebhookRoute
@@ -211,6 +224,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiGuidebookProbeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth-api/$': {
+      id: '/auth-api/$'
+      path: '/auth-api/$'
+      fullPath: '/auth-api/$'
+      preLoaderRoute: typeof AuthApiSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/share/$token': {
       id: '/share/$token'
       path: '/share/$token'
@@ -243,6 +263,7 @@ const rootRouteChildren: RootRouteChildren = {
   PricingRoute: PricingRoute,
   ApiGuidebookPreviewRoute: ApiGuidebookPreviewRoute,
   ApiGuidebookProbeRoute: ApiGuidebookProbeRoute,
+  AuthApiSplatRoute: AuthApiSplatRoute,
   ShareTokenRoute: ShareTokenRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiPaymentsWebhookRoute: ApiPaymentsWebhookRoute,

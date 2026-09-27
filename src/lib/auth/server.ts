@@ -41,6 +41,7 @@ import { GATE_PROVIDER_ID, gateIdentitySessions } from "./gate-session.server.ts
 import { GROK_PROVIDERS } from "./providers.ts";
 import { pgliteDialect } from "./pglite-dialect.ts";
 import { createPhoneSignupGuard } from "./phone-signup-guard.ts";
+import { AUTH_BASE_PATH } from "./paths.ts";
 import {
   GROK_ISSUER_DEFAULT,
   PREVIEW_ALLOWED_HOSTS,
@@ -175,6 +176,7 @@ const grokOAuthPlugin = authConfigured
 
 export const auth = betterAuth({
   baseURL,
+  basePath: AUTH_BASE_PATH,
   // Deployed apps inject BETTER_AUTH_SECRET. Preview: process-stable secret on
   // globalThis so HMR doesn't invalidate PGLite-backed sessions (see above).
   secret: env("BETTER_AUTH_SECRET") ?? previewAuthSecret(),

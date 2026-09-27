@@ -1,6 +1,7 @@
 import { genericOAuthClient, usernameClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
 import { runPreSignInSignOut, runSignOut } from "../../../scripts/sign-out-plan.mjs";
+import { AUTH_BASE_PATH } from "./paths";
 import { GROK_PROVIDERS } from "./providers";
 
 /**
@@ -18,6 +19,7 @@ import { GROK_PROVIDERS } from "./providers";
  * the visitor stays signed in.
  */
 export const authClient = createAuthClient({
+  basePath: AUTH_BASE_PATH,
   plugins: [genericOAuthClient(), usernameClient()],
   fetchOptions: {
     onRequest(ctx) {
