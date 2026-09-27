@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>登录与注册 · 你好，徐霞客</title>
+<style>
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700;900&display=swap");
+:root{--paper:#f2eee4;--surface:#fbf8f1;--ink:#17231f;--muted:#6d716b;--line:#d8d3c7;--soft:#e8e3d8;--green:#1f6a58;--dark:#123f34;--seal:#b84a37;--gold:#ab7c2d;--shadow:0 26px 75px rgba(23,35,31,.15)}
+*{box-sizing:border-box}button,input{font:inherit}button{cursor:pointer}body{margin:0;min-height:100vh;color:var(--ink);font-family:"Noto Sans SC",sans-serif;background:radial-gradient(circle at 8% 4%,rgba(31,106,88,.14),transparent 32rem),radial-gradient(circle at 94% 16%,rgba(184,74,55,.09),transparent 28rem),linear-gradient(135deg,#f0eadf,#fbf8f1 52%,#e9e1d3)}body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.18;mix-blend-mode:multiply;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.95' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E")}
+.shell{width:min(1320px,calc(100% - 30px));margin:auto;padding:24px 0 54px;position:relative;z-index:1}.top{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:11px 14px;border:1px solid rgba(23,35,31,.12);border-radius:18px;background:rgba(251,248,241,.86);backdrop-filter:blur(18px);box-shadow:0 12px 34px rgba(23,35,31,.08)}.brand{display:flex;align-items:center;gap:11px}.seal{display:grid;width:41px;height:41px;place-items:center;border-radius:13px;color:#fff;background:var(--green);font:800 19px "Noto Serif SC";box-shadow:0 9px 22px rgba(31,106,88,.23)}.brand strong{display:block;font:600 16px "Noto Serif SC"}.brand small{display:block;color:var(--muted);font-size:10px;letter-spacing:.14em}.back{border:1px solid var(--line);border-radius:999px;padding:9px 13px;color:var(--muted);background:rgba(255,255,255,.52);font-size:12px;text-decoration:none}.back:hover{color:var(--green);border-color:rgba(31,106,88,.35)}
+.layout{display:grid;grid-template-columns:minmax(0,1.04fr) minmax(360px,.76fr);gap:18px;margin-top:42px;align-items:stretch}.story{position:relative;min-height:690px;overflow:hidden;padding:clamp(28px,5vw,58px);border-radius:27px;color:#fff;background:radial-gradient(circle at 82% 10%,rgba(216,203,115,.22),transparent 17rem),linear-gradient(145deg,#163e35,#0c5746 62%,#87663b);box-shadow:var(--shadow)}.story:before{content:"";position:absolute;inset:18px;border:1px solid rgba(255,255,255,.09);border-radius:20px;pointer-events:none}.story:after{content:"游";position:absolute;right:-42px;bottom:-80px;color:rgba(255,255,255,.045);font:900 260px "Noto Serif SC";line-height:1}.eyebrow{color:var(--green);font-size:10px;font-weight:800;letter-spacing:.22em;text-transform:uppercase}.story .eyebrow{color:#dccc74}.story h1{margin:14px 0 16px;font:600 clamp(42px,6vw,72px)/1.04 "Noto Serif SC";letter-spacing:-.055em}.story>p{max-width:570px;color:rgba(255,255,255,.72);font-size:14px;line-height:1.9}.route{position:relative;height:190px;margin:42px 0 24px}.route svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}.route path{fill:none;stroke:#dccc74;stroke-width:2.2;stroke-dasharray:7 8;opacity:.88}.route .dot{position:absolute;display:grid;width:48px;height:48px;place-items:center;border:1px solid rgba(255,255,255,.25);border-radius:50%;color:#fff;background:rgba(255,255,255,.09);backdrop-filter:blur(8px);font:600 15px "Noto Serif SC"}.route .dot small{position:absolute;top:53px;width:90px;color:rgba(255,255,255,.55);font:10px "Noto Sans SC";text-align:center}.dot.a{left:2%;top:84px}.dot.b{left:47%;top:24px}.dot.c{right:2%;top:92px}.story-note{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:20px}.story-note div{padding:12px;border:1px solid rgba(255,255,255,.13);border-radius:14px;background:rgba(255,255,255,.055)}.story-note b{display:block;font:600 15px "Noto Serif SC"}.story-note span{display:block;margin-top:3px;color:rgba(255,255,255,.58);font-size:10px;line-height:1.55}
+.auth-card{align-self:center;padding:clamp(24px,4vw,42px);border:1px solid rgba(23,35,31,.14);border-radius:27px;background:rgba(255,253,248,.93);box-shadow:var(--shadow)}.auth-card h2{margin:9px 0 6px;font:600 38px "Noto Serif SC";letter-spacing:-.04em}.auth-card>p{margin:0;color:var(--muted);font-size:12px;line-height:1.75}.tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:24px 0 20px;padding:4px;border:1px solid var(--line);border-radius:999px;background:rgba(232,227,216,.48)}.tab{border:0;border-radius:999px;padding:10px;color:var(--muted);background:transparent;font-weight:600}.tab.active{color:#fff;background:var(--green);box-shadow:0 8px 18px rgba(31,106,88,.2)}.form{display:none}.form.active{display:block;animation:up .3s ease both}.field{display:block;margin-top:14px}.field span{display:block;margin-bottom:7px;color:var(--ink);font-size:12px;font-weight:600}.control{display:flex;align-items:center;min-height:48px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.7);transition:.2s}.control:focus-within{border-color:var(--green);box-shadow:0 0 0 3px rgba(31,106,88,.1)}.prefix{padding:0 12px;border-right:1px solid var(--line);color:var(--muted);font-size:12px}.control input{width:100%;min-width:0;border:0;outline:0;padding:0 13px;color:var(--ink);background:transparent}.control input::placeholder{color:#a29d94}.hint{margin:6px 0 0;color:var(--muted);font-size:10px;line-height:1.55}.agree{display:flex;gap:8px;align-items:flex-start;margin-top:15px;color:var(--muted);font-size:10px;line-height:1.65}.agree input{margin-top:3px}.primary{width:100%;margin-top:20px;border:0;border-radius:999px;padding:14px 18px;color:#fff;background:var(--green);box-shadow:0 12px 28px rgba(31,106,88,.22);font-weight:700;transition:.2s}.primary:hover{background:#0d5445;transform:translateY(-1px)}.micro{display:flex;align-items:center;gap:8px;margin-top:16px;padding:11px 12px;border:1px dashed rgba(23,35,31,.17);border-radius:13px;color:var(--muted);font-size:10px;line-height:1.6}.micro b{color:var(--ink)}.success{display:none;text-align:center;padding:18px 4px 6px}.success.show{display:block;animation:up .35s ease both}.success-mark{display:grid;width:72px;height:72px;margin:0 auto 18px;place-items:center;border-radius:50%;color:#fff;background:var(--green);font:700 26px "Noto Serif SC";box-shadow:0 14px 32px rgba(31,106,88,.22)}.success h3{margin:0 0 7px;font:600 30px "Noto Serif SC"}.success p{color:var(--muted);font-size:12px;line-height:1.75}.success .primary{margin-top:23px}.toast{position:fixed;left:50%;bottom:26px;z-index:40;padding:10px 15px;border-radius:999px;color:#fff;background:rgba(23,35,31,.92);font-size:11px;opacity:0;transform:translate(-50%,12px);transition:.25s;pointer-events:none}.toast.show{opacity:1;transform:translate(-50%,0)}
+@keyframes up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media(max-width:900px){.layout{grid-template-columns:1fr}.story{min-height:520px}.auth-card{order:-1}.route{height:150px;margin:30px 0 15px}.story h1{font-size:46px}.story-note{grid-template-columns:1fr 1fr 1fr}}
+@media(max-width:600px){.shell{width:calc(100% - 20px);padding-top:10px}.brand small{display:none}.top{padding:9px}.layout{margin-top:18px}.story{min-height:450px}.story h1{font-size:40px}.story-note{grid-template-columns:1fr}.auth-card{padding:24px 20px;border-radius:22px}.auth-card h2{font-size:34px}.route{display:none}.story>p{margin-top:8px}.back{font-size:10px}}
+</style>
+</head>
+<body>
+<div class="shell">
+<header class="top">
+  <div class="brand"><span class="seal">徐</span><span><strong>你好，徐霞客</strong><small>AUTH / 行旅账号</small></span></div>
+  <a class="back" href="/prototypes/commercial-payment-directions.html">返回行旅点册</a>
+</header>
+
+<main class="layout">
+  <section class="story">
+    <div class="eyebrow">ONE ACCOUNT / ALL JOURNEYS</div>
+    <h1>把走过的路，<br>留给下一次出发。</h1>
+    <p>账号用于保存你的钱包、点数、旅行方案与分享记录。无需短信验证，填写手机号和密码即可开始。</p>
+    <div class="route" aria-hidden="true">
+      <svg viewBox="0 0 600 190" preserveAspectRatio="none"><path d="M58 108 C145 95, 170 25, 285 49 S410 145, 550 101" /></svg>
+      <span class="dot a">起<small>北京</small></span>
+      <span class="dot b">行<small>上海</small></span>
+      <span class="dot c">归<small>大理</small></span>
+    </div>
+    <div class="story-note">
+      <div><b>钱包归属</b><span>点数和订单都归到同一个账号</span></div>
+      <div><b>跨设备找回</b><span>换手机登录后仍可继续使用</span></div>
+      <div><b>分享不收费</b><span>同行者打开链接即可查看路书</span></div>
+    </div>
+  </section>
+
+  <section class="auth-card" id="authCard">
+    <div id="formView">
+      <div class="eyebrow">ACCOUNT / 行旅账号</div>
+      <h2>登录后，继续出发。</h2>
+      <p>首次使用会直接创建账号。登录后可将点数、订单与路书保存到同一账号。</p>
+
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-form="login" type="button">登录</button>
+        <button class="tab" data-form="register" type="button">注册</button>
+      </div>
+
+      <form class="form active" id="login" autocomplete="on">
+        <label class="field"><span>手机号</span><div class="control"><span class="prefix">+86</span><input name="phone" type="tel" inputmode="numeric" maxlength="11" placeholder="请输入 11 位手机号" autocomplete="tel" required></div></label>
+        <label class="field"><span>密码</span><div class="control"><input name="password" type="password" minlength="8" placeholder="请输入密码" autocomplete="current-password" required></div></label>
+        <button class="primary" type="submit">登录并继续</button>
+        <div class="micro"><b>无需验证码</b><span>当前版本不发送短信；忘记密码暂不支持自助找回。</span></div>
+      </form>
+
+      <form class="form" id="register" autocomplete="on">
+        <label class="field"><span>手机号</span><div class="control"><span class="prefix">+86</span><input name="phone" type="tel" inputmode="numeric" maxlength="11" placeholder="请输入 11 位手机号" autocomplete="tel" required></div></label>
+        <label class="field"><span>密码</span><div class="control"><input name="password" type="password" minlength="8" placeholder="至少 8 位字符" autocomplete="new-password" required></div><p class="hint">手机号不会发送短信验证，仅作为登录账号。</p></label>
+        <label class="field"><span>确认密码</span><div class="control"><input name="confirm" type="password" minlength="8" placeholder="再次输入密码" autocomplete="new-password" required></div></label>
+        <label class="agree"><input type="checkbox" required><span>我已阅读并同意服务条款与隐私政策，知悉当前手机号不进行短信验证。</span></label>
+        <button class="primary" type="submit">创建账号并继续</button>
+      </form>
+    </div>
+
+    <div class="success" id="success">
+      <div class="success-mark">徐</div>
+      <h3 id="successTitle">账号已准备好</h3>
+      <p id="successCopy">你的钱包、点数和旅行方案会一直保存在这个账号下。</p>
+      <a class="primary" style="display:block;text-align:center;text-decoration:none" href="/prototypes/commercial-payment-directions.html">返回行旅点册</a>
+    </div>
+  </section>
+</main>
+</div>
+<div class="toast" id="toast">已登录</div>
+<script>
+let timer;
+const toast=document.getElementById('toast');
+function showToast(text){toast.textContent=text;toast.classList.add('show');clearTimeout(timer);timer=setTimeout(()=>toast.classList.remove('show'),1800)}
+document.querySelectorAll('.tab').forEach(function(tab){tab.addEventListener('click',function(){document.querySelectorAll('.tab').forEach(function(item){item.classList.toggle('active',item===tab)});document.querySelectorAll('.form').forEach(function(form){form.classList.toggle('active',form.id===tab.dataset.form)})})});
+function done(register){document.getElementById('formView').style.display='none';document.getElementById('success').classList.add('show');document.getElementById('successTitle').textContent=register?'账号已创建':'已登录';document.getElementById('successCopy').textContent=register?'钱包已经准备好，首次完整体验仍然免费。':'已回到你的行旅账号，可以继续购买点数或查看路书。'}
+document.getElementById('login').addEventListener('submit',function(e){e.preventDefault();done(false);showToast('登录成功')});
+document.getElementById('register').addEventListener('submit',function(e){e.preventDefault();done(true);showToast('账号创建成功')});
+</script>
+</body>
+</html>
