@@ -2,12 +2,13 @@ import type { TripBrief as TravelerBudgetTripBrief, TripPlan } from "./travel-pl
 import type { Pace } from "./planner.ts";
 import type { ReturnMode, TravelStyle, RouteLegPreference } from "./route-planner.ts";
 
-export type PendingPlanAction = "export" | "share" | "preview";
+export type PendingPlanAction = "finalize" | "export" | "share" | "preview";
 
 export type PendingPlanClaim = {
   planId: string;
   requestFingerprint: string;
   entitlementToken: string;
+  draftId?: string;
   executionPlan: TripPlan;
   action: PendingPlanAction;
 };
@@ -34,6 +35,7 @@ export type RestoredPlanResult = {
   screen: "result";
   brief: RestoredTripBrief;
   planId: string;
+  draftId?: string;
   action: PendingPlanAction;
   executionPlan: TripPlan;
 };
@@ -73,12 +75,14 @@ export function applyPendingPlanRestore(claim: PendingPlanClaim): RestoredPlanRe
     screen: "result",
     brief: briefFromPlan(claim.executionPlan),
     planId: claim.planId,
+    draftId: claim.draftId,
     action: claim.action,
     executionPlan: claim.executionPlan,
   };
 }
 
 export function pendingPlanActionLabel(action: PendingPlanAction): string {
+  if (action === "finalize") return "继续生成正式版本";
   if (action === "export") return "继续导出 PDF";
   if (action === "share") return "继续分享路书";
   return "继续查看路书";

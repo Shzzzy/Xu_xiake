@@ -48,6 +48,7 @@ export type FinalizeFreeInput = {
   plan: TripPlan;
   entitlementToken: string;
   requestFingerprint: string;
+  draftId?: string;
   cookieEntitlementId?: string | null;
 };
 
@@ -57,9 +58,16 @@ export type FinalizePaidInput = {
   plan: TripPlan;
   entitlementToken: string;
   requestFingerprint: string;
+  draftId?: string;
   cookieEntitlementId?: string | null;
 };
 
+export type FinalizeEntitlementInfo = {
+  entitlementId: string;
+  kind: GenerationEntitlementKind;
+  userId: string | null;
+  reservationId: string | null;
+};
 export type PreviewResolutionInput = {
   userId: string | null;
   planId: string;
@@ -108,6 +116,7 @@ export type GenerationEntitlementsService = {
   }): Promise<void>;
   claimFreeWithEntitlement(input: FinalizeFreeInput): Promise<{ planId: string }>;
   finishPaidWithEntitlement(input: FinalizePaidInput): Promise<CreditLedgerEntry>;
+  getEntitlementForFinalize(input: GenerationCredentials): Promise<FinalizeEntitlementInfo>;
   resolvePreviewPlan(input: PreviewResolutionInput): Promise<TripPlan>;
   ensurePlanExportable(input: {
     userId: string;
@@ -648,6 +657,20 @@ export function createGenerationEntitlementsService(
     });
   }
 
+  async function getEntitlementForFinalize(
+    input: GenerationCredentials,
+  ): Promise<FinalizeEntitlementInfo> {
+    return sql.transaction(async (tx) => {
+      const row = await lockEntitlementByToken(tx, input.entitlementToken);
+      assertFingerprint(row, input);
+      return {
+        entitlementId: String(row.id),
+        kind: row.kind as GenerationEntitlementKind,
+        userId: nullableString(row.user_id),
+        reservationId: nullableString(row.reservation_id),
+      };
+    });
+  }
   async function claimFreeWithEntitlement(input: FinalizeFreeInput): Promise<{ planId: string }> {
     return sql.transaction(async (tx) => {
       const row = await lockEntitlementByToken(tx, input.entitlementToken);
@@ -704,6 +727,12 @@ export function createGenerationEntitlementsService(
         "update generation_entitlements set user_id = $2, plan_id = $3, plan_hash = $4, status = 'claimed' where id = $1 and status in ('used', 'claimed')",
         [row.id, input.userId, input.planId, hashTripPlan(input.plan)],
       );
+      if (input.draftId) {
+        await tx.query(
+          "update trip_drafts set status = 'finalized', version_id = $2, updated_at = now() where id = $1 and status in ('preview_ready', 'awaiting_finalize')",
+          [input.draftId, input.planId],
+        );
+      }
       return { planId: input.planId };
     });
   }
@@ -736,6 +765,12 @@ export function createGenerationEntitlementsService(
         "update generation_entitlements set plan_id = $2, plan_hash = $3, status = 'consumed' where id = $1 and status in ('used', 'consumed')",
         [row.id, input.planId, hashTripPlan(input.plan)],
       );
+      if (input.draftId) {
+        await tx.query(
+          "update trip_drafts set status = 'finalized', version_id = $2, updated_at = now() where id = $1 and status in ('preview_ready', 'awaiting_finalize')",
+          [input.draftId, input.planId],
+        );
+      }
       return entry;
     });
   }
@@ -819,6 +854,7 @@ export function createGenerationEntitlementsService(
     finalizeGuestGeneration,
     claimFreeWithEntitlement,
     finishPaidWithEntitlement,
+    getEntitlementForFinalize,
     resolvePreviewPlan,
     ensurePlanExportable,
   };

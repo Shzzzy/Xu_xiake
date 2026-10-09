@@ -15,8 +15,10 @@ import {
 
 export { hashGenerationToken };
 export type { PreparedGenerationEntitlement };
+import { getDeliveryDraft } from "./delivery-drafts.repository.ts";
 import {
   getTravelPlanWithSql,
+  hashTripPlan,
   saveTravelPlanWithSql,
   type SaveTravelPlanInput,
 } from "./plans.repository.ts";
@@ -449,6 +451,67 @@ export async function finalizeGuestGeneration(input: {
   await (await getDefaultService()).finalizeGuestGeneration(input);
 }
 
+/** 草稿预览完成后，以一次幂等结算生成正式版本。 */
+export async function finalizeDeliveryDraftWithSql(
+  sql: EntitlementSql,
+  input: {
+    draftId: string;
+    userId: string;
+    entitlementToken: string;
+    requestFingerprint: string;
+    plan: TripPlan;
+    cookieEntitlementId?: string | null;
+  },
+): Promise<{ versionId: string }> {
+  const draft = await getDeliveryDraft(sql, input.draftId);
+  if (!draft || draft.ownerUserId !== input.userId) {
+    throw new Error("草稿不存在或无权访问");
+  }
+  if (draft.planHash !== hashTripPlan(input.plan)) {
+    throw new Error("草稿内容与当前计划不一致");
+  }
+  if (draft.status === "finalized" && draft.versionId) {
+    return { versionId: draft.versionId };
+  }
+  if (draft.status !== "preview_ready" && draft.status !== "awaiting_finalize") {
+    throw new Error("预览未完成，不能生成正式版本");
+  }
+
+  const service = createEntitlementsService(sql);
+  const entitlement = await service.getEntitlementForFinalize({
+    entitlementToken: input.entitlementToken,
+    requestFingerprint: input.requestFingerprint,
+    userId: input.userId,
+    cookieEntitlementId: input.cookieEntitlementId ?? null,
+  });
+  const finalizeInput = {
+    userId: input.userId,
+    planId: draft.planId,
+    plan: input.plan,
+    entitlementToken: input.entitlementToken,
+    requestFingerprint: input.requestFingerprint,
+    draftId: draft.id,
+    cookieEntitlementId: input.cookieEntitlementId ?? null,
+  };
+  if (entitlement.kind === "paid") {
+    await service.finishPaidWithEntitlement(finalizeInput);
+  } else {
+    await service.claimFreeWithEntitlement(finalizeInput);
+  }
+  return { versionId: draft.planId };
+}
+/** 生产入口：使用默认 SQL 连接执行 draft-aware finalize。 */
+export async function finalizeDeliveryDraft(input: {
+  draftId: string;
+  userId: string;
+  entitlementToken: string;
+  requestFingerprint: string;
+  plan: TripPlan;
+  cookieEntitlementId?: string | null;
+}): Promise<{ versionId: string }> {
+  const { getSql } = await import("./db.ts");
+  return finalizeDeliveryDraftWithSql(await getSql(), input);
+}
 /** 预览接口的统一入口：登录读取已保存 plan，访客验证一次性凭证与 plan hash。 */
 export async function resolvePreviewPlan(input: PreviewResolutionInput): Promise<TripPlan> {
   return (await getDefaultService()).resolvePreviewPlan(input);

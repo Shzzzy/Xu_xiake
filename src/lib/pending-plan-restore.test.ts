@@ -23,22 +23,24 @@ function plan(): TripPlan {
   } as unknown as TripPlan;
 }
 
-test("登录回跳可恢复 export、share、preview 三种结果页动作", () => {
-  for (const action of ["export", "share", "preview"] as const) {
+test("登录回跳可恢复 export、share、preview 四种结果页动作", () => {
+  for (const action of ["finalize", "export", "share", "preview"] as const) {
     const restored = applyPendingPlanRestore({
       planId: "plan-restored",
       requestFingerprint: "plan-restored",
       entitlementToken: "token-restored",
+      draftId: "draft-restored",
       action,
       executionPlan: plan(),
     });
     assert.equal(restored.screen, "result");
     assert.equal(restored.planId, "plan-restored");
+    assert.equal(restored.draftId, "draft-restored");
     assert.equal(restored.action, action);
     assert.equal(restored.executionPlan.meta.title, "登录后恢复行程");
     assert.equal(restored.brief.origin, "北京");
     assert.equal(restored.brief.destinationName, "沙湖");
     assert.equal(restored.brief.waypoints[0], "开封");
-    assert.match(pendingPlanActionLabel(action), /导出|分享|查看/);
+    assert.match(pendingPlanActionLabel(action), /生成|导出|分享|查看/);
   }
 });

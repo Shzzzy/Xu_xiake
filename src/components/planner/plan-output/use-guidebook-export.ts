@@ -34,11 +34,12 @@ export function storePendingPlanClaim(
   entitlementToken: string,
   requestFingerprint = planId,
   action: PendingPlanAction = "export",
+  draftId?: string,
 ): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(
     PENDING_PLAN_CLAIM_KEY,
-    JSON.stringify({ planId, requestFingerprint, entitlementToken, executionPlan, action }),
+    JSON.stringify({ planId, requestFingerprint, entitlementToken, draftId, executionPlan, action }),
   );
 }
 
@@ -56,7 +57,10 @@ export function readPendingPlanClaim(): PendingPlanClaim | null {
       typeof parsed.requestFingerprint !== "string" ||
       typeof parsed.entitlementToken !== "string" ||
       !executionPlan ||
-      (parsed.action !== "export" && parsed.action !== "share" && parsed.action !== "preview")
+      (parsed.action !== "finalize" &&
+        parsed.action !== "export" &&
+        parsed.action !== "share" &&
+        parsed.action !== "preview")
     ) {
       return null;
     }
@@ -64,6 +68,7 @@ export function readPendingPlanClaim(): PendingPlanClaim | null {
       planId: parsed.planId,
       requestFingerprint: parsed.requestFingerprint,
       entitlementToken: parsed.entitlementToken,
+      draftId: parsed.draftId,
       executionPlan,
       action: parsed.action,
     };

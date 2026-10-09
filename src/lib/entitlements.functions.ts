@@ -4,6 +4,7 @@ import { authMiddleware, optionalAuthMiddleware } from "./auth/middleware.ts";
 import {
   claimFirstFreePlan,
   ensurePlanExportable,
+  finalizeDeliveryDraft,
   finalizeGuestGeneration as finalizeGuestGenerationServer,
   finishPaidPlan,
   preparePlanGeneration as preparePlanGenerationServer,
@@ -115,6 +116,28 @@ export const finishPaidGeneration = createServerFn({ method: "POST" })
     }),
   );
 
+/** 预览完成后，由用户明确确认才保存正式版本并结算。 */
+export const finalizeDeliveryDraftFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      draftId: z.string().min(1).max(128),
+      entitlementToken: z.string().min(16).max(256),
+      requestFingerprint: z.string().min(1).max(256),
+      plan: tripPlanSchema,
+    }),
+  )
+  .handler(async ({ context, data }) => {
+    const cookieEntitlementId = await readGuestGenerationEntitlementId();
+    return finalizeDeliveryDraft({
+      userId: context.userId,
+      draftId: data.draftId,
+      entitlementToken: data.entitlementToken,
+      requestFingerprint: data.requestFingerprint,
+      plan: data.plan,
+      cookieEntitlementId,
+    });
+  });
 /** 统一导出前置入口：已保存 plan 直接通过，否则按凭证类型 guest/free/paid 完成保存和扣点。 */
 export const ensurePlanExportableFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])

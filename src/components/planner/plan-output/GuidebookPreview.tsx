@@ -75,17 +75,23 @@ export function GuidebookPreview({
   planId,
   entitlementToken = "",
   requestFingerprint = planId,
+  draftId,
   runId,
   shareToken = "",
   readOnly = false,
+  onReady,
+  onError,
 }: {
   plan: TripPlan;
   planId: string;
   entitlementToken?: string;
   requestFingerprint?: string;
+  draftId?: string;
   runId?: string;
   shareToken?: string;
   readOnly?: boolean;
+  onReady?: (info: { pageCount: number }) => void;
+  onError?: (message: string) => void;
 }) {
   const { user } = useCurrentUserState();
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -98,6 +104,10 @@ export function GuidebookPreview({
   const [label, setLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const planKey = JSON.stringify(plan);
+  const onReadyRef = useRef(onReady);
+  const onErrorRef = useRef(onError);
+  onReadyRef.current = onReady;
+  onErrorRef.current = onError;
 
   useEffect(() => {
     const frame = frameRef.current;
@@ -226,6 +236,7 @@ export function GuidebookPreview({
           },
           body: JSON.stringify({
             planId,
+            draftId,
             entitlementToken,
             requestFingerprint,
             plan,
@@ -266,9 +277,17 @@ export function GuidebookPreview({
       bodyObserver?.disconnect();
       shellObserver?.disconnect();
     };
-  }, [planKey, runId, shareToken]);
+  }, [draftId, entitlementToken, planKey, requestFingerprint, runId, shareToken]);
 
   const ready = total > 0 && received >= total && !error;
+
+  useEffect(() => {
+    if (ready) onReadyRef.current?.({ pageCount: total });
+  }, [ready, total]);
+
+  useEffect(() => {
+    if (error) onErrorRef.current?.(error);
+  }, [error]);
   const progress = total > 0 ? Math.round((received / total) * 100) : 0;
   const statusText = error
     ? error

@@ -6,12 +6,14 @@ import { maskPhone } from "@/lib/auth/phone";
 import { shouldReleaseGenerationOnCleanup } from "@/lib/guidebook-access";
 import {
   claimCurrentPlan,
+  finalizeDeliveryDraftFn,
   finalizeGuestGeneration,
   finishPaidGeneration,
   preparePlanGeneration,
   releasePlanGeneration,
   reservePlanGeneration,
 } from "@/lib/entitlements.functions";
+import { claimDeliveryDraftForUserFn, createDeliveryDraftFn } from "@/lib/delivery.functions";
 import type {
   GenerationPreparation,
   PreparedGenerationEntitlement,
@@ -119,6 +121,7 @@ import { WeatherStrip } from "./WeatherStrip";
 import {
   clearPendingPlanClaim,
   readPendingPlanClaim,
+  storePendingPlanClaim,
   type PendingPlanClaim,
 } from "./plan-output/use-guidebook-export";
 import {
@@ -463,6 +466,8 @@ function PlannerPrototypeContent() {
   const variant: DesignVariant = "scroll";
   const { user, isPending } = useCurrentUserState();
   const claimPendingPlanFn = useServerFn(claimCurrentPlan);
+  const claimDeliveryDraftFn = useServerFn(claimDeliveryDraftForUserFn);
+  const finalizePendingDraftFn = useServerFn(finalizeDeliveryDraftFn);
   const exportPendingPlanFn = useServerFn(exportGuidebook);
   const [screen, setScreen] = useState<Screen>("landing");
   const [resultOrigin, setResultOrigin] = useState<"known" | "unknown">("known");
@@ -492,38 +497,55 @@ function PlannerPrototypeContent() {
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
 
-  // 未登录点击 PDF/分享后会把待领取计划放入 sessionStorage，登录回跳时在这里幂等 claim。
+  // 未登录确认成稿或导出时会把草稿引用放入 sessionStorage，登录回跳后继续原动作。
   useEffect(() => {
     if (isPending || !user) return;
     const pending = readPendingPlanClaim();
     if (!pending) return;
     let cancelled = false;
-    void claimPendingPlanFn({
-      data: {
-        planId: pending.planId,
-        requestFingerprint: pending.requestFingerprint,
-        entitlementToken: pending.entitlementToken,
-        plan: pending.executionPlan,
-      },
-    })
-      .then(() => {
+    const restore = async (): Promise<PendingPlanClaim> => {
+      if (pending.draftId && pending.action === "finalize") {
+        await claimDeliveryDraftFn({ data: { draftId: pending.draftId } });
+        await finalizePendingDraftFn({
+          data: {
+            draftId: pending.draftId,
+            entitlementToken: pending.entitlementToken,
+            requestFingerprint: pending.requestFingerprint,
+            plan: pending.executionPlan,
+          },
+        });
+        return { ...pending, action: "preview" };
+      }
+      await claimPendingPlanFn({
+        data: {
+          planId: pending.planId,
+          requestFingerprint: pending.requestFingerprint,
+          entitlementToken: pending.entitlementToken,
+          plan: pending.executionPlan,
+        },
+      });
+      return pending;
+    };
+
+    void restore()
+      .then((restoredClaim) => {
         if (cancelled) return;
-        const restored = applyPendingPlanRestore(pending);
+        const restored = applyPendingPlanRestore(restoredClaim);
         setBrief(restored.brief);
         setResultOrigin("known");
         setRestoredResult(restored);
         setScreen("result");
         clearPendingPlanClaim();
-        toast.success(`登录成功，已恢复本次路书，可以${pendingPlanActionLabel(pending.action)}。`);
+        toast.success(`登录成功，已恢复本次路书，可以${pendingPlanActionLabel(restoredClaim.action)}。`);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        toast.error(error instanceof Error ? error.message : "保存登录前生成的路书失败");
+        toast.error(error instanceof Error ? error.message : "恢复登录前草稿失败");
       });
     return () => {
       cancelled = true;
     };
-  }, [claimPendingPlanFn, isPending, user]);
+  }, [claimDeliveryDraftFn, claimPendingPlanFn, finalizePendingDraftFn, isPending, user]);
 
   const continueRestoredAction = async () => {
     if (!restoredResult) return;
@@ -2049,6 +2071,9 @@ function ItineraryScreen({
   onSave: () => void;
 }) {
   const inspirationCatalog = useInspirationCatalog();
+  const { user, isPending } = useCurrentUserState();
+  const createDeliveryDraftFnHook = useServerFn(createDeliveryDraftFn);
+  const finalizeDeliveryDraftFnHook = useServerFn(finalizeDeliveryDraftFn);
   const restoredPlan = restoredResult?.executionPlan ?? null;
   const refreshInspirationCatalog = useInspirationCatalogRefresh();
   const [planningOverride, setPlanningOverride] = useState<{
@@ -2106,6 +2131,9 @@ function ItineraryScreen({
     | "idle"
     | "loading"
     | "saving"
+    | "previewing"
+    | "awaiting_finalize"
+    | "finalizing"
     | "ready"
     | "fallback"
     | "needs_decision"
@@ -2116,6 +2144,7 @@ function ItineraryScreen({
   const [plannerMessage, setPlannerMessage] = useState("");
   const [generationGateRevision, setGenerationGateRevision] = useState(0);
   const [finalizeRevision, setFinalizeRevision] = useState(0);
+  const [draftId, setDraftId] = useState<string | null>(null);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
   const generationGateRef = useRef<{
     planId: string;
@@ -2629,7 +2658,7 @@ function ItineraryScreen({
   ]);
   useEffect(() => {
     if (plannerState !== "saving") return;
-    if (finalizedPlanRef.current === planId) {
+    if (finalizedPlanRef.current === planId && draftId) {
       setPlannerState("ready");
       return;
     }
@@ -2639,55 +2668,95 @@ function ItineraryScreen({
       return;
     }
 
-    let cancelled = false;
-    const finalize = async () => {
-      try {
-        if (gate.permission.kind === "guest") {
-          await finalizeGuestGenerationFn({
-            data: {
-              entitlementToken: gate.permission.token,
-              requestFingerprint: gate.permission.requestFingerprint,
-              planId,
-              plan: executionPlan,
-            },
-          });
-        } else if (gate.permission.kind === "free") {
-          await claimCurrentPlanFn({
-            data: {
-              planId,
-              requestFingerprint: gate.permission.requestFingerprint,
-              entitlementToken: gate.permission.token,
-              plan: executionPlan,
-            },
-          });
-        } else if (gate.permission.kind === "paid") {
-          await finishPaidGenerationFn({
-            data: {
-              entitlementToken: gate.permission.token,
-              requestFingerprint: gate.permission.requestFingerprint,
-              planId,
-              plan: executionPlan,
-            },
-          });
+    // 长线仍走既有阶段汇总路径，详细路书改为先创建草稿。
+    if (!detailedTrip) {
+      let cancelled = false;
+      const finalizeLegacy = async () => {
+        try {
+          if (gate.permission.kind === "guest") {
+            await finalizeGuestGenerationFn({
+              data: {
+                entitlementToken: gate.permission.token,
+                requestFingerprint: gate.permission.requestFingerprint,
+                planId,
+                plan: executionPlan,
+              },
+            });
+          } else if (gate.permission.kind === "free") {
+            await claimCurrentPlanFn({
+              data: {
+                planId,
+                requestFingerprint: gate.permission.requestFingerprint,
+                entitlementToken: gate.permission.token,
+                plan: executionPlan,
+              },
+            });
+          } else if (gate.permission.kind === "paid") {
+            await finishPaidGenerationFn({
+              data: {
+                entitlementToken: gate.permission.token,
+                requestFingerprint: gate.permission.requestFingerprint,
+                planId,
+                plan: executionPlan,
+              },
+            });
+          }
+          if (cancelled) return;
+          finalizedPlanRef.current = planId;
+          setFinalizeError(null);
+          setPlannerState("ready");
+        } catch (error) {
+          if (cancelled) return;
+          const message = describePlannerError(error);
+          setFinalizeError(message);
+          setPlannerMessage(message);
         }
+      };
+      void finalizeLegacy();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const permission = gate.permission;
+    if (!("token" in permission)) {
+      setFinalizeError("生成权益凭证未就绪，请重新生成。");
+      return;
+    }
+
+    let cancelled = false;
+    const createDraft = async () => {
+      try {
+        const draft = await createDeliveryDraftFnHook({
+          data: {
+            planId,
+            requestFingerprint: permission.requestFingerprint,
+            entitlementToken: permission.token,
+            plan: executionPlan,
+          },
+        });
         if (cancelled) return;
-        finalizedPlanRef.current = planId;
+        setDraftId(draft.id);
         setFinalizeError(null);
-        setPlannerState("ready");
+        setPlannerState("previewing");
       } catch (error) {
         if (cancelled) return;
         const message = describePlannerError(error);
         setFinalizeError(message);
         setPlannerMessage(message);
+        setPlannerState("fallback");
       }
     };
 
-    void finalize();
+    void createDraft();
     return () => {
       cancelled = true;
     };
   }, [
     claimCurrentPlanFn,
+    createDeliveryDraftFnHook,
+    detailedTrip,
+    draftId,
     executionPlan,
     finalizeGuestGenerationFn,
     finalizeRevision,
@@ -2695,6 +2764,53 @@ function ItineraryScreen({
     planId,
     plannerState,
   ]);
+
+  const handleConfirmFinalize = async () => {
+    if (!draftId || plannerState !== "awaiting_finalize") return;
+    const gate = generationGateRef.current;
+    if (!gate || gate.planId !== planId || !("token" in gate.permission)) {
+      setFinalizeError("生成权益凭证未就绪，请重新生成。");
+      return;
+    }
+    if (isPending) {
+      toast.info("账号状态仍在确认，请稍后重试。");
+      return;
+    }
+    if (!user) {
+      storePendingPlanClaim(
+        planId,
+        executionPlan,
+        gate.permission.token,
+        gate.permission.requestFingerprint,
+        "finalize",
+        draftId,
+      );
+      const returnTo = `${window.location.pathname}${window.location.search}`;
+      window.location.assign(`/auth?returnTo=${encodeURIComponent(returnTo)}`);
+      return;
+    }
+
+    setFinalizeError(null);
+    setPlannerState("finalizing");
+    try {
+      await finalizeDeliveryDraftFnHook({
+        data: {
+          draftId,
+          entitlementToken: gate.permission.token,
+          requestFingerprint: gate.permission.requestFingerprint,
+          plan: executionPlan,
+        },
+      });
+      finalizedPlanRef.current = planId;
+      setPlannerState("ready");
+      toast.success("正式路书已生成");
+    } catch (error) {
+      const message = describePlannerError(error);
+      setFinalizeError(message);
+      setPlannerMessage(message);
+      setPlannerState("awaiting_finalize");
+    }
+  };
 
   const handleConfirmPaidGeneration = async () => {
     const gate = generationGateRef.current;
@@ -2713,6 +2829,13 @@ function ItineraryScreen({
 
   const handleRetryFinalize = () => {
     setFinalizeError(null);
+    if (draftId) {
+      setPlannerState("awaiting_finalize");
+      void handleConfirmFinalize();
+      return;
+    }
+    setDraftId(null);
+    setPlannerState("saving");
     setFinalizeRevision((value) => value + 1);
   };
 
@@ -2933,7 +3056,7 @@ function ItineraryScreen({
                 state={
                   finalizeError
                     ? "fallback"
-                    : plannerState === "ready"
+                    : draftId
                       ? "ready"
                       : plannerState === "fallback" || plannerState === "needs_decision"
                         ? "fallback"
@@ -2948,15 +3071,32 @@ function ItineraryScreen({
                     </div>
                   }
                 >
-                  <GuidebookPreview
-                    plan={executionPlan}
-                    planId={planId}
-                    entitlementToken={activeEntitlementToken}
-                    requestFingerprint={requestFingerprint}
-                    runId={previewRunId}
-                  />
+                  {draftId ? (
+                    <GuidebookPreview
+                      plan={executionPlan}
+                      planId={planId}
+                      draftId={draftId}
+                      entitlementToken={activeEntitlementToken}
+                      requestFingerprint={requestFingerprint}
+                      runId={previewRunId}
+                      onReady={() => setPlannerState("awaiting_finalize")}
+                      onError={(message) => {
+                        setFinalizeError(message);
+                        setPlannerState("fallback");
+                      }}
+                    />
+                  ) : (
+                    <div className="rounded-[var(--v-card-radius)] border border-[var(--v-line)] bg-[var(--v-surface)] p-6 text-sm text-[var(--v-muted)]">
+                      正在创建可恢复草稿…
+                    </div>
+                  )}
                 </Suspense>
               </GuidebookStage>
+              {plannerState === "awaiting_finalize" && draftId ? (
+                <Button type="button" onClick={() => void handleConfirmFinalize()}>
+                  确认生成正式版本
+                </Button>
+              ) : null}
               {finalizeError ? (
                 <Button type="button" variant="outline" onClick={handleRetryFinalize}>
                   重试保存路书

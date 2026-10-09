@@ -18,6 +18,7 @@ const migrationNames = [
   "0011_travel_plan_hash.sql",
   "0012_generation_entitlement_failure_reason.sql",
   "0013_generation_entitlement_retry.sql",
+  "0014_delivery_drafts.sql",
 ] as const;
 
 const commercialTables = [
