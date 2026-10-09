@@ -142,6 +142,10 @@ export const Route = createFileRoute("/api/guidebook-preview")({
                 });
               }
             } catch (error) {
+              // 客户端中止通常来自 React 开发模式重挂载或用户离开页面，不能把草稿判失败。
+              if (request.signal.aborted) {
+                return;
+              }
               if (payload.draftId && payload.entitlementToken && payload.requestFingerprint) {
                 await releaseGenerationAfterFailure({
                   entitlementToken: payload.entitlementToken,

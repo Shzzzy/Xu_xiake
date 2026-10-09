@@ -245,7 +245,16 @@ export function GuidebookPreview({
           signal: controller.signal,
         });
         if (!response.ok || !response.body) {
-          throw new Error("路书预览服务暂时不可用");
+          const raw = await response.text().catch(() => "");
+          let message = "路书预览服务暂时不可用";
+          try {
+            const firstLine = raw.split("\n").find((line) => line.trim());
+            const event = firstLine ? (JSON.parse(firstLine) as StreamEvent) : null;
+            if (event?.type === "error" && event.message) message = event.message;
+          } catch {
+            // 非 NDJSON 响应保留通用错误，避免把上游 HTML 直接展示给用户。
+          }
+          throw new Error(message);
         }
 
         const reader = response.body.getReader();
