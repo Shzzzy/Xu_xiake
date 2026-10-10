@@ -9,10 +9,23 @@ import {
 import { normalizeReturnTo } from "@/lib/auth/return-to";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { getMyWallet } from "@/lib/credits.functions";
+import { absoluteUrl } from "@/lib/site-meta";
 
 export const Route = createFileRoute("/pricing")({
   validateSearch: (search: Record<string, unknown>) => ({
     returnTo: typeof search.returnTo === "string" ? normalizeReturnTo(search.returnTo) : undefined,
+  }),
+  // 定价页不写具体价格数字，价格与退款政策尚未确认。
+  head: () => ({
+    meta: [
+      { title: "定价 · 徐霞客旅行规划" },
+      {
+        name: "description",
+        content:
+          "徐霞客旅行规划的定价与点数说明。草稿阶段不消耗权益，完整路书预览通过后才结算，同一正式版本重复打印、导出与分享不再收费。",
+      },
+    ],
+    links: [{ rel: "canonical", href: absoluteUrl("/pricing") }],
   }),
   component: PricingRoute,
 });

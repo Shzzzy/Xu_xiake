@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta name="robots" content="noindex, nofollow">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>徐霞客旅行规划 · 第一阶段页面架构原型（内部评审）</title>
+<style>
+:root{
+  --paper:#f2eee4; --surface:#fbf8f1; --ink:#1b211e; --muted:#6d716b;
+  --line:#d8d3c7; --soft:#e8e3d8; --accent:#1f6a58; --accent-ink:#f7f4ec; --seal:#b84a37;
+  --radius:14px; --mono:"Cascadia Mono",Consolas,"Courier New",monospace;
+  --serif:"Songti SC","Noto Serif SC","Source Han Serif SC",Georgia,serif;
+  --sans:"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.65}
+a{color:var(--accent)}
+h1,h2,h3,h4{font-family:var(--serif);font-weight:600;letter-spacing:.01em;margin:0}
+.wrap{max-width:1180px;margin:0 auto;padding:0 22px}
+
+/* ── top bar ── */
+.topbar{background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+.topbar .inner{max-width:1180px;margin:0 auto;padding:16px 22px 0;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between}
+.brand h1{font-size:21px}
+.brand .sub{margin:4px 0 0;color:var(--muted);font-size:12.5px}
+.seal{display:inline-block;background:var(--seal);color:#fff;font-size:11px;letter-spacing:.14em;padding:2px 9px;border-radius:3px;margin-bottom:8px;font-family:var(--mono)}
+.tabs{display:flex;gap:2px;flex-wrap:wrap}
+.tabs button{font:inherit;font-size:13.5px;color:var(--muted);background:transparent;border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;padding:8px 15px;cursor:pointer}
+.tabs button:hover{color:var(--ink);background:var(--soft)}
+.tabs button.active{color:var(--ink);background:var(--paper);border-color:var(--line);font-weight:600}
+
+/* ── views ── */
+.view{display:none;padding:30px 0 90px}
+.view.active{display:block}
+.lede{color:var(--muted);font-size:13.5px;max-width:74ch;margin:0 0 24px}
+.sec-title{font-size:16px;margin:34px 0 6px;display:flex;align-items:baseline;gap:10px}
+.sec-title .tag{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.08em;font-weight:400}
+.sec-note{color:var(--muted);font-size:13px;margin:0 0 16px;max-width:78ch}
+
+/* ── sitemap cards ── */
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(305px,1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px 17px;display:flex;flex-direction:column;gap:9px}
+.card.dashed{border-style:dashed}
+.card h3{font-size:15.5px}
+.card .url{font-family:var(--mono);font-size:12px;color:var(--accent);word-break:break-all}
+.badges{display:flex;gap:6px;flex-wrap:wrap}
+.badge{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:var(--paper)}
+.badge.p0{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.badge.p1{background:var(--soft);color:var(--ink);border-color:var(--line)}
+.badge.new{border-color:var(--seal);color:var(--seal)}
+.badge.hold{background:#fff;color:var(--muted);border-style:dashed}
+.kv{font-size:12.5px;color:var(--muted);margin:0}
+.kv b{color:var(--ink);font-weight:600}
+.kwlist{display:flex;flex-wrap:wrap;gap:5px}
+.kw{font-size:11.5px;background:var(--soft);border-radius:4px;padding:2px 7px;color:var(--ink)}
+.kw.main{background:var(--accent);color:var(--accent-ink)}
+
+/* ── flow ── */
+.flow{display:flex;flex-direction:column;align-items:center;gap:0;margin-top:18px}
+.frow{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.fbox{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:11px 16px;min-width:172px;text-align:center}
+.fbox small{display:block;color:var(--muted);font-size:11.5px;font-family:var(--mono);margin-top:2px}
+.fbox.entry{border-color:var(--muted)}
+.fbox.core{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.fbox.core small{color:#cfe4dd}
+.fbox.hold{border-style:dashed;color:var(--muted)}
+.arrow{color:var(--muted);font-size:19px;line-height:1;padding:9px 0;text-align:center}
+.arrow small{display:block;font-size:11.5px;font-family:var(--mono);margin-top:3px}
+.flow-note{max-width:74ch;margin:26px auto 0;color:var(--muted);font-size:13px}
+
+/* ── wireframes ── */
+.picker{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 18px}
+.picker button{font:inherit;font-size:13px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 14px;cursor:pointer;color:var(--muted)}
+.picker button:hover{border-color:var(--muted);color:var(--ink)}
+.picker button.active{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.frame{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.chrome{background:var(--soft);border-bottom:1px solid var(--line);padding:9px 14px;display:flex;align-items:center;gap:9px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--line)}
+.urlbar{flex:1;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 13px;font-family:var(--mono);font-size:11.5px;color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.mock-nav{display:flex;gap:16px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line);font-size:13px;color:var(--muted);flex-wrap:wrap}
+.mock-nav .logo{font-family:var(--serif);font-size:14.5px;color:var(--ink);font-weight:600}
+.mock-nav .spacer{flex:1}
+.mock-nav .btn{background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:5px 14px;font-size:12.5px}
+.mock-hero{padding:30px 22px 24px;border-bottom:1px dashed var(--line)}
+.mock-hero h2{font-size:24px;line-height:1.35;max-width:24ch}
+.mock-hero p{color:var(--muted);font-size:13.5px;max-width:60ch;margin:11px 0 0}
+.mock-cta{display:inline-block;margin-top:16px;background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:8px 22px;font-size:13.5px}
+.mock-sec{padding:20px;border-bottom:1px dashed var(--line)}
+.mock-sec:last-child{border-bottom:none}
+.block{border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-bottom:10px;background:var(--paper)}
+.block:last-child{margin-bottom:0}
+.block .bhead{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.block h4{font-size:14px}
+.block .idx{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.block p{margin:6px 0 0;font-size:13px;color:var(--muted)}
+.mock-foot{padding:16px 20px;background:var(--soft);color:var(--muted);font-size:12px;display:flex;flex-wrap:wrap;gap:14px}
+.mock-foot .ph{border-bottom:1px dashed var(--seal);color:var(--seal)}
+.meta{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0 0;font-size:12.5px}
+.meta div{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.meta b{display:block;font-size:11px;font-family:var(--mono);color:var(--muted);font-weight:400;letter-spacing:.06em}
+
+/* ── placeholder + tables ── */
+.ph{color:var(--seal);border-bottom:1px dashed var(--seal);font-size:.94em;white-space:nowrap}
+table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;font-size:13px}
+th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--soft);font-family:var(--mono);font-size:11.5px;font-weight:400;color:var(--muted);letter-spacing:.05em}
+tr:last-child td{border-bottom:none}
+.tbl-wrap{overflow-x:auto}
+.callout{background:var(--surface);border-left:3px solid var(--seal);border-radius:0 10px 10px 0;padding:13px 16px;margin:14px 0;font-size:13.5px}
+.callout b{color:var(--seal)}
+ul.tight{margin:8px 0 0;padding-left:19px;color:var(--muted);font-size:13px}
+ul.tight li{margin:3px 0}
+@media (max-width:640px){
+  .topbar .inner{padding-bottom:0}
+  .brand h1{font-size:18px}
+  .mock-hero h2{font-size:20px}
+  .fbox{min-width:0;flex:1 1 100%}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="inner">
+    <div class="brand">
+      <span class="seal">内部评审</span>
+      <h1>徐霞客旅行规划 · 第一阶段页面架构原型</h1>
+      <p class="sub">依据《徐霞客旅行规划_中文市场_关键词研究》的页面计划生成 · 非公开上线版本 · 不含登录 / 结算 / 支付 / 真实表单 / 后端接口</p>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button data-view="map" class="active">站点地图</button>
+      <button data-view="flow">导航流程</button>
+      <button data-view="wire">页面线框</button>
+      <button data-view="todo">待补充与待确认</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ══ 1. 站点地图 ══ -->
+  <section class="view active" id="map">
+    <p class="lede">第一阶段共 6 个新建页面：1 个产品页、1 个核心场景主题页、4 个支持内容页。另有 2 个已存在的页面承接全部 CTA 的落地。所有页面类型、URL、Title、H1 与 CTA 均来自研究报告的页面计划，未新增依据外的页面。</p>
+
+    <h2 class="sec-title">现有页面<span class="tag">EXISTING</span></h2>
+    <p class="sec-note">不属于本次页面计划，但所有 CTA 都指向它们，必须先确认导航与入口一致。</p>
+    <div class="grid" id="grid-existing"></div>
+
+    <h2 class="sec-title">第一阶段新建页面<span class="tag">PHASE 1</span></h2>
+    <p class="sec-note">优先级 P0 为先行页，P1 为承接长尾与内链的支持内容页。</p>
+    <div class="grid" id="grid-phase1"></div>
+
+    <h2 class="sec-title">建议新增（待你确认）<span class="tag">PROPOSED</span></h2>
+    <p class="sec-note">这两个页面在研究报告中没有依据，仅作为架构缺口提出，未计入第一阶段计划。你不确认就不实现。</p>
+    <div class="grid" id="grid-proposed"></div>
+
+    <h2 class="sec-title">本阶段明确延后<span class="tag">DEFERRED</span></h2>
+    <p class="sec-note">以下方向在研究报告或你的说明中已被明确排除，本原型不为它们建页。</p>
+    <div class="grid" id="grid-deferred"></div>
+  </section>
+
+  <!-- ══ 2. 导航流程 ══ -->
+  <section class="view" id="flow">
+    <p class="lede">用户从两条路径进入：搜索引擎带来的信息型流量，以及直接访问首页的工具型流量。所有路径最终收敛到同一个转化动作——生成草稿，然后进入正式成稿与结算。</p>
+
+    <div class="flow">
+      <div class="frow">
+        <div class="fbox entry">搜索引擎<small>百度 / 360 等</small></div>
+        <div class="fbox entry">直接访问<small>品牌词 / 分享链接</small></div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="frow">
+        <div class="fbox">支持内容页<small>/guide/*</small></div>
+        <div class="fbox">核心场景主题页<small>/free-travel-itinerary-planner</small></div>
+      </div>
+      <div class="arrow">↓<small>内容页之间横向内链</small></div>
+      <div class="frow">
+        <div class="fbox">产品页<small>/ai-guidebook-generator</small></div>
+      </div>
+      <div class="arrow">↓<small>CTA：免费开始规划</small></div>
+      <div class="frow">
+        <div class="fbox core">首页 / 规划器<small>/</small></div>
+      </div>
+      <div class="arrow">↓<small>填写条件 → 生成草稿 → 逐页预览</small></div>
+      <div class="frow">
+        <div class="fbox core">确认正式版本<small>预览通过后</small></div>
+        <div class="fbox">定价页<small>/pricing</small></div>
+      </div>
+    </div>
+
+    <p class="flow-note">导航栏建议保持四项：首页 / 功能（产品页）/ 行程规划指南（内容页）/ 定价。<br>
+    内容页之间必须互相内链，并统一向上指向产品页；产品页向下指回内容页，避免内容页成为孤岛。<br>
+    定价页的入口在研究报告的 CTA 中未被指定为独立页面，本原型只把它标为「产品页的价值主张延伸」，不作为主导航首项。</p>
+  </section>
+
+  <!-- ══ 3. 页面线框 ══ -->
+  <section class="view" id="wire">
+    <p class="lede">每个页面按研究报告的「核心内容模块」逐块还原，并标注该页需要补充的业务资料。方框代表内容模块的排布顺序，不代表最终视觉设计。</p>
+    <div class="picker" id="picker"></div>
+    <div id="frames"></div>
+  </section>
+
+  <!-- ══ 4. 待补充与待确认 ══ -->
+  <section class="view" id="todo">
+    <p class="lede">以下内容在业务背景中没有被确认。原型中一律以 [待补充：具体资料] 标记，不编造数值、资质、背书与承诺。</p>
+
+    <h2 class="sec-title">按页面汇总的待补充资料<span class="tag">FROM PAGE PLAN</span></h2>
+    <div class="tbl-wrap"><table id="todo-page"><thead><tr><th>页面</th><th>URL</th><th>需要补充的业务资料</th></tr></thead><tbody></tbody></table></div>
+
+    <h2 class="sec-title">全局待补充项<span class="tag">GLOBAL</span></h2>
+    <p class="sec-note">这些内容在任何页面中都没有出现，因为它们尚未被确认。原型用占位标记，不填充任何具体表述。</p>
+    <div class="tbl-wrap"><table id="todo-global"><thead><tr><th>资料</th><th>原型中的处理</th><th>涉及页面</th></tr></thead><tbody></tbody></table></div>
+
+    <div class="callout">
+      <b>原型中刻意没有出现的内容：</b>一键下载 PDF、真实预订、票务与库存、价格与退款政策、准确性与可靠性承诺、目的地数据来源与更新频率、品牌故事、媒体奖项、用户评价与用户量数据。以上均未被确认或超出产品边界，请勿在评审中默认它们可以补上。
+    </div>
+  </section>
+
+</main>
+
+<script>
+/* ═══════════ 数据 ═══════════ */
+const PH = "[待补充：具体资料]";
+
+const PAGES = [
+  {
+    id:"p1", scope:"phase1", pri:"P0", kind:"产品页", group:"产品页 · AI 路书生成器功能与定价总览",
+    name:"AI 路书生成器功能与定价总览",
+    url:"/ai-guidebook-generator",
+    mainKw:"AI 路书生成器",
+    supKw:["路书生成","路书生成器","AI 行程规划","AI 旅行规划","行程规划工具","路书导出 PDF"],
+    title:"AI 路书生成器与定价总览 | 徐霞客旅行规划",
+    h1:"AI 路书生成器：把行程做成可打印的路书",
+    cta:"免费开始规划",
+    hero:"路线、时间与预算的可行性由确定性计算保证，AI 只负责候选景点选择、排序与文案。",
+    blocks:[
+      ["首屏价值主张","路线、时间与预算可行性由确定性计算保证，AI 只负责候选景点选择、排序与文案。"],
+      ["核心能力清单","1–16 天详细逐日路书；17–365 天长线阶段规划；出发地、目的地与最多 5 个途经点；天气、交通可行性、预算与每日时间轴。"],
+      ["逐页路书预览与输出","逐页预览路书；支持浏览器打印或另存为 PDF。"],
+      ["只读分享链接","把同一正式版本的只读链接分享给同行者。"],
+      ["首次免费与点数说明","草稿阶段不消耗权益；完整预览通过后才结算；同一正式版本重复打印、导出与分享不再收费。"],
+      ["常见问题","围绕首次免费、结算时机、同一版本重复使用等高频疑问。"]
+    ],
+    todo:["定价档位文案","点数购买入口的最终形态","路书示例截图"],
+    note:"点数价格、退款政策未确认，页面中不出现任何具体价格数字。"
+  },
+  {
+    id:"p2", scope:"phase1", pri:"P0", kind:"核心场景主题页", group:"场景页 · 自由行行程规划 / 路书生成",
+    name:"自由行行程规划",
+    url:"/free-travel-itinerary-planner",
+    mainKw:"自由行行程规划",
+    supKw:["自驾游路书怎么做","自驾路书生成","长途自驾行程规划","多途经点路线规划","自由行路线规划","旅游行程怎么安排"],
+    title:"自由行行程规划与路书生成 | 徐霞客旅行规划",
+    h1:"自由行行程规划：从条件到可执行路书",
+    cta:"免费开始规划",
+    hero:"从出发地、目的地与最多 5 个途经点出发，判断路线、交通与时间是否可行，再排进每日时间轴。",
+    blocks:[
+      ["自由行规划的常见难点","路线绕、时间不够、预算不确定——用户自己在多个工具之间反复核对的三个高频问题。"],
+      ["我们的处理方式","先判断可行性，再把通勤时间从每日容量中扣除，最后在预算上限内安排景点与餐饮。"],
+      ["单程 / 往返与返程模式","支持单程与往返；往返时可选快速返回或回程再玩。"],
+      ["自驾与长途场景","长距离段可改为直达交通；自驾不可行时给出可选择的替代方案。"],
+      ["从草稿到正式路书","填写条件 → 生成草稿 → 逐页预览 → 确认正式版本 → 打印或分享。"],
+      ["常见问题","针对自由行与自驾场景的高频疑问。"]
+    ],
+    todo:["各场景的路书示例","长线阶段规划的实际样例"],
+    note:"页面不展示真实地图或真实行程数据；示例位置以占位框表示。"
+  },
+  {
+    id:"p3", scope:"phase1", pri:"P1", kind:"支持内容页", group:"内容页 · 行程规划入门",
+    name:"行程规划入门",
+    url:"/guide/travel-itinerary-basics",
+    mainKw:"自由行怎么规划行程",
+    supKw:["旅游行程怎么安排","旅行路线怎么规划","旅游攻略怎么做","行程规划怎么写","第一次自由行怎么规划","路书是什么","路书和攻略的区别"],
+    title:"自由行行程规划入门：从零到一份可执行路书",
+    h1:"自由行行程规划入门指南",
+    cta:"免费生成一份草稿",
+    hero:"先定路线再排日：把目的地、日期、天数、人数、预算与节奏六个条件排好顺序，行程才不会越改越乱。",
+    blocks:[
+      ["规划前的准备","目的地、出发日期、天数、同行人数、总预算与出行节奏分别决定什么。"],
+      ["先定路线再排日","为什么先确定路线节点，再往里填每日安排。"],
+      ["每日时间窗与通勤时间","每日出发与最晚结束时间如何限制当天能安排的内容。"],
+      ["路书与攻略的区别","攻略是素材，路书是可执行的一天。这个概念区分承接「路书是什么」。"],
+      ["常见误区","行程太赶、景点顺序不合理、把通勤时间算漏。"],
+      ["内链出口","指向核心场景主题页与产品页。"]
+    ],
+    todo:["可作为示例的行程截图（不含真实用户信息）"],
+    note:"教程中的示例行程必须自建，不能引用真实用户数据。"
+  },
+  {
+    id:"p4", scope:"phase1", pri:"P1", kind:"支持内容页", group:"内容页 · 目的地路线与时间安排",
+    name:"路线与时间安排",
+    url:"/guide/route-and-time-planning",
+    mainKw:"旅行路线怎么规划",
+    supKw:["景点顺序怎么安排","一个景点玩多久","路线怎么安排合理","环线旅行路线规划","跨省自驾路线规划"],
+    title:"旅行路线与时间安排：怎么排才不赶",
+    h1:"旅行路线与每日时间安排方法",
+    cta:"免费开始规划",
+    hero:"路线节点决定顺序，每日容量决定数量。两者分开判断，才不会出现「当天排了三个城市」的安排。",
+    blocks:[
+      ["路线节点与途经点","出发地、目的地与途经点各自在路线中的作用。"],
+      ["就近组合原则","同一地点的景点优先集中安排，减少来回折返。"],
+      ["通勤与用餐的时间扣除","每日时间窗需要先扣掉交通与用餐，剩下的才是可游玩时间。"],
+      ["每日景点数量的判断","按节奏与停留时长估算一天能容纳几个景点。"],
+      ["移动日与非移动日的区别","跨城当天与停留当天的时间结构不同。"],
+      ["内链出口","指向预算与交通可行性内容页。"]
+    ],
+    todo:["可直接展示的路线地图示例"],
+    note:"不展示真实地图数据；若需要截图，需提供可直接展示的示例素材。"
+  },
+  {
+    id:"p5", scope:"phase1", pri:"P1", kind:"支持内容页", group:"内容页 · 预算与交通可行性",
+    name:"预算与交通可行性",
+    url:"/guide/budget-and-transport-feasibility",
+    mainKw:"旅行预算怎么算",
+    supKw:["交通时间怎么算","长途自驾可行性","预算超支","旅行怎么控制预算","高铁和飞机怎么选","自驾和火车哪个划算"],
+    title:"旅行预算与交通可行性：怎么判断安排是否合理",
+    h1:"旅行预算与交通可行性判断",
+    cta:"免费生成一份草稿",
+    hero:"预算上限是约束，不是必须花完的目标；交通要按门到门时间判断，而不是只看里程。",
+    blocks:[
+      ["预算的五类构成","交通、住宿、餐饮、门票与其他。"],
+      ["住宿与餐饮的口径","住宿按房间数、餐饮按人数计算。"],
+      ["价格置信度的三个层级","有明确来源的已核验价、检索得到的参考区间、本地公式的兜底价。"],
+      ["交通门到门时间","把两端接驳算进去，而不是只算主段。",],
+      ["长途自驾不可行时的方案","长距离段改为直达交通，或在延长天数与减少目的地之间选择。"],
+      ["预算上限的定位","预算是上限约束，不要求刚好花完。"],
+      ["常见问题","围绕预算口径与交通选择的高频疑问。"]
+    ],
+    todo:["统一的住宿与餐饮基准口径"],
+    note:"研究报告已确认：推荐预算与最终规划当前使用两套基准（住宿 600 / 500、餐饮 150 / 220），必须先在业务侧统一，页面才能定稿。"
+  },
+  {
+    id:"p6", scope:"phase1", pri:"P1", kind:"支持内容页", group:"内容页 · 工具使用教程",
+    name:"工具使用教程",
+    url:"/guide/how-to-use-ai-guidebook",
+    mainKw:"AI 生成行程靠谱吗",
+    supKw:["行程规划工具哪个好","路书怎么做","路书制作","旅行计划生成器","AI 生成的行程靠谱吗","路书导出 PDF","行程分享链接"],
+    title:"AI 生成行程靠谱吗：工具使用教程与验证方法",
+    h1:"AI 路书生成器使用教程",
+    cta:"免费开始规划",
+    hero:"把 AI 生成的行程当作草稿而不是结论：逐页检查路线、时间与预算，确认无误后再生成正式版本。",
+    blocks:[
+      ["输入条件与影响","每个输入条件分别影响行程的哪一部分。"],
+      ["草稿阶段的权益说明","草稿阶段不消耗首次免费资格或点数。"],
+      ["如何逐页检查预览","按路线、时间、预算三个维度检查每一页。"],
+      ["确认成稿与结算规则","完整预览通过后才结算；同一正式版本重复打印、导出与分享不再收费。"],
+      ["打印或另存为 PDF","通过浏览器打印窗口保存 PDF，不提供一键下载。"],
+      ["只读分享链接","把正式版本的只读链接发给同行者。"],
+      ["常见问题","围绕工具使用流程的高频疑问。"]
+    ],
+    todo:["路书预览与打印流程的实际界面截图"],
+    note:"此页直接回应「AI 生成的行程靠谱吗」，必须克制：不做准确性与可靠性承诺，只说明可核验的流程与方法。"
+  }
+];
+
+const EXISTING = [
+  {name:"首页 / 规划器", url:"/", kind:"工具页（现有）", kw:"AI 行程规划、行程规划工具",
+   note:"所有内容页与产品页的 CTA「免费开始规划」都落在这里。原型中不还原规划器的真实表单，只保留入口。"},
+  {name:"定价页", url:"/pricing", kind:"定价页（现有）", kw:"—",
+   note:"产品页的价值主张延伸。点数价格与退款政策未确认，原型中只显示入口占位。"}
+];
+
+const PROPOSED = [
+  {name:"指南索引页", url:"/guide", kind:"内容聚合页（建议新增）", kw:"无独立关键词承接",
+   reason:"4 个支持内容页目前只能平铺在导航栏。若没有一个父级入口，导航会变得拥挤，内链也无法集中。确认后建议按内容页主题做分组入口。"},
+  {name:"隐私政策 / 服务条款", url:"/legal/privacy、/legal/terms", kind:"合规页（建议新增）", kw:"无关键词承接",
+   reason:"产品包含账号与点数，正式上线前需要合规页面。当前没有任何已确认的条款文本，资料未提供前不建页。"}
+];
+
+const DEFERRED = [
+  {name:"对比类页面", kw:"AI 旅行规划哪个好用、行程规划工具哪个好",
+   reason:"研究报告的判断：对比类内容经验证有价值，但本阶段暂缓。若提前，需要真实实测数据支撑，目前不具备。"},
+  {name:"特定目的地页面", kw:"目的地 × 天数组合词",
+   reason:"已确认本阶段不做目的地矩阵页；目的地相关需求只作为长尾线索记录。"},
+  {name:"泛旅行词页面", kw:"签证、机票、酒店、门票、跟团游",
+   reason:"超出产品边界或属于其他商业模式，研究报告已列入排除清单。"},
+  {name:"模板类页面", kw:"行程规划表、行程单模板",
+   reason:"用户意图是下载 Excel 文件而非使用工具，转化路径差异大，研究报告标记为待确认。"}
+];
+
+const GLOBAL_TODO = [
+  ["点数价格与退款政策","原型中不出现任何价格数字与退款表述", "产品页、定价页、工具使用教程"],
+  ["隐私政策与服务条款","原型中不出现条款文本与链接", "全站页脚"],
+  ["行程准确性与可靠性承诺","产品页只描述可核验的流程，不做效果承诺", "产品页、工具使用教程"],
+  ["目的地数据来源与更新频率","原型中不标注任何数据来源", "路线与时间安排页"],
+  ["用户评价与用户案例","原型中不出现任何评价或案例版位", "全站"],
+  ["用户量、转化率等经营数据","原型中不出现任何数字", "全站"],
+  ["旅行社资质、官方合作、媒体奖项","原型中不出现任何背书标识", "全站"],
+  ["品牌故事","原型中不出现品牌叙述段落", "全站"]
+];
+
+/* ═══════════ 渲染 ═══════════ */
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+const ph = s => esc(s).replace(/\[待补充：具体资料\]/g, '<span class="ph">[待补充：具体资料]</span>');
+
+function kwChips(list, main){
+  return '<div class="kwlist">'
+    + '<span class="kw main">' + esc(main) + '</span>'
+    + list.filter(k=>k!==main).map(k=>'<span class="kw">'+esc(k)+'</span>').join("")
+    + '</div>';
+}
+
+function pageCard(p){
+  const priCls = p.pri === "P0" ? "badge p0" : "badge p1";
+  return '<article class="card">'
+    + '<div class="badges"><span class="'+priCls+'">'+p.pri+'</span><span class="badge">'+esc(p.kind)+'</span></div>'
+    + '<h3>'+esc(p.name)+'</h3>'
+    + '<div class="url">'+esc(p.url)+'</div>'
+    + '<p class="kv"><b>Title：</b>'+esc(p.title)+'</p>'
+    + '<p class="kv"><b>H1：</b>'+esc(p.h1)+'</p>'
+    + '<p class="kv"><b>CTA：</b>'+esc(p.cta)+'</p>'
+    + kwChips(p.supKw, p.mainKw)
+    + '</article>';
+}
+
+document.getElementById("grid-phase1").innerHTML = PAGES.map(pageCard).join("");
+document.getElementById("grid-existing").innerHTML = EXISTING.map(e =>
+  '<article class="card"><div class="badges"><span class="badge">现有</span><span class="badge">'+esc(e.kind)+'</span></div>'
+  + '<h3>'+esc(e.name)+'</h3><div class="url">'+esc(e.url)+'</div>'
+  + '<p class="kv">'+esc(e.note)+'</p></article>').join("");
+document.getElementById("grid-proposed").innerHTML = PROPOSED.map(p =>
+  '<article class="card dashed"><div class="badges"><span class="badge new">建议新增</span><span class="badge hold">待你确认</span></div>'
+  + '<h3>'+esc(p.name)+'</h3><div class="url">'+esc(p.url)+'</div>'
+  + '<p class="kv"><b>关键词：</b>'+esc(p.kw)+'</p><p class="kv">'+esc(p.reason)+'</p></article>').join("");
+document.getElementById("grid-deferred").innerHTML = DEFERRED.map(d =>
+  '<article class="card dashed"><div class="badges"><span class="badge hold">本阶段不做</span></div>'
+  + '<h3>'+esc(d.name)+'</h3><p class="kv"><b>涉及关键词：</b>'+esc(d.kw)+'</p><p class="kv">'+esc(d.reason)+'</p></article>').join("");
+
+/* 页面线框 */
+const NAV = '<span class="logo">徐霞客旅行规划</span><span>首页</span><span>功能</span><span>行程规划指南</span><span class="spacer"></span><span class="btn">免费开始规划</span>';
+
+document.getElementById("picker").innerHTML = PAGES.map((p,i) =>
+  '<button data-idx="'+i+'" class="'+(i===0?"active":"")+'">'+esc(p.name)+'</button>').join("");
+
+function frame(p){
+  const blocks = p.blocks.map((b,i) =>
+    '<div class="block"><div class="bhead"><h4>'+esc(b[0])+'</h4><span class="idx">模块 '+(i+1)+'/'+p.blocks.length+'</span></div>'
+    + '<p>'+ph(b[1])+'</p></div>').join("");
+  const todo = p.todo.map(t=>'<span class="ph">[待补充：'+esc(t)+']</span>').join("　");
+  return '<div class="frame">'
+    + '<div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="urlbar">yoursite.example'+esc(p.url)+'</span></div>'
+    + '<div class="mock-nav">'+NAV+'</div>'
+    + '<div class="mock-hero"><h2>'+esc(p.h1)+'</h2><p>'+ph(p.hero)+'</p><span class="mock-cta">'+esc(p.cta)+'</span></div>'
+    + '<div class="mock-sec">'+blocks+'</div>'
+    + '<div class="mock-foot"><span>页脚占位</span><span>隐私政策 '+PH+'</span><span>服务条款 '+PH+'</span></div>'
+    + '</div>'
+    + '<div class="meta">'
+    + '<div><b>TITLE</b>'+esc(p.title)+'</div>'
+    + '<div><b>主关键词</b>'+esc(p.mainKw)+'</div>'
+    + '<div><b>CTA</b>'+esc(p.cta)+'</div>'
+    + '<div><b>需要补充</b>'+todo+'</div>'
+    + '</div>'
+    + '<p class="kv" style="margin-top:12px">'+ph(p.note)+'</p>';
+}
+
+const frames = document.getElementById("frames");
+function showFrame(i){
+  frames.innerHTML = frame(PAGES[i]);
+  document.querySelectorAll("#picker button").forEach(b=>b.classList.toggle("active", Number(b.dataset.idx)===i));
+}
+showFrame(0);
+document.getElementById("picker").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if(!b) return; showFrame(Number(b.dataset.idx));
+});
+
+/* 待补充表 */
+document.querySelector("#todo-page tbody").innerHTML = PAGES.map(p =>
+  '<tr><td>'+esc(p.name)+'</td><td class="url">'+esc(p.url)+'</td><td>'+p.todo.map(t=>'<span class="ph">[待补充：'+esc(t)+']</span>').join("<br>")+'</td></tr>').join("");
+document.querySelector("#todo-global tbody").innerHTML = GLOBAL_TODO.map(g =>
+  '<tr><td>'+esc(g[0])+'</td><td>'+esc(g[1])+'</td><td>'+esc(g[2])+'</td></tr>').join("");
+
+/* Tabs */
+document.getElementById("tabs").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if(!b) return;
+  document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("active", x===b));
+  document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active", v.id===b.dataset.view));
+});
+</script>
+</body>
+</html>

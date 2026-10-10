@@ -11,6 +11,13 @@ type SharedPageState =
   | { status: "error"; message: string };
 
 export const Route = createFileRoute("/share/$token")({
+  // 私有或仅限持有链接访问的页面：明确 noindex，不参与收录，也不声明 canonical。
+  head: () => ({
+    meta: [
+      { title: "分享的路书 · 徐霞客旅行规划" },
+      { name: "robots", content: "noindex, nofollow" },
+    ],
+  }),
   component: ShareRoute,
 });
 

@@ -16,6 +16,13 @@ type WalletLoadFailure = {
 };
 
 export const Route = createFileRoute("/account")({
+  // 私有或仅限持有链接访问的页面：明确 noindex，不参与收录，也不声明 canonical。
+  head: () => ({
+    meta: [
+      { title: "账号 · 徐霞客旅行规划" },
+      { name: "robots", content: "noindex, nofollow" },
+    ],
+  }),
   component: AccountRoute,
 });
 

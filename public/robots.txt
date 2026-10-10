@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /prototypes/
+Disallow: /api/
+
+Sitemap: https://chipper-blini-e3c045.netlify.app/sitemap.xml
